@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matgpt-training"
+version = "0.1.0"
+description = "T4-oriented base-pretraining framework for MatGPT 8M and 46M models."
+requires-python = ">=3.10"
+dependencies = [
+  "datasets>=2.19.0",
+  "numpy>=1.24.0",
+  "PyYAML>=6.0.1",
+  "safetensors>=0.4.3",
+  "tokenizers>=0.19.0",
+  "torch>=2.2.0",
+  "tqdm>=4.66.0",
+  "wandb>=0.17.0",
+]
+
+[project.optional-dependencies]
+colab = [
+  "bitsandbytes>=0.43.0",
+]
+test = [
+  "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["matgpt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

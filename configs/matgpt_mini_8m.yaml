@@ -1,0 +1,98 @@
+run:
+  name: matgpt_mini_8m_tinystories
+  seed: 42
+  output_dir: runs/matgpt_mini_8m
+
+tracking:
+  wandb:
+    enabled: false
+    project: matgpt-t4-base
+    entity: null
+    tags:
+      - t4
+      - tinystories
+      - 8m
+      - base-pretraining
+
+dataset:
+  hf_name: roneneldan/TinyStories
+  hf_config: null
+  revision: null
+  text_field: text
+  train_split: train
+  validation_split: validation
+  license: CDLA-Sharing-1.0
+  stage: base_pretraining
+  language: en
+  raw_dir: matgpt/data/raw/tinystories
+  normalized_dir: matgpt/data/normalized/tinystories
+  max_train_documents: null
+  max_validation_documents: null
+
+tokenizer:
+  vocab_size: 8192
+  algorithm: byte_level_bpe
+  output_dir: matgpt/tokenizer/matgpt_mini_8m
+  min_frequency: 2
+  special_tokens:
+    - "<|pad|>"
+    - "<|bos|>"
+    - "<|eos|>"
+    - "<|system|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+
+sharding:
+  output_dir: matgpt/data/shards/matgpt_mini_8m
+  shard_size_tokens: 5000000
+  dtype: uint16
+  append_eos: true
+
+model:
+  vocab_size: 8192
+  context_length: 256
+  n_layers: 6
+  n_heads: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.0
+  norm_eps: 1.0e-5
+  rope_base: 10000.0
+  tie_embeddings: true
+  use_bias: false
+  activation: swiglu
+
+training:
+  precision: fp16
+  compile: false
+  micro_batch_size: 16
+  gradient_accumulation_steps: 8
+  max_tokens: 50000000
+  optimizer: adamw
+  learning_rate: 5.0e-4
+  min_learning_rate: 5.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_ratio: 0.02
+  eval_interval_tokens: 1000000
+  eval_batches: 64
+  checkpoint_interval_tokens: 5000000
+  sample_interval_tokens: 1000000
+  log_interval_steps: 10
+  save_best: true
+  keep_milestones: true
+  num_workers: 2
+  pin_memory: true
+
+evaluation:
+  max_new_tokens: 120
+  temperature: 0.8
+  top_k: 50
+  top_p: 0.95
+  prompts:
+    - "Once upon a time"
+    - "The little dog wanted to"
+    - "Lily found a small box"
