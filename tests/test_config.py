@@ -34,6 +34,13 @@ def test_config_rejects_byte_bpe_vocab_smaller_than_alphabet_and_specials():
         validate_config(cfg)
 
 
+def test_config_rejects_nonpositive_skipped_update_limit():
+    cfg = load_config("configs/matgpt_mini_8m.yaml")
+    cfg["training"]["max_consecutive_skipped_updates"] = 0
+    with pytest.raises(ValueError, match="max_consecutive_skipped_updates"):
+        validate_config(cfg)
+
+
 def test_hash_helpers_are_stable(tmp_path: Path):
     path = tmp_path / "sample.txt"
     path.write_text("same text\n", encoding="utf-8")

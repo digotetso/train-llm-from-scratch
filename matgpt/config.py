@@ -57,6 +57,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("training.micro_batch_size must be positive")
     if training["gradient_accumulation_steps"] < 1:
         raise ValueError("training.gradient_accumulation_steps must be positive")
+    if training.get("max_consecutive_skipped_updates", 5) < 1:
+        raise ValueError("training.max_consecutive_skipped_updates must be positive")
     if training["max_tokens"] < model["context_length"]:
         raise ValueError("training.max_tokens must cover at least one sequence")
 

@@ -82,6 +82,7 @@ training:
   checkpoint_interval_tokens: 5000000
   sample_interval_tokens: 1000000
   log_interval_steps: 10
+  max_consecutive_skipped_updates: 5
   save_best: true
   keep_milestones: true
   num_workers: 2

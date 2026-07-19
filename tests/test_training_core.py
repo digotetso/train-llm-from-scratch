@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from matgpt.model.gpt import GPT, GPTConfig
+from matgpt.training.amp import OptimizerStepTracker, require_finite_loss, step_optimizer_with_scaler
 from matgpt.training.checkpoint import load_checkpoint, save_checkpoint
 from matgpt.training.dataset import PackedTokenDataset
 from matgpt.training.optim import build_optimizer, cosine_warmup_lr
@@ -64,6 +66,49 @@ def test_optimizer_and_lr_schedule():
     assert len(opt.param_groups) == 2
     assert cosine_warmup_lr(step=0, warmup_steps=10, total_steps=100, max_lr=1e-3, min_lr=1e-4) == 0.0
     assert cosine_warmup_lr(step=10, warmup_steps=10, total_steps=100, max_lr=1e-3, min_lr=1e-4) == 1e-3
+
+
+class FakeScaler:
+    def __init__(self, apply_update: bool):
+        self.apply_update = apply_update
+        self.scale_value = 1024.0
+
+    def get_scale(self):
+        return self.scale_value
+
+    def step(self, optimizer):
+        if self.apply_update:
+            optimizer.step()
+
+    def update(self):
+        if not self.apply_update:
+            self.scale_value /= 2
+
+
+def test_optimizer_step_tracker_detects_applied_and_skipped_updates():
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.SGD([parameter], lr=0.1)
+    tracker = OptimizerStepTracker(optimizer)
+    try:
+        applied = step_optimizer_with_scaler(FakeScaler(True), optimizer, tracker)
+        skipped = step_optimizer_with_scaler(FakeScaler(False), optimizer, tracker)
+    finally:
+        tracker.close()
+
+    assert applied.update_applied is True
+    assert skipped.update_applied is False
+    assert skipped.scale_after == 512.0
+
+
+def test_require_finite_loss_rejects_nan():
+    with pytest.raises(FloatingPointError, match="micro-batch"):
+        require_finite_loss(
+            torch.tensor(float("nan")),
+            global_step=7,
+            label="micro-batch",
+            lr=1e-4,
+            grad_scale=1024.0,
+        )
 
 
 def test_checkpoint_save_load_restores_model_equivalence(tmp_path: Path):
