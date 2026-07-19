@@ -9,9 +9,9 @@ state, gradient scaler state, RNG state, and run metadata.
 from __future__ import annotations
 
 import json
-import math
 import subprocess
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,8 @@ from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.training.amp import autocast_context, make_grad_scaler
 from matgpt.training.checkpoint import load_checkpoint, save_checkpoint
 from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
-from matgpt.training.optim import build_optimizer, cosine_warmup_lr, set_optimizer_lr
+from matgpt.training.optim import build_optimizer, set_optimizer_lr
+from matgpt.training.schedule import build_training_schedule, learning_rate_at_step
 from matgpt.data.prepare import effective_validation_split
 from matgpt.training.tracking import create_tracker
 from matgpt.utils.hashing import sha256_file, sha256_text
@@ -62,17 +63,6 @@ def train_on_fixed_batch(
         optimizer.step()
         losses.append(float(loss.detach().cpu()))
     return losses
-
-
-def _steps_from_tokens(cfg: dict[str, Any]) -> int:
-    training = cfg["training"]
-    model = cfg["model"]
-    tokens_per_step = (
-        training["micro_batch_size"]
-        * model["context_length"]
-        * training["gradient_accumulation_steps"]
-    )
-    return max(1, math.ceil(training["max_tokens"] / tokens_per_step))
 
 
 def _is_due(tokens_processed: int, interval: int, tokens_per_step: int) -> bool:
@@ -134,14 +124,10 @@ def run_pretraining(
 
     train_model = torch.compile(model) if cfg["training"].get("compile") and hasattr(torch, "compile") else model
 
-    total_steps = _steps_from_tokens(cfg)
-    if max_steps_override is not None:
-        total_steps = min(total_steps, state["global_step"] + max_steps_override)
-    warmup_steps = max(1, int(total_steps * cfg["training"]["warmup_ratio"]))
-    tokens_per_step = (
-        cfg["training"]["micro_batch_size"]
-        * cfg["model"]["context_length"]
-        * cfg["training"]["gradient_accumulation_steps"]
+    schedule = build_training_schedule(
+        cfg,
+        global_step=state["global_step"],
+        max_steps_override=max_steps_override,
     )
     extra = {
         "git_commit": get_git_commit(),
@@ -153,17 +139,14 @@ def run_pretraining(
     tracker = create_tracker(cfg, config_snapshot={**cfg, "run_metadata": extra})
 
     start_time = time.time()
-    while state["global_step"] < total_steps and state["tokens_processed"] < cfg["training"]["max_tokens"]:
+    while (
+        state["global_step"] < schedule.stop_step
+        and state["tokens_processed"] < cfg["training"]["max_tokens"]
+    ):
         train_model.train()
         optimizer.zero_grad(set_to_none=True)
         step_loss = 0.0
-        lr = cosine_warmup_lr(
-            step=state["global_step"],
-            warmup_steps=warmup_steps,
-            total_steps=total_steps,
-            max_lr=cfg["training"]["learning_rate"],
-            min_lr=cfg["training"]["min_learning_rate"],
-        )
+        lr = learning_rate_at_step(cfg, schedule, state["global_step"])
         set_optimizer_lr(optimizer, lr)
 
         for _ in range(cfg["training"]["gradient_accumulation_steps"]):
@@ -182,7 +165,7 @@ def run_pretraining(
         scaler.update()
 
         state["global_step"] += 1
-        state["tokens_processed"] += tokens_per_step
+        state["tokens_processed"] += schedule.tokens_per_step
         elapsed = max(1e-6, time.time() - start_time)
         tokens_per_second = state["tokens_processed"] / elapsed
 
@@ -199,7 +182,7 @@ def run_pretraining(
             append_csv_row(metrics_path, train_metrics)
             tracker.log(train_metrics, step=state["global_step"])
 
-        if _is_due(state["tokens_processed"], cfg["training"]["eval_interval_tokens"], tokens_per_step):
+        if _is_due(state["tokens_processed"], cfg["training"]["eval_interval_tokens"], schedule.tokens_per_step):
             val_loss = evaluate_loss(
                 model=train_model,
                 dataset=val_dataset,
@@ -223,7 +206,7 @@ def run_pretraining(
                 if cfg["training"]["save_best"]:
                     save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, scaler, state, cfg, extra)
 
-        if _is_due(state["tokens_processed"], cfg["training"]["sample_interval_tokens"], tokens_per_step):
+        if _is_due(state["tokens_processed"], cfg["training"]["sample_interval_tokens"], schedule.tokens_per_step):
             samples = generate_samples(
                 model=train_model,
                 tokenizer=tokenizer,
@@ -238,7 +221,7 @@ def run_pretraining(
             _write_samples(sample_dir / f"samples_{state['tokens_processed']:012d}.json", samples, dict(state))
             tracker.log({"sample_text": samples[0]["text"] if samples else ""}, step=state["global_step"])
 
-        if _is_due(state["tokens_processed"], cfg["training"]["checkpoint_interval_tokens"], tokens_per_step):
+        if _is_due(state["tokens_processed"], cfg["training"]["checkpoint_interval_tokens"], schedule.tokens_per_step):
             save_checkpoint(checkpoint_dir / "latest.pt", model, optimizer, scaler, state, cfg, extra)
             if cfg["training"]["keep_milestones"]:
                 save_checkpoint(
@@ -253,7 +236,7 @@ def run_pretraining(
 
     save_checkpoint(checkpoint_dir / "latest.pt", model, optimizer, scaler, state, cfg, extra)
     tracker.finish()
-    return {"state": state, "run_dir": str(run_dir), "extra": extra}
+    return {"state": state, "run_dir": str(run_dir), "extra": extra, "schedule": asdict(schedule)}
 
 
 def _optional_file_hash(path: Path) -> str:

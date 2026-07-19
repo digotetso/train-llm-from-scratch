@@ -16,7 +16,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Pretrain MatGPT from random weights or resume checkpoint.")
     parser.add_argument("--config", required=True, help="Path to MatGPT YAML config.")
     parser.add_argument("--resume-from", default=None, help="Full checkpoint path to resume from.")
-    parser.add_argument("--max-steps", type=int, default=None, help="Optional short-run override for smoke tests.")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Maximum additional successful optimizer updates in this invocation; the full LR schedule is unchanged.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
