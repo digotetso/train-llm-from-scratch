@@ -87,7 +87,9 @@ def normalize_text(text: str) -> str:
     return text
 ```
 
-Read the function from top to bottom. The first line names the function. `text: str` says the input is expected to be text, and `-> str` says the returned result is also text. The input named `text` is the raw value. `str(text)` ensures Python treats that value as text. The operation named `normalize` makes equivalent forms follow one agreement; `NFKC` is the name of that Unicode agreement, and its detailed rules belong to Video 5. The next line makes different newline styles consistent. The list line removes space at the right edge of every line. `strip()` removes space at the beginning and end of the whole text. Finally, `return text` gives the cleaned value back.
+Read the function from top to bottom. The first line names the function. `text: str` says the input is expected to be text, and `-> str` says the returned result is also text. The input named `text` is the raw value. `str(text)` ensures Python treats that value as text. The operation named `normalize` makes equivalent forms follow one agreement; `NFKC` is the name of that Unicode agreement. The next line makes different newline styles consistent. The list line removes space at the right edge of every line. `strip()` removes space at the beginning and end of the whole text. Finally, `return text` gives the cleaned value back.
+
+**Cleaning-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, it changes the circled character `①` into plain `1`. That can be useful when we want both forms treated alike, but it collapses a distinction in the source text. Some inputs can also change character count, so the original text cannot always be rebuilt exactly from the cleaned result. Video 5 will explain the mechanics and tradeoffs; for now, remember only that this is a choice, not a harmless copy.
 
 The full repository function also removes certain non-printing control characters and limits runs of blank lines. We are deliberately previewing its job, not teaching every cleaning rule today.
 
@@ -120,7 +122,7 @@ text = "Cat"
 print("Human text:", text)
 print("Character numbers:", [ord(character) for character in text])
 print("UTF-8 bytes:", list(text.encode("utf-8")))
-print("Can arithmetic use the raw string directly? No")
+print("Can the mathematical model use this raw Python string as numeric input? No")
 print("Learning begins after text is represented as numbers.")
 ```
 
@@ -132,7 +134,7 @@ From the repository root, run:
 python course/videos/001-computer-learning-from-text/lab.py
 ```
 
-Read the output one line at a time. `Human text` shows the form useful to us as readers. The list operation visits each character. `ord(character)` asks for its agreed Unicode number. `text.encode("utf-8")` applies the UTF-8 storage rule, and `list(...)` displays each resulting byte as an ordinary number.
+Read the output one line at a time. `Human text` shows the form useful to us as readers. The list operation visits each character. `ord(character)` asks for its agreed Unicode number. `text.encode("utf-8")` applies the UTF-8 storage rule, and `list(...)` displays each resulting byte as an ordinary number. The question "Can the mathematical model use this raw Python string as numeric input? No" is deliberately narrow: Python can work with strings as text, but the mathematical model needs numeric input.
 
 For `Cat`, both lists show `67`, `97`, and `116`. Do not conclude that these lists always match. We chose simple English letters for this first hand-check.
 

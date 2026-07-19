@@ -40,7 +40,7 @@ With `text = "Cat"`:
 Human text: Cat
 Character numbers: [67, 97, 116]
 UTF-8 bytes: [67, 97, 116]
-Can arithmetic use the raw string directly? No
+Can the mathematical model use this raw Python string as numeric input? No
 Learning begins after text is represented as numbers.
 ```
 
@@ -56,7 +56,7 @@ UTF-8 bytes: [65]
 
 `ord` follows the Unicode agreement and shows the number assigned to each character. `encode("utf-8")` applies the UTF-8 storage rule, and `list` displays the resulting bytes as ordinary numbers.
 
-For these simple English letters, the two lists match. The result shows numeric representation, not human meaning and not learning. The script follows fixed rules; it does not adjust itself after seeing examples.
+For these simple English letters, the two lists match. Python can work with the raw string as text, but the mathematical model cannot use that string as numeric input. The result shows numeric representation, not human meaning and not learning. The script follows fixed rules; it does not adjust itself after seeing examples.
 
 ## Extension
 

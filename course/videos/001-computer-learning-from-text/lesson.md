@@ -77,7 +77,11 @@ def normalize_text(text: str) -> str:
     return text  # Give the cleaned text back to the caller.
 ```
 
-Input: a source value treated as text. Output: cleaned, consistent text. `NFKC` is the name of a Unicode consistency rule; its details are intentionally deferred to Video 5. The full function also removes certain non-printing control characters and reduces long runs of blank lines.
+Input: a source value treated as text. Output: cleaned, consistent text. `NFKC` is the name of a Unicode consistency rule.
+
+**Cleaning-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, `①` becomes plain `1`, so a source distinction is collapsed. Some inputs can also change character count, which means the original text cannot always be reconstructed exactly. Video 5 will cover the mechanics and tradeoffs; Video 1 needs only the warning that normalization is a choice.
+
+The full function also removes certain non-printing control characters and reduces long runs of blank lines.
 
 `matgpt/data/prepare.py` then stores the cleaned value:
 
@@ -92,6 +96,8 @@ return {
 ```
 
 This is preparation, not learning. The function receives text, cleans it, and records the result. Later videos follow the result into its numeric forms and into the model.
+
+The mini-lab prints the exact line `Can the mathematical model use this raw Python string as numeric input? No`. Python can perform text operations on a string, but this mathematical model requires a numeric representation as its input.
 
 ## Misconception
 
