@@ -19,7 +19,7 @@ def test_tokenize_jsonl_to_uint16_shards_with_eos(tmp_path: Path):
     ]
     corpus.write_text("\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8")
     tokenizer_dir = tmp_path / "tokenizer"
-    train_tokenizer_from_jsonl([corpus], tokenizer_dir, vocab_size=128, min_frequency=1, special_tokens=SPECIAL_TOKENS)
+    train_tokenizer_from_jsonl([corpus], tokenizer_dir, vocab_size=320, min_frequency=1, special_tokens=SPECIAL_TOKENS)
 
     metadata = tokenize_jsonl_to_shards(
         input_path=corpus,

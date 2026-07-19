@@ -25,6 +25,15 @@ def test_config_validation_rejects_bad_head_dimension():
         validate_config(cfg)
 
 
+def test_config_rejects_byte_bpe_vocab_smaller_than_alphabet_and_specials():
+    cfg = load_config("configs/matgpt_mini_8m.yaml")
+    cfg["tokenizer"]["vocab_size"] = 262
+    cfg["model"]["vocab_size"] = 262
+
+    with pytest.raises(ValueError, match="at least 263"):
+        validate_config(cfg)
+
+
 def test_hash_helpers_are_stable(tmp_path: Path):
     path = tmp_path / "sample.txt"
     path.write_text("same text\n", encoding="utf-8")

@@ -36,7 +36,7 @@ def test_train_tokenizer_round_trip_and_special_tokens(tmp_path: Path):
     report = train_tokenizer_from_jsonl(
         input_paths=[corpus],
         output_dir=output_dir,
-        vocab_size=128,
+        vocab_size=320,
         min_frequency=1,
         special_tokens=SPECIAL_TOKENS,
     )
@@ -51,6 +51,25 @@ def test_train_tokenizer_round_trip_and_special_tokens(tmp_path: Path):
     ids = tokenizer.encode(text).ids
     assert tokenizer.decode(ids) == text
     assert report["num_training_documents"] == 3
-    assert report["vocab_size_actual"] <= 128
+    assert report["vocab_size_actual"] <= 320
     assert (output_dir / "tokenizer.json").exists()
     assert (output_dir / "tokenizer_report.json").exists()
+
+
+def test_byte_level_tokenizer_round_trips_unseen_unicode(tmp_path: Path):
+    corpus = tmp_path / "train.jsonl"
+    output_dir = tmp_path / "tokenizer"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        output_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    tokenizer = load_tokenizer(output_dir)
+
+    for text in ["🙂", "café", "你好", "A space, then punctuation!"]:
+        ids = tokenizer.encode(text).ids
+        assert ids, f"non-empty text encoded to no IDs: {text!r}"
+        assert tokenizer.decode(ids) == text

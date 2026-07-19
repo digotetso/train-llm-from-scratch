@@ -48,6 +48,7 @@ def train_tokenizer_from_jsonl(
         vocab_size=vocab_size,
         min_frequency=min_frequency,
         special_tokens=special_tokens,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         show_progress=True,
     )
 

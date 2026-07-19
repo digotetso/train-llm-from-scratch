@@ -52,7 +52,7 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
     val_jsonl.write_text('{"text": "Validation text for a tiny language model."}\n' * 20, encoding="utf-8")
 
     tokenizer_dir = tmp_path / "tokenizer"
-    train_tokenizer_from_jsonl([train_jsonl], tokenizer_dir, vocab_size=128, min_frequency=1, special_tokens=SPECIAL_TOKENS)
+    train_tokenizer_from_jsonl([train_jsonl], tokenizer_dir, vocab_size=320, min_frequency=1, special_tokens=SPECIAL_TOKENS)
     shard_dir = tmp_path / "shards"
     tokenize_jsonl_to_shards(train_jsonl, tokenizer_dir, shard_dir, "train", shard_size_tokens=2048)
     tokenize_jsonl_to_shards(val_jsonl, tokenizer_dir, shard_dir, "validation", shard_size_tokens=2048)
@@ -65,10 +65,10 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
             "validation_split": "validation",
             "normalized_dir": str(train_jsonl.parent),
         },
-        "tokenizer": {"output_dir": str(tokenizer_dir), "vocab_size": 128},
+        "tokenizer": {"output_dir": str(tokenizer_dir), "vocab_size": 320},
         "sharding": {"output_dir": str(shard_dir)},
         "model": {
-            "vocab_size": 128,
+            "vocab_size": 320,
             "context_length": 8,
             "n_layers": 1,
             "n_heads": 4,

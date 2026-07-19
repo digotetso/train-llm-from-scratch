@@ -18,6 +18,12 @@ REQUIRED_TOP_LEVEL_KEYS = {
     "evaluation",
 }
 
+BYTE_LEVEL_ALPHABET_SIZE = 256
+
+
+def minimum_byte_bpe_vocab_size(special_tokens: list[str]) -> int:
+    return BYTE_LEVEL_ALPHABET_SIZE + len(set(special_tokens))
+
 
 def load_config(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
@@ -55,6 +61,14 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("training.max_tokens must cover at least one sequence")
 
     special_tokens = tokenizer.get("special_tokens", [])
+    if tokenizer.get("algorithm") == "byte_level_bpe":
+        minimum_vocab = minimum_byte_bpe_vocab_size(special_tokens)
+        if tokenizer["vocab_size"] < minimum_vocab:
+            raise ValueError(
+                "byte_level_bpe tokenizer.vocab_size must be at least "
+                f"{minimum_vocab} for 256 byte symbols and "
+                f"{len(set(special_tokens))} unique special tokens"
+            )
     for required in ("<|pad|>", "<|eos|>"):
         if required not in special_tokens:
             raise ValueError(f"tokenizer.special_tokens must include {required}")
