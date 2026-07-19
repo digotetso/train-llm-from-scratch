@@ -4,15 +4,28 @@ import csv
 import json
 import math
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def write_evaluation_result(path: str | Path, result: dict[str, Any]) -> Path:
@@ -21,24 +34,60 @@ def write_evaluation_result(path: str | Path, result: dict[str, Any]) -> Path:
     return output
 
 
-def _finite_values(rows: list[dict[str, str]], key: str) -> list[float]:
+def _strict_finite_values(rows: list[dict[str, str]], key: str) -> list[float]:
     values = []
-    for row in rows:
+    for row_number, row in enumerate(rows, start=2):
         raw = row.get(key, "")
         if raw in (None, ""):
             continue
-        value = float(raw)
-        if math.isfinite(value):
-            values.append(value)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"Invalid {key} value in metrics.csv row {row_number}: {raw!r}"
+            ) from error
+        if not math.isfinite(value):
+            raise ValueError(
+                f"Invalid {key} value in metrics.csv row {row_number}: {raw!r}"
+            )
+        values.append(value)
     return values
+
+
+def _strict_skipped_updates(rows: list[dict[str, str]]) -> list[int]:
+    values = _strict_finite_values(rows, "optimizer_steps_skipped_total")
+    if any(value < 0 or not value.is_integer() for value in values):
+        raise ValueError("Invalid optimizer_steps_skipped_total value in metrics.csv")
+    return [int(value) for value in values]
+
+
+def _reject_json_constant(constant: str) -> None:
+    raise ValueError(f"Non-finite JSON value: {constant}")
+
+
+def _reject_non_finite_json_numbers(value: Any) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Non-finite JSON number")
+    if isinstance(value, dict):
+        for nested_value in value.values():
+            _reject_non_finite_json_numbers(nested_value)
+    elif isinstance(value, list):
+        for nested_value in value:
+            _reject_non_finite_json_numbers(nested_value)
 
 
 def _load_json_if_present(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant
+        )
+        _reject_non_finite_json_numbers(payload)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"Invalid JSON evidence: {path}") from error
     if not isinstance(payload, dict):
-        raise ValueError(f"Expected a JSON object: {path}")
+        raise ValueError(f"Invalid JSON evidence: {path} must contain an object")
     return payload
 
 
@@ -50,12 +99,12 @@ def build_run_summary(run_dir: str | Path, known_limitations: list[str]) -> str:
     with metrics_path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
-    validation_losses = _finite_values(rows, "val_loss")
-    training_losses = _finite_values(rows, "train_loss")
-    throughput = _finite_values(rows, "tokens_per_second")
-    peak_memory = _finite_values(rows, "peak_memory_mb")
-    elapsed = _finite_values(rows, "elapsed_seconds")
-    skipped = _finite_values(rows, "optimizer_steps_skipped_total")
+    validation_losses = _strict_finite_values(rows, "val_loss")
+    training_losses = _strict_finite_values(rows, "train_loss")
+    throughput = _strict_finite_values(rows, "tokens_per_second")
+    peak_memory = _strict_finite_values(rows, "peak_memory_mb")
+    elapsed = _strict_finite_values(rows, "elapsed_seconds")
+    skipped = _strict_skipped_updates(rows)
     if not validation_losses:
         raise ValueError("No finite validation loss is present in metrics.csv")
 
@@ -82,13 +131,14 @@ def build_run_summary(run_dir: str | Path, known_limitations: list[str]) -> str:
         f"- Initial validation loss: {validation_losses[0]}",
         f"- Best validation loss: {min(validation_losses)}",
         f"- Final validation loss: {validation_losses[-1]}",
+        f"- Initial training loss: {training_losses[0] if training_losses else 'unavailable'}",
         f"- Final training loss: {training_losses[-1] if training_losses else 'unavailable'}",
         "",
         "## Performance",
         f"- Maximum tokens/second: {max(throughput) if throughput else 'unavailable'}",
         f"- Peak memory MB: {max(peak_memory) if peak_memory else 'unavailable'}",
         f"- Elapsed seconds: {max(elapsed) if elapsed else 'unavailable'}",
-        f"- Skipped optimizer updates: {int(max(skipped)) if skipped else 'unavailable'}",
+        f"- Skipped optimizer updates: {max(skipped) if skipped else 'unavailable'}",
         "",
         "## Checkpoints",
         f"- latest.pt load candidate exists: {latest_exists}",
