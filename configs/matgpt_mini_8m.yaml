@@ -17,7 +17,7 @@ tracking:
 dataset:
   hf_name: roneneldan/TinyStories
   hf_config: null
-  revision: null
+  revision: f54c09fd23315a6f9c86f9dc80f725de7d8f9c64
   text_field: text
   train_split: train
   validation_split: validation

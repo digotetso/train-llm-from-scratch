@@ -14,6 +14,7 @@ def test_loads_mini_config_and_validates():
     assert cfg["run"]["name"] == "matgpt_mini_8m_tinystories"
     assert cfg["model"]["d_model"] == 256
     assert cfg["tokenizer"]["vocab_size"] == cfg["model"]["vocab_size"]
+    assert cfg["dataset"]["revision"] == "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64"
     validate_config(cfg)
 
 
