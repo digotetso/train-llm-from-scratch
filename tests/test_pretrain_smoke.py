@@ -86,7 +86,7 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
             "compile": False,
             "micro_batch_size": 2,
             "gradient_accumulation_steps": 1,
-            "max_tokens": 16,
+            "max_tokens": 32,
             "optimizer": "adamw",
             "learning_rate": 1.0e-3,
             "min_learning_rate": 1.0e-4,
@@ -116,7 +116,8 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
 
     assert result["state"]["global_step"] == 1
     assert result["schedule"]["tokens_per_step"] == 16
-    assert result["schedule"]["total_steps"] == 1
+    assert result["schedule"]["total_steps"] == 2
     assert result["schedule"]["warmup_steps"] == 1
     assert result["schedule"]["stop_step"] == 1
+    assert result["schedule"]["total_steps"] > result["schedule"]["stop_step"]
     assert (tmp_path / "run" / "checkpoints" / "latest.pt").exists()
