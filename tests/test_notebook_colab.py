@@ -141,6 +141,12 @@ def test_colab_stage_cells_remain_in_operator_order():
     assert [heading for heading in headings if heading in expected] == expected
 
 
+def test_colab_normalizes_wandb_entity_before_writing_config():
+    source = code_source_after_heading("## 1. Choose one stage")
+
+    assert 'WANDB_ENTITY = WANDB_ENTITY.strip().strip("/")' in source
+
+
 def test_colab_clone_cell_reports_git_errors_and_supports_private_repo_token():
     source = code_source_after_heading("## 3. Locate or clone the project")
 

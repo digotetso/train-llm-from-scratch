@@ -17,7 +17,7 @@ Primary repository: `train-llm-from-scratch`
 - Real Colab data preparation: completed for TinyStories. Preflight observed 1,799,248 training documents, 15,389 validation documents, zero split overlap, an 8,192-token vocabulary, 393,399,082 training tokens, and 3,140,122 validation tokens.
 - Real T4 preflight: passed all ten checks on a Tesla T4 with 14.56 GiB total GPU memory and more than 57 GiB free local disk on the accepted rerun.
 - Corrected T4 benchmark: passed. At the configured micro-batch size of 16 it observed loss `9.0535`, pre-clip gradient norm `0.7336`, about `99,961` tokens/second, and `919.9` MiB peak allocated memory (`6.17%`). Batch sizes 8, 16, 24, and 32 all remained finite and below the memory stop line. The speed curve rose and then leveled off, unlike the rejected asynchronous timing report.
-- Smoke decision: approved from preparation, preflight, and corrected benchmark evidence. Smoke has not started yet.
+- Smoke decision: approved from preparation, preflight, and corrected benchmark evidence. The first smoke command stopped before step zero because a W&B entity was entered with a leading slash. No baseline evaluation, optimizer update, run-artifact write, or checkpoint occurred. Tracker and notebook normalization now remove accidental surrounding slashes; smoke must be rerun.
 - Real T4 training: not started. Smoke, pilot, full training, runtime evaluation, and runtime summaries remain unobserved.
 - Course production is build-first and one video at a time. Video 1 is complete; later videos remain outline entries until their predecessor is taught, checked, and approved.
 

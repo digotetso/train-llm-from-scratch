@@ -48,6 +48,9 @@ does not shorten or restart the learning-rate schedule.
 - A Colab `GITHUB_TOKEN` secret with read access when the repository is private.
 - A Hugging Face account and optional `HF_TOKEN` secret for dataset access.
 - An optional W&B account and `WANDB_API_KEY` secret when W&B is enabled.
+- A W&B entity entered as only the username or team name, without URL or `/`
+  characters. Leave `WANDB_ENTITY` blank to use the authenticated account's
+  default entity. The notebook removes accidental surrounding slashes.
 - Operator acceptance that Colab can disconnect. Paid Colab cost and runtime
   duration vary; check the current Colab terms and runtime UI before spending.
 
@@ -291,6 +294,16 @@ intervals, checkpoint intervals, or test expectations.
 8. Rerun `evaluate` after recovery. It must find both checkpoints, evaluate
    both, verify complete `latest.pt` resume state without an update, and then
    regenerate the summary.
+
+## W&B Setup Failure Before Step Zero
+
+If W&B reports `entity ... not found during upsertBucket`, confirm that
+`WANDB_ENTITY` contains only the username or team name. Do not paste a URL or a
+value such as `/team-name`; use `team-name`, or leave it blank to use the
+authenticated default. Tracker creation happens before baseline evaluation,
+optimizer updates, run-artifact writes, and checkpoint creation. When this
+specific failure occurs on a new smoke run, no model progress exists to resume:
+correct the entity and rerun `smoke` from the top.
 
 Never resume through a preflight checkpoint-compatibility failure. Preserve the
 run directory and review the config, tokenizer, and dataset fingerprints.

@@ -1,5 +1,7 @@
 import csv
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -25,6 +27,30 @@ def test_create_tracker_returns_null_when_disabled(tmp_path: Path):
     tracker = create_tracker(cfg, config_snapshot={"a": 1})
 
     assert isinstance(tracker, NullTracker)
+
+
+def test_create_tracker_normalizes_wandb_entity(monkeypatch, tmp_path: Path):
+    init_arguments = {}
+
+    def fake_init(**kwargs):
+        init_arguments.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(init=fake_init))
+    cfg = {
+        "run": {"name": "unit", "output_dir": str(tmp_path)},
+        "tracking": {
+            "wandb": {
+                "enabled": True,
+                "project": "unit-project",
+                "entity": " /pro-digmatema-self/ ",
+            }
+        },
+    }
+
+    create_tracker(cfg, config_snapshot={"a": 1})
+
+    assert init_arguments["entity"] == "pro-digmatema-self"
 
 
 def test_metric_rows_share_one_stable_csv_schema(tmp_path: Path):

@@ -32,6 +32,19 @@ class WandbTracker:
         self.run.finish()
 
 
+def normalize_wandb_entity(value: Any) -> str | None:
+    if value is None:
+        return None
+    entity = str(value).strip().strip("/")
+    if not entity:
+        return None
+    if "/" in entity:
+        raise ValueError(
+            "tracking.wandb.entity must be only a W&B username or team name, not a path."
+        )
+    return entity
+
+
 def create_tracker(cfg: dict[str, Any], config_snapshot: dict[str, Any]) -> NullTracker | WandbTracker:
     wandb_cfg = cfg.get("tracking", {}).get("wandb", {})
     if not wandb_cfg.get("enabled", False):
@@ -44,7 +57,7 @@ def create_tracker(cfg: dict[str, Any], config_snapshot: dict[str, Any]) -> Null
 
     run = wandb.init(
         project=wandb_cfg["project"],
-        entity=wandb_cfg.get("entity"),
+        entity=normalize_wandb_entity(wandb_cfg.get("entity")),
         name=cfg["run"]["name"],
         tags=wandb_cfg.get("tags") or [],
         config=config_snapshot,
