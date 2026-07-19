@@ -115,4 +115,8 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
     result = run_pretraining(cfg, max_steps_override=1)
 
     assert result["state"]["global_step"] == 1
+    assert result["schedule"]["tokens_per_step"] == 16
+    assert result["schedule"]["total_steps"] == 1
+    assert result["schedule"]["warmup_steps"] == 1
+    assert result["schedule"]["stop_step"] == 1
     assert (tmp_path / "run" / "checkpoints" / "latest.pt").exists()

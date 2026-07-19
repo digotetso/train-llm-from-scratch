@@ -1,5 +1,4 @@
 import pytest
-import torch
 
 from matgpt.config import load_config
 from matgpt.training.schedule import build_training_schedule, learning_rate_at_step

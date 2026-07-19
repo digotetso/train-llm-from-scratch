@@ -68,7 +68,7 @@ training:
   compile: false
   micro_batch_size: 16
   gradient_accumulation_steps: 8
-  max_tokens: 50000000
+  max_tokens: 200000000
   optimizer: adamw
   learning_rate: 5.0e-4
   min_learning_rate: 5.0e-5
