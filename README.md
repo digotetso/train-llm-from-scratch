@@ -56,6 +56,16 @@ evaluations, samples, and `run/run_summary.md`.
 
 For W&B logging, set `ENABLE_WANDB = True` in the notebook. The YAML configs keep W&B disabled by default so local runs do not require an account.
 
+## Operator Semantics And Gates
+
+The 8M config pins `roneneldan/TinyStories` to commit `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`. The byte-level tokenizer starts with the complete byte alphabet; configuration rejects a vocabulary that cannot hold that alphabet and the configured special tokens.
+
+Run `prepare` before any training-stage preflight. Preparation creates and validates the normalized data, tokenizer, and shards; `preflight_t4.py` then verifies those artifacts, persistent storage, CUDA, and the required T4 before `smoke`, `pilot`, or `full` can proceed. See the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md) for prerequisites, exact evidence, and stop conditions.
+
+`--max-steps` means additional successful updates in the current invocation; it does not rewrite the configured full learning-rate schedule. `smoke` runs 20 updates followed by a five-update resume check. `pilot` stops at global step 306, then `evaluate` records the evidence. `full` is selected manually only after explicit user and Codex pilot approval.
+
+`scripts/evaluate.py` writes an evaluation JSON artifact, while `scripts/summarize_run.py` writes `run_summary.md`. Local tests use synthetic fixtures and cannot, by themselves, prove T4 allocation, prepared-artifact integrity, benchmark results, or training quality.
+
 ## 8M TinyStories Base Run
 
 Prepare normalized data:
