@@ -212,7 +212,7 @@ Stop without promoting when any of these occurs:
 
 - local free space is below 20 GiB, Drive is not writable, or synchronization
   does not include `normalized`, `tokenizer`, and `shards`;
-- a training stage does not observe CUDA on a T4;
+- `prepare` or a training stage does not observe CUDA on a T4;
 - preflight exits nonzero, reports any failed check, or does not persist valid
   JSON;
 - the configured benchmark batch fails, loss or gradient norm is non-finite,

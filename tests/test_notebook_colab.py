@@ -2,6 +2,7 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -214,33 +215,91 @@ def test_colab_uses_full_schedule_and_structured_stage_branches():
     assert stage_values == ["smoke", "pilot", "full"]
 
 
-def test_colab_prepare_produces_t4_gate_evidence_without_pretraining():
+def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
+    tmp_path: Path,
+):
     device_source = code_source_after_heading("## 6. Gate storage and the GPU")
+    prepare_source = code_source_after_heading("## 8. Prepare once, then synchronize")
     gate_source = code_source_after_heading(
         "## 9. Gate training with preflight and benchmark evidence"
     )
-    gate_tree = ast.parse(gate_source)
     training_source = code_source_after_heading("## 10. Run the selected training stage")
+    prepare_artifacts_for_stage = notebook_function(
+        prepare_source, "prepare_artifacts_for_stage"
+    )
+    run_evidence_gate = notebook_function(gate_source, "run_evidence_gate")
+    run_dir = tmp_path / "run"
+    commands: list[list[str]] = []
+    messages: list[str] = []
+    lifecycle: list[str] = []
 
-    evidence_stages = next(
-        {
-            element.value
-            for element in assignment.value.elts
-            if isinstance(element, ast.Constant)
-        }
-        for assignment in gate_tree.body
-        if isinstance(assignment, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "EVIDENCE_STAGES"
-            for target in assignment.targets
-        )
-        and isinstance(assignment.value, ast.Set)
+    benchmark_payload = {
+        "results": [
+            {
+                "batch_size": 8,
+                "status": "ok",
+                "loss": 1.0,
+                "grad_norm": 0.5,
+                "tokens_per_second": 100.0,
+                "memory_fraction": 0.5,
+            }
+        ]
+    }
+
+    def command_spy(command):
+        commands.append(command)
+        if "scripts/preflight_t4.py" in command:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "preflight.json").write_text(
+                json.dumps({"status": "pass"}), encoding="utf-8"
+            )
+        stdout = json.dumps(benchmark_payload) if "scripts/benchmark_t4.py" in command else ""
+        return SimpleNamespace(stdout=stdout)
+
+    prepare_artifacts_for_stage(
+        run_stage="prepare",
+        preparation_steps=[
+            (
+                "normalized",
+                "normalized dataset",
+                ["python", "scripts/prepare_dataset.py", "--config", "colab.yaml"],
+            )
+        ],
+        local_root=tmp_path / "local",
+        artifact_status_fn=lambda _name, _path: (False, "missing"),
+        run_command_fn=command_spy,
+        validate_artifact_fn=lambda _name, _path: lifecycle.append("validate"),
+        validate_all_fn=lambda: lifecycle.append("validate_all"),
+        sync_fn=lambda: lifecycle.append("sync"),
+        emit=messages.append,
+    )
+    run_evidence_gate(
+        run_stage="prepare",
+        config_path=Path("colab.yaml"),
+        run_output_dir=run_dir,
+        batch_sizes="8,16,24,32",
+        micro_batch_size=8,
+        run_command_fn=command_spy,
+        emit=messages.append,
     )
 
-    assert evidence_stages == {"prepare", "smoke", "pilot", "full"}
+    assert [command[1] for command in commands] == [
+        "scripts/prepare_dataset.py",
+        "scripts/preflight_t4.py",
+        "scripts/benchmark_t4.py",
+    ]
+    assert lifecycle == ["validate", "validate_all", "sync"]
+    assert json.loads((run_dir / "preflight.json").read_text()) == {"status": "pass"}
+    assert json.loads((run_dir / "benchmark.json").read_text()) == benchmark_payload
+    assert any("Stop here" in message and "before selecting smoke" in message for message in messages)
+    assert not any("scripts/pretrain.py" in command for command in commands)
+    assert not (run_dir / "checkpoints").exists()
+
     assert 'if RUN_STAGE in {"prepare", "smoke", "pilot", "full"}:' in device_source
-    assert "scripts/preflight_t4.py" in gate_source
-    assert "scripts/benchmark_t4.py" in gate_source
+    assert prepare_source.count("prepare_artifacts_for_stage(") == 2
+    assert gate_source.count("run_evidence_gate(") == 2
+    assert "scripts/pretrain.py" not in prepare_source
+    assert "scripts/pretrain.py" not in gate_source
     assert 'if RUN_STAGE == "prepare"' not in training_source
 
 
@@ -367,6 +426,8 @@ def test_colab_preparation_uses_force_rebuild_completeness_and_temp_snapshots():
     assert ".syncing-" in config_source
     assert ".restoring-" in config_source
     assert "dirs_exist_ok=True" not in config_source
-    assert "validate_all_prepared_artifacts" in call_lines
-    assert "sync_artifacts_to_drive" in call_lines
-    assert call_lines["validate_all_prepared_artifacts"] < call_lines["sync_artifacts_to_drive"]
+    assert "validate_all_fn" in call_lines
+    assert "sync_fn" in call_lines
+    assert call_lines["validate_all_fn"] < call_lines["sync_fn"]
+    assert "validate_all_fn=validate_all_prepared_artifacts" in prepare_source
+    assert "sync_fn=sync_artifacts_to_drive" in prepare_source

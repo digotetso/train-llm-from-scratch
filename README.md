@@ -33,13 +33,13 @@ The notebook walks through:
 - connecting Hugging Face for dataset access;
 - connecting Weights & Biases for live experiment tracking;
 - running `prepare`, `smoke`, `pilot`, `full`, and `evaluate` stages;
-- requiring preflight and finite benchmark evidence before every training stage;
+- requiring preflight and finite benchmark evidence during `prepare` and before every training stage;
 - stopping smoke after 20 successful updates, checking a 5-update resume, and
   stopping the pilot at global step 306;
 - requiring explicit user and Codex review before `full` is manually selected;
 - evaluating checkpoints and displaying the persisted review evidence.
 
-The strict preflight command used before each training stage is:
+The strict preflight command used during `prepare` and before each training stage is:
 
 ```bash
 python scripts/preflight_t4.py \
