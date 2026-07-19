@@ -16,6 +16,21 @@ from matgpt.preflight import (
 )
 
 
+def _default_report_path(cfg: dict) -> Path:
+    run_cfg = cfg.get("run")
+    if not isinstance(run_cfg, dict):
+        raise ValueError("run must be a mapping with a usable run.output_dir")
+    output_dir = run_cfg.get("output_dir")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        raise ValueError("run.output_dir must be a non-empty path string")
+    if "\x00" in output_dir:
+        raise ValueError("run.output_dir must not contain null bytes")
+    output_path = Path(output_dir)
+    if output_path.exists() and not output_path.is_dir():
+        raise ValueError(f"run.output_dir is not a directory: {output_path}")
+    return output_path / "preflight.json"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate MatGPT artifacts and T4 readiness.")
     parser.add_argument("--config", required=True)
@@ -37,13 +52,14 @@ def main(argv: list[str] | None = None) -> int:
     config_failure_path = requested_report_path or Path.cwd() / "preflight.json"
     try:
         cfg = load_config(args.config)
+        default_report_path = _default_report_path(cfg)
     except Exception as exc:
         report = build_config_failure_report(exc)
         write_preflight_report(report, config_failure_path)
         print(f"Preflight failed: config: {exc}", file=sys.stderr)
         return 1
 
-    report_path = requested_report_path or Path(cfg["run"]["output_dir"]) / "preflight.json"
+    report_path = requested_report_path or default_report_path
     try:
         report = run_preflight(
             cfg,
@@ -53,6 +69,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        if requested_report_path is not None:
+            raise
+        report = build_config_failure_report(
+            ValueError(f"run.output_dir could not persist preflight evidence: {exc}")
+        )
+        write_preflight_report(report, config_failure_path)
+        print(f"Preflight failed: config: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

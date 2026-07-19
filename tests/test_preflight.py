@@ -4,12 +4,13 @@ from pathlib import Path
 import pytest
 import torch
 
-from matgpt.config import clone_config, load_config
+import matgpt.preflight as preflight_module
+from matgpt.config import clone_config, config_to_yaml, load_config
 from matgpt.data.prepare import make_document_record, write_jsonl_records, write_manifest
 from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.preflight import build_preflight_report, run_preflight
 from matgpt.tokenizer.train import train_tokenizer_from_config
-from matgpt.utils.hashing import sha256_json
+from matgpt.utils.hashing import sha256_json, sha256_text
 from scripts.preflight_t4 import main as preflight_main
 
 
@@ -234,6 +235,56 @@ def test_cli_uses_safe_fallback_report_for_invalid_config(tmp_path, monkeypatch)
     assert _check(report, "config")["status"] == "fail"
 
 
+@pytest.mark.parametrize("output_dir_state", ["missing", "null", "empty"])
+def test_cli_falls_back_for_unusable_run_output_dir(
+    tmp_path,
+    monkeypatch,
+    output_dir_state,
+):
+    cfg = clone_config(load_config("configs/matgpt_mini_8m.yaml"))
+    if output_dir_state == "missing":
+        cfg["run"].pop("output_dir")
+    else:
+        cfg["run"]["output_dir"] = None if output_dir_state == "null" else ""
+    config_path = tmp_path / f"{output_dir_state}.yaml"
+    config_path.write_text(config_to_yaml(cfg), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = preflight_main(["--config", str(config_path)])
+
+    report_path = tmp_path / "preflight.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert report["status"] == "fail"
+    assert [check["name"] for check in report["checks"]] == CHECK_IDS
+    assert _check(report, "config")["status"] == "fail"
+    assert "run.output_dir" in _check(report, "config")["message"]
+
+
+def test_explicit_report_path_precedes_unusable_run_output_dir(tmp_path, monkeypatch):
+    cfg = clone_config(load_config("configs/matgpt_mini_8m.yaml"))
+    cfg["run"]["output_dir"] = None
+    config_path = tmp_path / "null-output.yaml"
+    config_path.write_text(config_to_yaml(cfg), encoding="utf-8")
+    report_path = tmp_path / "explicit" / "preflight.json"
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = preflight_main(
+        [
+            "--config",
+            str(config_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert not (tmp_path / "preflight.json").exists()
+    assert _check(report, "config")["status"] == "fail"
+    assert "run.output_dir" in _check(report, "config")["message"]
+
+
 def test_preflight_recomputes_normalized_record_hashes(synthetic_preflight_cfg):
     train_path = Path(synthetic_preflight_cfg["dataset"]["normalized_dir"]) / "train.jsonl"
     lines = train_path.read_text(encoding="utf-8").splitlines()
@@ -247,6 +298,30 @@ def test_preflight_recomputes_normalized_record_hashes(synthetic_preflight_cfg):
     check = _check(report, "dataset_manifest")
     assert check["status"] == "fail"
     assert "text_sha256" in check["message"]
+
+
+def test_normalized_digest_does_not_join_all_document_hashes(
+    synthetic_preflight_cfg,
+    monkeypatch,
+):
+    train_path = Path(synthetic_preflight_cfg["dataset"]["normalized_dir"]) / "train.jsonl"
+    manifest = json.loads(
+        (train_path.parent / "manifest.json").read_text(encoding="utf-8")
+    )
+    hashed_inputs = []
+
+    def tracking_sha256_text(value):
+        hashed_inputs.append(value)
+        return sha256_text(value)
+
+    monkeypatch.setattr(preflight_module, "sha256_text", tracking_sha256_text)
+
+    evidence = preflight_module._normalized_split_evidence(train_path)
+
+    assert evidence["documents_sha256"] == manifest["split_stats"]["train"][
+        "documents_sha256"
+    ]
+    assert max(len(value) for value in hashed_inputs) < 128
 
 
 @pytest.mark.parametrize("field", ["raw_bytes", "total_chars", "documents_sha256"])

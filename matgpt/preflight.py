@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import re
@@ -72,7 +73,7 @@ def _normalized_split_evidence(path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Required JSONL artifact is missing: {path}")
     document_count = 0
     total_chars = 0
-    document_hashes = []
+    documents_digest = hashlib.sha256()
     for line_number, row in _nonempty_jsonl_rows(path):
         if not isinstance(row, dict):
             raise TypeError(f"{path}:{line_number} must contain a JSON object")
@@ -92,12 +93,12 @@ def _normalized_split_evidence(path: Path) -> dict[str, Any]:
             )
         document_count += 1
         total_chars += len(text)
-        document_hashes.append(text_hash)
+        documents_digest.update(text_hash.encode("utf-8"))
     return {
         "document_count": document_count,
         "raw_bytes": path.stat().st_size,
         "total_chars": total_chars,
-        "documents_sha256": sha256_text("".join(document_hashes)),
+        "documents_sha256": documents_digest.hexdigest(),
     }
 
 
