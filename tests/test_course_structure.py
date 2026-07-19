@@ -157,12 +157,32 @@ VIDEO_HEADINGS = {
     ],
 }
 
-APPROVED_QUIZ_QUESTIONS = [
-    "1. Does a computer naturally understand `cat` like a human?",
-    '2. What does `ord("A")` return, and what does that number represent?',
-    "3. Is character number `65` the human meaning of `A`?",
-    "4. Why must text become numbers before a mathematical model can use it?",
-    "5. In one sentence, what does learning mean at this stage?",
+APPROVED_QUIZ_ITEMS = [
+    (
+        "Does a computer naturally understand `cat` like a human?",
+        "No. A program receives represented data, not the experiences and meaning a person brings to the word `cat`.",
+        "If the answer says yes, revisit `Simple Explanation`. The missing distinction is between human experience and data received by a program.",
+    ),
+    (
+        'What does `ord("A")` return, and what does that number represent?',
+        '`ord("A")` returns `65`. The number is the agreed Unicode number for the character `A`.',
+        "If the answer gives a different number or says `65` means a school grade, rerun the mini-lab and revisit `Technical Meaning`. The question asks about an agreed character number, not one possible use of the character.",
+    ),
+    (
+        "Is character number `65` the human meaning of `A`?",
+        "No. `65` identifies the character under an agreed representation; it does not contain human meaning.",
+        "If the answer says yes, revisit `Analogy And Its Limitation` and `Misconception`. A library identifier helps locate a book without containing its story; character number `65` behaves similarly as an identifier.",
+    ),
+    (
+        "Why must text become numbers before a mathematical model can use it?",
+        "A mathematical model works with numbers, so text needs a numeric representation before the model can perform calculations and learn patterns from examples.",
+        "If the answer mentions only storage, revisit the final paragraph of `Simple Explanation`. Storage is one reason; the model also needs numbers because its operations are mathematical.",
+    ),
+    (
+        "In one sentence, what does learning mean at this stage?",
+        "Learning means adjusting a model's internal numbers so its guesses become less wrong across many examples.",
+        "If the answer describes fixed conversion with `ord`, revisit `Technical Meaning`. Representation follows an agreement. Learning requires adjustable internal values that change in response to mistakes across examples.",
+    ),
 ]
 
 
@@ -225,17 +245,13 @@ def test_video_one_uses_approved_quiz_and_aligned_answer_key():
     quiz = read(VIDEO_DIR / "quiz.md")
     answer_key = read(VIDEO_DIR / "answer-key.md")
 
-    assert numbered_items(section(quiz, "## Questions")) == APPROVED_QUIZ_QUESTIONS
-    assert [item.split(".", maxsplit=1)[0] for item in numbered_items(section(answer_key, "## Answers"))] == [
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-    ]
-    assert [
-        item.split(".", maxsplit=1)[0] for item in numbered_items(section(answer_key, "## Gap Explanations"))
-    ] == ["1", "2", "3", "4", "5"]
+    expected_questions = [f"{number}. {question}" for number, (question, _, _) in enumerate(APPROVED_QUIZ_ITEMS, 1)]
+    expected_answers = [f"{number}. {answer}" for number, (_, answer, _) in enumerate(APPROVED_QUIZ_ITEMS, 1)]
+    expected_gaps = [f"{number}. {gap}" for number, (_, _, gap) in enumerate(APPROVED_QUIZ_ITEMS, 1)]
+
+    assert numbered_items(section(quiz, "## Questions")) == expected_questions
+    assert numbered_items(section(answer_key, "## Answers")) == expected_answers
+    assert numbered_items(section(answer_key, "## Gap Explanations")) == expected_gaps
 
 
 def test_video_one_lab_is_standard_library_only_and_has_exact_stdout():
@@ -286,5 +302,6 @@ def test_video_one_evidence_matches_the_shown_work():
     assert "**Source fact:**" in anchors
     assert "**Observed code behavior:**" in anchors
     assert "**Teaching analogy:**" in anchors
+    assert "exact text of all five approved questions, answers, and gap explanations" in anchors
     assert "control-character removal" not in anchors
     assert "blank-line limiting" not in anchors

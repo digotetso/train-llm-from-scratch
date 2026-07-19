@@ -5,7 +5,7 @@
 - **Source fact:** [`matgpt/data/normalize.py`](../../../matgpt/data/normalize.py) defines `normalize_text`. The excerpt actually shown in the lesson applies NFKC, makes newline styles consistent, removes right-edge whitespace from each line, removes outer whitespace, and returns the result.
 - **Observed code behavior:** [`matgpt/data/prepare.py`](../../../matgpt/data/prepare.py) imports `normalize_text` and calls it in `make_document_record`. The shown excerpt stores the cleaned text under `text` and its character count under `num_chars`.
 - **Observed code behavior:** [`lab.py`](lab.py) uses Python's built-in `ord` and `str.encode` behavior to display the agreed character numbers and UTF-8 bytes for `Cat`.
-- **Observed test behavior:** [`tests/test_course_structure.py`](../../../tests/test_course_structure.py) checks the exact outline, single produced video, artifact headings, quiz alignment, lab source and output, teaching warnings, prompt alignment, and evidence contract.
+- **Observed test behavior:** [`tests/test_course_structure.py`](../../../tests/test_course_structure.py) checks the exact outline, single produced video, artifact headings, exact text of all five approved questions, answers, and gap explanations, lab source and output, teaching warnings, prompt alignment, and evidence contract.
 - **Teaching analogy:** The library-card comparison in the script and lesson illustrates an agreed identifier versus meaning. It is not repository behavior.
 
 ## Commands Run
@@ -14,6 +14,8 @@ From the repository root:
 
 ```bash
 uv run pytest tests/test_course_structure.py -v
+uv run pytest tests/test_course_structure.py::test_video_one_uses_approved_quiz_and_aligned_answer_key -v
+uv run pytest tests/test_course_structure.py::test_video_one_evidence_matches_the_shown_work -v
 python course/videos/001-computer-learning-from-text/lab.py
 rg -n '\b(token|tensor|logit|gradient|attention)\b' course/videos/001-computer-learning-from-text
 uv run pytest -v
@@ -39,6 +41,10 @@ Observed locally on 2026-07-19:
 - During the review follow-up, the corrected stronger contract produced the intended RED result: `4 failed, 6 passed in 0.18s`. The failures identified the old lab prompt, missing NFKC warning, inconsistent prompt references, and incomplete evidence contract.
 - After the content fixes, the focused contract reported `10 passed in 0.11s`.
 - The full verbose repository suite reported `153 passed in 6.82s`.
+- During the final answer-alignment follow-up, changing answer 3 to the opposite claim produced `1 failed in 0.11s`; the failure identified the exact wrong answer at index 2.
+- After restoring answer 3, replacing gap explanation 4 with misleading guidance produced `1 failed in 0.09s`; the failure identified the exact wrong explanation at index 3.
+- Adding the stronger evidence-description assertion before updating this file produced `1 failed in 0.11s`.
+- With all correct content restored, the focused course contract reported `10 passed in 0.11s`, the direct lab printed the current output shown above, and the full verbose suite reported `153 passed in 7.42s`.
 
 ## Unverified Claims
 
