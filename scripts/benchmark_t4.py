@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 import time
@@ -52,17 +53,39 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
                 _, loss = model(x, targets=y)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["training"]["grad_clip"])
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), cfg["training"]["grad_clip"]
+            )
             scaler.step(optimizer)
             scaler.update()
         elapsed = max(time.time() - start, 1e-6)
+        loss_value = float(loss.detach().cpu())
+        grad_norm_value = float(grad_norm.detach().cpu())
+        if not math.isfinite(loss_value) or not math.isfinite(grad_norm_value):
+            raise FloatingPointError(
+                f"Non-finite benchmark result: loss={loss_value} grad_norm={grad_norm_value}"
+            )
+        peak_memory_mb = (
+            torch.cuda.max_memory_allocated(device) / (1024 * 1024)
+            if device.type == "cuda"
+            else 0.0
+        )
+        total_memory_mb = (
+            torch.cuda.get_device_properties(device).total_memory / (1024 * 1024)
+            if device.type == "cuda"
+            else 0.0
+        )
         return {
             "batch_size": batch_size,
             "status": "ok",
+            "loss": loss_value,
+            "grad_norm": grad_norm_value,
             "tokens_per_second": tokens_per_step * steps / elapsed,
-            "peak_memory_mb": torch.cuda.max_memory_allocated(device) / (1024 * 1024) if device.type == "cuda" else 0.0,
+            "peak_memory_mb": peak_memory_mb,
+            "total_memory_mb": total_memory_mb,
+            "memory_fraction": peak_memory_mb / total_memory_mb if total_memory_mb else 0.0,
         }
-    except RuntimeError as exc:
+    except (RuntimeError, FloatingPointError) as exc:
         if device.type == "cuda":
             torch.cuda.empty_cache()
         return {"batch_size": batch_size, "status": "failed", "error": str(exc)[:500]}

@@ -21,19 +21,38 @@ python -m pip install -e ".[test,colab]"
 
 ## Recommended Colab Notebook
 
-Use [notebooks/train_matgpt_t4_base_colab.ipynb](/Users/digotetsomatema/AI-Projects-2026/train-llm-from-scratch/notebooks/train_matgpt_t4_base_colab.ipynb) for Google Colab T4 runs.
+Use [the Colab notebook](notebooks/train_matgpt_t4_base_colab.ipynb) together
+with the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md). The
+notebook is stage-gated; it never promotes a pilot to the full run by itself.
 
 The notebook walks through:
 
-- mounting Google Drive for persistent checkpoints;
+- keeping active prepared data under fast, ephemeral `/content`;
+- synchronizing normalized data, tokenizer files, and shards to Google Drive;
+- writing checkpoints and run evidence directly to Google Drive;
 - connecting Hugging Face for dataset access;
 - connecting Weights & Biases for live experiment tracking;
-- preparing normalized corpus files;
-- training the tokenizer;
-- creating packed token shards;
-- benchmarking safe T4 micro-batch sizes;
-- smoke training, full training, and checkpoint resume;
-- evaluation and text generation.
+- running `prepare`, `smoke`, `pilot`, `full`, and `evaluate` stages;
+- requiring preflight and finite benchmark evidence before every training stage;
+- stopping smoke after 20 successful updates, checking a 5-update resume, and
+  stopping the pilot at global step 306;
+- requiring explicit user and Codex review before `full` is manually selected;
+- evaluating checkpoints and displaying the persisted review evidence.
+
+The strict preflight command used before each training stage is:
+
+```bash
+python scripts/preflight_t4.py \
+  --config /content/matgpt_work/<run-name>/config/<model>.yaml \
+  --require-t4 \
+  --min-free-disk-gb 20
+```
+
+The notebook uses `/content/matgpt_work/<run-name>/` for active normalized
+data, tokenizer files, and shards. Durable copies and run evidence live under
+`/content/drive/MyDrive/matgpt_artifacts/<run-name>/`, including
+`run/preflight.json`, `run/benchmark.json`, `run/metrics.csv`, checkpoints,
+evaluations, samples, and `run/run_summary.md`.
 
 For W&B logging, set `ENABLE_WANDB = True` in the notebook. The YAML configs keep W&B disabled by default so local runs do not require an account.
 
@@ -130,9 +149,11 @@ Each run writes:
 - normalized JSONL files and corpus manifest
 - tokenizer artifacts and tokenizer report
 - packed binary token shards and metadata
+- persisted `preflight.json` and `benchmark.json` gate evidence
 - `runs/<name>/metrics.csv`
 - fixed prompt samples under `runs/<name>/samples/`
 - resumable checkpoints under `runs/<name>/checkpoints/`
+- checkpoint evaluations and `run_summary.md`
 
 ## Tests
 
