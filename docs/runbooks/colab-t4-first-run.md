@@ -90,6 +90,7 @@ run/checkpoints/latest.pt
 run/checkpoints/best.pt
 run/evaluation/latest.json
 run/evaluation/best.json
+run/resume_verification.json
 run/samples/samples_*.json
 run/run_summary.md
 ```
@@ -110,8 +111,10 @@ active training. Do not move the local root between sessions.
    Every other smoke checkpoint step is rejected.
 3. Select `RUN_STAGE = "pilot"`. It resumes and stops at global step 306,
    approximately 10M configured Mini tokens.
-4. Select `RUN_STAGE = "evaluate"`. Review all gate evidence with the user and
-   Codex. Step 306 alone is not approval.
+4. Select `RUN_STAGE = "evaluate"`. Both `latest.pt` and `best.pt` are required.
+   The notebook evaluates both and verifies complete `latest.pt` resume state
+   without taking an optimizer update. Review all gate evidence with the user
+   and Codex. Step 306 alone is not approval.
 5. Only after explicit approval, manually select `RUN_STAGE = "full"`. The
    notebook never changes this selection automatically.
 6. Select `RUN_STAGE = "evaluate"` again after full training.
@@ -172,7 +175,8 @@ python scripts/pretrain.py \
   --max-steps 281
 ```
 
-Full training has no `--max-steps` override:
+Full training has no `--max-steps` override and must finish at exact global
+step 6,104:
 
 ```bash
 python scripts/pretrain.py \
@@ -180,10 +184,16 @@ python scripts/pretrain.py \
   --resume-from "$RUN_DIR/checkpoints/latest.pt"
 ```
 
-Evaluation runs once for each existing `latest.pt` and `best.pt`, followed by:
+Evaluation requires and runs once for both `latest.pt` and `best.pt`, verifies
+complete resume state without an update, persists that verification as
+`resume_verification.json`, and then writes the summary:
 
 ```bash
 python scripts/evaluate.py --config "$CONFIG" --checkpoint "$CHECKPOINT"
+python scripts/pretrain.py \
+  --config "$CONFIG" \
+  --resume-from "$RUN_DIR/checkpoints/latest.pt" \
+  --verify-only
 python scripts/summarize_run.py --run-dir "$RUN_DIR"
 ```
 
@@ -200,7 +210,7 @@ python scripts/summarize_run.py --run-dir "$RUN_DIR"
 | 6. Resume check | Loading `latest.pt` and running 5 additional successful updates finishes at exactly global step 25. The full LR schedule remains unchanged. | Updated `latest.pt`, `metrics.csv`. |
 | 7. Pilot stop | Resume begins from durable `latest.pt` and finishes at exactly global step 306. This is a stop point, not promotion approval. | Updated `latest.pt`, `metrics.csv`. |
 | 8. Pilot review | All reviewed rows are finite; late training-loss median is below early median; first-to-last finite validation loss improves; late/early throughput ratio is at least 0.80; benchmark memory remains below 0.90; skipped-update counters are reviewed; samples/evaluations are usable. Investigate a warning if every logged peak-memory value strictly increases. | Notebook review output, `benchmark.json`, `metrics.csv`, `run_summary.md`, samples, evaluations. |
-| 9. Full and final review | The user and Codex explicitly approve promotion before `full` is selected. The full command resumes without `--max-steps`; final `evaluate` regenerates evaluation JSON and `run_summary.md`. | Approval record and final Drive artifacts. |
+| 9. Full and final review | The user and Codex explicitly approve promotion before `full` is selected. The full command resumes without `--max-steps` and must finish at exact step 6,104. Final `evaluate` requires and evaluates both checkpoints, verifies complete `latest.pt` resume state without taking an update, persists `resume_verification.json`, and regenerates `run_summary.md`. | Approval record, `resume_verification.json`, and final Drive artifacts. |
 
 The Gate 8 calculations inform a decision; they do not mutate `RUN_STAGE`.
 Skipped updates are not hidden: any nonzero count requires explicit review, and
@@ -223,12 +233,15 @@ Stop without promoting when any of these occurs:
   step 25; a post-command step is not exact; or resume reports an
   artifact/config mismatch;
 - pilot does not stop at step 306;
+- full training does not finish at exact step 6,104, either required checkpoint
+  is missing, or read-only resume verification fails;
 - training or validation evidence is non-finite, late loss does not improve,
   validation loss does not improve, throughput ratio is below 0.80, or skipped
   updates need investigation;
 - peak memory increases at every logged point without an understood bounded
   cause;
-- samples, evaluation JSON, metrics, or the run summary are missing or invalid.
+- samples, evaluation JSON, resume-verification JSON, metrics, or the run
+  summary are missing or invalid.
 
 Preserve the evidence and diagnose the failure. Do not work around a gate by
 editing the full schedule, document caps, evaluation intervals, sample
@@ -257,8 +270,9 @@ intervals, checkpoint intervals, or test expectations.
 7. For pilot or full, the notebook loads durable `latest.pt`. Pilot recomputes
    `306 - current_step`; full resumes the unchanged schedule. Inspect metrics
    around the interruption for duplicate or non-monotonic rows before approval.
-8. Rerun `evaluate` after recovery so evaluation JSON and the summary describe
-   the latest durable checkpoint.
+8. Rerun `evaluate` after recovery. It must find both checkpoints, evaluate
+   both, verify complete `latest.pt` resume state without an update, and then
+   regenerate the summary.
 
 Never resume through a preflight checkpoint-compatibility failure. Preserve the
 run directory and review the config, tokenizer, and dataset fingerprints.
@@ -275,6 +289,7 @@ metrics.csv
 run_summary.md
 evaluation/latest.json
 evaluation/best.json          # when present
+resume_verification.json
 samples/samples_*.json        # latest plus any comparison sample
 ```
 

@@ -10,15 +10,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from matgpt.config import load_config
+from matgpt.config import config_to_yaml, load_config
 from matgpt.eval.lm import evaluate_loss, generate_samples, perplexity
 from matgpt.model.gpt import GPT, GPTConfig
-from matgpt.tokenizer.io import load_tokenizer
-from matgpt.training.checkpoint import load_checkpoint
+from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
+from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint
 from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
-from matgpt.training.pretrain import get_device
+from matgpt.training.pretrain import get_device, validate_checkpoint_compatibility
 from matgpt.training.run_summary import write_evaluation_result
 from matgpt.data.prepare import effective_validation_split
+from matgpt.utils.hashing import sha256_file, sha256_text
 
 
 def main() -> None:
@@ -33,7 +34,18 @@ def main() -> None:
     output_path = Path(args.output) if args.output else default_output
     device = get_device()
     model = GPT(GPTConfig.from_dict(cfg["model"])).to(device)
-    load_checkpoint(args.checkpoint, model=model, map_location=device)
+    payload = load_checkpoint(args.checkpoint, map_location=device)
+    if not cfg["training"].get("allow_artifact_mismatch", False):
+        tokenizer_metadata = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])
+        expected_fingerprints = {
+            "config_sha256": sha256_text(config_to_yaml(cfg)),
+            "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
+            "dataset_manifest_hash": sha256_file(
+                Path(cfg["dataset"]["normalized_dir"]) / "manifest.json"
+            ),
+        }
+        validate_checkpoint_compatibility(payload, expected_fingerprints)
+    apply_checkpoint_payload(payload, model=model)
     tokenizer = load_tokenizer(cfg["tokenizer"]["output_dir"])
     val_dataset = PackedTokenDataset.from_metadata(
         metadata_path_for_split(cfg["sharding"]["output_dir"], effective_validation_split(cfg["dataset"])),

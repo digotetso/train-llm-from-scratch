@@ -25,7 +25,7 @@ No percentage is used. Local tests establish local behavior only; they do not es
 - **Locally verified:** all CPU-testable repository-readiness criteria and gate behavior, exact Mini parameter and schedule math, notebook JSON validity, the 64-video outline and template, and the complete Video 1 package.
 - **Requires prepared TinyStories artifacts:** non-empty normalized splits, reconciled manifest statistics, zero train/validation overlap, an 8,192-entry production tokenizer, Unicode round trips with that tokenizer, and valid production shards.
 - **Requires Colab T4 evidence:** actual CUDA device identity, disk and Drive capacity, preflight results, finite configured-batch benchmark math, throughput, and peak-memory headroom.
-- **Requires smoke, pilot, and full-run evidence:** checkpoint resume on the real run, finite learning curves, improved validation loss, durable Drive artifacts, pilot approval, completion through step 6,104, and final `latest.pt`/`best.pt` evaluation.
+- **Requires smoke, pilot, and full-run evidence:** checkpoint resume on the real run, finite learning curves, improved validation loss, durable Drive artifacts, pilot approval, completion through step 6,104, final `latest.pt`/`best.pt` evaluation, and persisted `resume_verification.json`.
 
 ## Canonical References
 
@@ -55,9 +55,9 @@ python scripts/benchmark_t4.py \
 
 Expected evidence is a passing `run/preflight.json`, finite configured-batch fields in `run/benchmark.json`, and the prepared manifest, tokenizer, and shard metadata. The benchmark uses a temporary model but the `prepare` stage does not run pretraining or create a checkpoint. Stop and review both reports before selecting `smoke`; do not start smoke if preparation is incomplete, preflight fails, the benchmark has a non-finite value or non-positive throughput, or the T4/storage gate fails. See the runbook for the complete gate criteria and recovery rules.
 
-**Training sequence:** `smoke` performs 20 successful updates followed by a five-update resume check. `--max-steps` limits the current invocation and preserves the configured full learning-rate schedule. `pilot` stops at global step 306. Run `evaluate` and review the persisted evidence; only explicit user and Codex approval permits manually selecting `full`.
+**Training sequence:** `smoke` performs 20 successful updates followed by a five-update resume check. `--max-steps` limits the current invocation and preserves the configured full learning-rate schedule. `pilot` stops at global step 306. Run `evaluate`; it requires both checkpoints, evaluates them, verifies complete `latest.pt` resume state without an optimizer update, and persists `resume_verification.json`. Review the persisted evidence; only explicit user and Codex approval permits manually selecting `full`, which must finish at exact step 6,104.
 
-**Outputs:** `scripts/evaluate.py` writes an evaluation JSON artifact, and `scripts/summarize_run.py` writes `run_summary.md`. Stop and preserve evidence for any non-finite training or validation value, repeated skipped updates, incompatible artifacts, unexpected checkpoint lineage, missing required evidence, or a failed pilot review.
+**Outputs:** `scripts/evaluate.py` writes evaluation JSON artifacts, the notebook writes `resume_verification.json`, and `scripts/summarize_run.py` writes `run_summary.md`. Stop and preserve evidence for any non-finite training or validation value, repeated skipped updates, incompatible artifacts, unexpected checkpoint lineage, missing required evidence, or a failed pilot review.
 
 ## Historical Answer Review
 

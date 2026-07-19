@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 import matgpt.training.run_summary as run_summary_module
+from matgpt.config import config_to_yaml
 from matgpt.training.run_summary import build_run_summary, write_evaluation_result
 from matgpt.training.run_summary import write_run_summary
+from matgpt.utils.hashing import sha256_file, sha256_text
 from scripts import evaluate as evaluate_script
 
 
@@ -287,12 +289,16 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     checkpoint = tmp_path / "checkpoints" / "best.pt"
     configured_output = run_dir / "evaluation" / "best.json"
     requested_output = tmp_path / "requested.json"
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    manifest_path = normalized_dir / "manifest.json"
+    manifest_path.write_text('{"dataset":"unit"}\n', encoding="utf-8")
     cfg = {
         "run": {"output_dir": str(run_dir), "seed": 17},
         "model": {"context_length": 8},
         "tokenizer": {"output_dir": str(tmp_path / "tokenizer")},
         "sharding": {"output_dir": str(tmp_path / "shards")},
-        "dataset": {},
+        "dataset": {"normalized_dir": str(normalized_dir)},
         "training": {"micro_batch_size": 1, "eval_batches": 1, "precision": "fp32"},
         "evaluation": {
             "prompts": ["Hello"],
@@ -325,12 +331,27 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
             assert token == "<|eos|>"
             return 2
 
+    payload = {
+        "model": {},
+        "extra": {
+            "config_sha256": sha256_text(config_to_yaml(cfg)),
+            "tokenizer_sha256": "current-tokenizer",
+            "dataset_manifest_hash": sha256_file(manifest_path),
+        },
+    }
+
     monkeypatch.setattr(evaluate_script, "load_config", lambda path: cfg)
     monkeypatch.setattr(evaluate_script, "get_device", lambda: "cpu")
     monkeypatch.setattr(evaluate_script, "GPTConfig", FakeConfig)
     monkeypatch.setattr(evaluate_script, "GPT", FakeModel)
-    monkeypatch.setattr(evaluate_script, "load_checkpoint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(evaluate_script, "load_checkpoint", lambda *args, **kwargs: payload)
+    monkeypatch.setattr(evaluate_script, "apply_checkpoint_payload", lambda *args, **kwargs: None)
     monkeypatch.setattr(evaluate_script, "load_tokenizer", lambda path: FakeTokenizer())
+    monkeypatch.setattr(
+        evaluate_script,
+        "load_tokenizer_metadata",
+        lambda path: {"tokenizer_sha256": "current-tokenizer"},
+    )
     monkeypatch.setattr(evaluate_script, "PackedTokenDataset", FakeDataset)
     monkeypatch.setattr(evaluate_script, "metadata_path_for_split", lambda *args: tmp_path / "metadata.json")
     monkeypatch.setattr(evaluate_script, "effective_validation_split", lambda dataset: "validation")
@@ -356,3 +377,92 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
         "val_loss": 4.7,
     }
     assert json.loads(capsys.readouterr().out) == json.loads(output.read_text(encoding="utf-8"))
+
+
+def test_evaluate_rejects_artifact_mismatch_before_applying_model_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    run_dir = tmp_path / "run"
+    normalized_dir = tmp_path / "normalized"
+    normalized_dir.mkdir()
+    manifest_path = normalized_dir / "manifest.json"
+    manifest_path.write_text('{"dataset":"unit"}\n', encoding="utf-8")
+    checkpoint = tmp_path / "checkpoints" / "best.pt"
+    cfg = {
+        "run": {"output_dir": str(run_dir), "seed": 17},
+        "model": {"context_length": 8},
+        "tokenizer": {"output_dir": str(tmp_path / "tokenizer")},
+        "sharding": {"output_dir": str(tmp_path / "shards")},
+        "dataset": {"normalized_dir": str(normalized_dir)},
+        "training": {
+            "micro_batch_size": 1,
+            "eval_batches": 1,
+            "precision": "fp32",
+            "allow_artifact_mismatch": False,
+        },
+        "evaluation": {
+            "prompts": ["Hello"],
+            "max_new_tokens": 1,
+            "temperature": 1.0,
+            "top_k": None,
+            "top_p": None,
+        },
+    }
+    payload = {
+        "model": {},
+        "extra": {
+            "config_sha256": sha256_text(config_to_yaml(cfg)),
+            "tokenizer_sha256": "checkpoint-tokenizer",
+            "dataset_manifest_hash": sha256_file(manifest_path),
+        },
+    }
+    model_application_attempts = []
+
+    class FakeConfig:
+        @staticmethod
+        def from_dict(value: dict) -> object:
+            return value
+
+    class FakeModel:
+        def __init__(self, config: object):
+            self.config = config
+
+        def to(self, device: object) -> "FakeModel":
+            return self
+
+    def load_checkpoint_probe(*args, **kwargs):
+        if kwargs.get("model") is not None:
+            model_application_attempts.append("load_checkpoint")
+        return payload
+
+    def apply_checkpoint_probe(*args, **kwargs):
+        model_application_attempts.append("apply_checkpoint_payload")
+
+    monkeypatch.setattr(evaluate_script, "load_config", lambda path: cfg)
+    monkeypatch.setattr(evaluate_script, "get_device", lambda: "cpu")
+    monkeypatch.setattr(evaluate_script, "GPTConfig", FakeConfig)
+    monkeypatch.setattr(evaluate_script, "GPT", FakeModel)
+    monkeypatch.setattr(evaluate_script, "load_checkpoint", load_checkpoint_probe)
+    monkeypatch.setattr(
+        evaluate_script,
+        "apply_checkpoint_payload",
+        apply_checkpoint_probe,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        evaluate_script,
+        "load_tokenizer_metadata",
+        lambda path: {"tokenizer_sha256": "current-tokenizer"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluate.py", "--config", "config.yaml", "--checkpoint", str(checkpoint)],
+    )
+
+    with pytest.raises(ValueError, match="tokenizer_sha256"):
+        evaluate_script.main()
+
+    assert model_application_attempts == []

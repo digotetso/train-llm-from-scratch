@@ -158,6 +158,63 @@ def test_run_pretraining_one_step_with_synthetic_shards(tmp_path):
     }
 
 
+def test_verify_only_restores_resume_state_without_changing_run_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    run_dir = tmp_path / "run"
+    checkpoint = run_dir / "checkpoints" / "latest.pt"
+    checkpoint_before = checkpoint.read_bytes()
+    metrics_before = (run_dir / "metrics.csv").read_bytes()
+    restore_calls = []
+    real_apply_checkpoint_payload = pretrain_module.apply_checkpoint_payload
+    real_restore_dataset_rng_state = pretrain_module._restore_dataset_rng_state
+
+    def apply_checkpoint_probe(payload, **kwargs):
+        restore_calls.append(
+            (
+                kwargs.get("model") is not None,
+                kwargs.get("optimizer") is not None,
+                kwargs.get("scaler") is not None,
+                kwargs.get("restore_rng"),
+            )
+        )
+        return real_apply_checkpoint_payload(payload, **kwargs)
+
+    def restore_dataset_rng_probe(checkpoint_state, train_dataset, val_dataset):
+        restore_calls.append("dataset_rng")
+        return real_restore_dataset_rng_state(
+            checkpoint_state,
+            train_dataset,
+            val_dataset,
+        )
+
+    def reject_tracker_creation(*args, **kwargs):
+        raise AssertionError("verify-only must return before tracker creation")
+
+    monkeypatch.setattr(
+        pretrain_module,
+        "apply_checkpoint_payload",
+        apply_checkpoint_probe,
+    )
+    monkeypatch.setattr(
+        pretrain_module,
+        "_restore_dataset_rng_state",
+        restore_dataset_rng_probe,
+    )
+    monkeypatch.setattr(pretrain_module, "create_tracker", reject_tracker_creation)
+
+    result = run_pretraining(cfg, resume_from=checkpoint, verify_only=True)
+
+    assert result["resume_verified"] is True
+    assert result["state"]["global_step"] == 1
+    assert restore_calls == [(True, True, True, True), "dataset_rng"]
+    assert checkpoint.read_bytes() == checkpoint_before
+    assert (run_dir / "metrics.csv").read_bytes() == metrics_before
+
+
 def test_fresh_run_rejects_an_initialized_metrics_file(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -285,12 +342,32 @@ def test_five_consecutive_skips_abort_without_advancing_schedule_or_checkpoint(t
     skipped_rows = [row for row in rows if row["optimizer_step_skipped"] == "True"]
     assert len(skipped_rows) == 5
     assert [int(row["attempted_step"]) for row in skipped_rows] == [2, 3, 4, 5, 6]
-    assert [int(row["tokens_processed"]) for row in skipped_rows] == [32, 48, 64, 80, 96]
+    assert [int(row["tokens_processed"]) for row in skipped_rows] == [16, 16, 16, 16, 16]
     assert all(row["global_step"] == "1" for row in skipped_rows)
     assert len({row["lr"] for row in skipped_rows}) == 1
     assert skipped_rows[-1]["optimizer_steps_skipped_total"] == "5"
     assert skipped_rows[-1]["consecutive_optimizer_steps_skipped"] == "5"
     assert first["state"]["attempted_steps"] == 1
+
+
+def test_skipped_update_does_not_consume_successful_token_budget(tmp_path, monkeypatch):
+    cfg = synthetic_pretraining_config(tmp_path)
+    outcomes = iter([False, True, True])
+
+    def step_with_one_skip(scaler, optimizer, tracker):
+        scale = float(scaler.get_scale())
+        update_applied = next(outcomes)
+        return ScalerStepResult(update_applied, scale, scale)
+
+    monkeypatch.setattr(pretrain_module, "get_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(pretrain_module, "step_optimizer_with_scaler", step_with_one_skip)
+
+    result = run_pretraining(cfg)
+
+    assert result["state"]["attempted_steps"] == 3
+    assert result["state"]["global_step"] == 2
+    assert result["state"]["tokens_processed"] == 32
+    assert result["state"]["optimizer_steps_skipped_total"] == 1
 
 
 def test_non_finite_resumed_micro_batch_aborts_before_backward_or_side_effects(tmp_path, monkeypatch):
@@ -412,7 +489,7 @@ def test_non_finite_resumed_micro_batch_aborts_before_backward_or_side_effects(t
     assert cleanup_calls == {"optimizer": 1, "tracker": 1}
 
 
-def test_validation_metric_uses_attempted_step_after_skipped_update(tmp_path, monkeypatch):
+def test_validation_metric_uses_attempted_step_after_skip_then_success(tmp_path, monkeypatch):
     cfg = synthetic_pretraining_config(tmp_path)
     cfg["training"].update(
         {
@@ -422,14 +499,15 @@ def test_validation_metric_uses_attempted_step_after_skipped_update(tmp_path, mo
         }
     )
 
-    def force_skipped_step(scaler, optimizer, tracker):
-        scale_before = float(scaler.get_scale())
-        scaler.update()
-        return ScalerStepResult(False, scale_before, float(scaler.get_scale()))
+    outcomes = iter([False, True])
+
+    def skip_once_then_update(scaler, optimizer, tracker):
+        scale = float(scaler.get_scale())
+        return ScalerStepResult(next(outcomes), scale, scale)
 
     monkeypatch.setattr(pretrain_module, "get_device", lambda: torch.device("cpu"))
     monkeypatch.setattr(pretrain_module, "evaluate_loss", lambda **kwargs: 1.0)
-    monkeypatch.setattr(pretrain_module, "step_optimizer_with_scaler", force_skipped_step)
+    monkeypatch.setattr(pretrain_module, "step_optimizer_with_scaler", skip_once_then_update)
 
     run_pretraining(cfg, max_steps_override=1)
 
@@ -437,8 +515,8 @@ def test_validation_metric_uses_attempted_step_after_skipped_update(tmp_path, mo
         rows = list(csv.DictReader(handle))
     validation_rows = [row for row in rows if row["event"] == "validation"]
     assert len(validation_rows) == 1
-    assert validation_rows[0]["attempted_step"] == "1"
-    assert validation_rows[0]["global_step"] == "0"
+    assert validation_rows[0]["attempted_step"] == "2"
+    assert validation_rows[0]["global_step"] == "1"
     assert validation_rows[0]["tokens_processed"] == "16"
 
 

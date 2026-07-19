@@ -131,8 +131,12 @@ def run_pretraining(
     cfg: dict[str, Any],
     resume_from: str | Path | None = None,
     max_steps_override: int | None = None,
+    verify_only: bool = False,
 ) -> dict[str, Any]:
     """Run or resume base pretraining from the configured token shards."""
+
+    if verify_only and resume_from is None:
+        raise ValueError("verify_only requires resume_from")
 
     set_seed(cfg["run"]["seed"])
     if hasattr(torch, "set_float32_matmul_precision"):
@@ -202,12 +206,22 @@ def run_pretraining(
     state.setdefault("optimizer_steps_skipped_total", 0)
     state.setdefault("consecutive_optimizer_steps_skipped", 0)
 
-    train_model = torch.compile(model) if cfg["training"].get("compile") and hasattr(torch, "compile") else model
     schedule = build_training_schedule(
         cfg,
         global_step=state["global_step"],
         max_steps_override=max_steps_override,
     )
+    if verify_only:
+        return {
+            "resume_verified": True,
+            "state": state,
+            "run_dir": str(run_dir),
+            "extra": extra,
+            "schedule": asdict(schedule),
+        }
+
+    train_model = torch.compile(model) if cfg["training"].get("compile") and hasattr(torch, "compile") else model
+
     tracker = create_tracker(cfg, config_snapshot={**cfg, "run_metadata": extra})
     optimizer_step_tracker = None
     try:
@@ -281,9 +295,9 @@ def run_pretraining(
             step_result = step_optimizer_with_scaler(scaler, optimizer, optimizer_step_tracker)
 
             state["attempted_steps"] += 1
-            state["tokens_processed"] += schedule.tokens_per_step
             if step_result.update_applied:
                 state["global_step"] += 1
+                state["tokens_processed"] += schedule.tokens_per_step
                 state["consecutive_optimizer_steps_skipped"] = 0
             else:
                 state["optimizer_steps_skipped_total"] += 1
@@ -332,7 +346,11 @@ def run_pretraining(
                     f"lr={lr} grad_scale={step_result.scale_after}"
                 )
 
-            if _is_due(state["tokens_processed"], cfg["training"]["eval_interval_tokens"], schedule.tokens_per_step):
+            if step_result.update_applied and _is_due(
+                state["tokens_processed"],
+                cfg["training"]["eval_interval_tokens"],
+                schedule.tokens_per_step,
+            ):
                 val_loss = evaluate_loss(
                     model=train_model,
                     dataset=val_dataset,
@@ -367,7 +385,11 @@ def run_pretraining(
                             extra,
                         )
 
-            if _is_due(state["tokens_processed"], cfg["training"]["sample_interval_tokens"], schedule.tokens_per_step):
+            if step_result.update_applied and _is_due(
+                state["tokens_processed"],
+                cfg["training"]["sample_interval_tokens"],
+                schedule.tokens_per_step,
+            ):
                 samples = generate_samples(
                     model=train_model,
                     tokenizer=tokenizer,
@@ -382,7 +404,7 @@ def run_pretraining(
                 _write_samples(sample_dir / f"samples_{state['tokens_processed']:012d}.json", samples, dict(state))
                 tracker.log({"sample_text": samples[0]["text"] if samples else ""}, step=state["global_step"])
 
-            if _is_due(
+            if step_result.update_applied and _is_due(
                 state["tokens_processed"],
                 cfg["training"]["checkpoint_interval_tokens"],
                 schedule.tokens_per_step,

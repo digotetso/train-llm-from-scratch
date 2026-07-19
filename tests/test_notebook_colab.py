@@ -455,6 +455,116 @@ def test_colab_smoke_branch_asserts_exact_post_command_steps():
     assert asserted_steps == [20, 20, 25, 306]
 
 
+def test_colab_full_stage_asserts_configured_schedule_completion(tmp_path: Path):
+    source = code_source_after_heading("## 10. Run the selected training stage")
+    run_dir = tmp_path / "run"
+    latest = run_dir / "checkpoints" / "latest.pt"
+    latest.parent.mkdir(parents=True)
+    latest.write_bytes(b"checkpoint")
+    current_step = {"value": 306}
+    observed_checkpoint_steps: list[int] = []
+    cfg = {
+        "run": {"output_dir": str(run_dir)},
+        "model": {"context_length": 256},
+        "training": {
+            "micro_batch_size": 16,
+            "gradient_accumulation_steps": 8,
+            "max_tokens": 200_000_000,
+            "warmup_ratio": 0.02,
+        },
+    }
+
+    def load_checkpoint_step(*args, **kwargs):
+        observed_checkpoint_steps.append(current_step["value"])
+        return {"state": {"global_step": current_step["value"]}}
+
+    def run_command_spy(command):
+        assert "scripts/pretrain.py" in command
+        current_step["value"] = 6104
+        return SimpleNamespace(stdout="")
+
+    exec(
+        compile(source, NOTEBOOK_PATH.as_posix(), "exec"),
+        {
+            "RUN_STAGE": "full",
+            "cfg": cfg,
+            "colab_config_path": Path("colab.yaml"),
+            "SMOKE_MAX_STEPS": 20,
+            "RESUME_CHECK_STEPS": 5,
+            "PILOT_STOP_STEP": 306,
+            "run_command": run_command_spy,
+            "torch": SimpleNamespace(load=load_checkpoint_step),
+            "Path": Path,
+        },
+    )
+
+    assert observed_checkpoint_steps == [306, 6104]
+
+
+def test_colab_evaluate_requires_latest_and_best_checkpoints(tmp_path: Path):
+    source = code_source_after_heading("## 11. Evaluate every available review checkpoint")
+    run_dir = tmp_path / "run"
+    latest = run_dir / "checkpoints" / "latest.pt"
+    latest.parent.mkdir(parents=True)
+    latest.write_bytes(b"checkpoint")
+
+    with pytest.raises(AssertionError, match="best.pt"):
+        exec(
+            compile(source, NOTEBOOK_PATH.as_posix(), "exec"),
+            {
+                "RUN_STAGE": "evaluate",
+                "cfg": {"run": {"output_dir": str(run_dir)}},
+                "colab_config_path": Path("colab.yaml"),
+                "run_command": lambda command: SimpleNamespace(stdout=""),
+                "Path": Path,
+            },
+        )
+
+
+def test_colab_evaluate_verifies_resume_before_summary(tmp_path: Path):
+    source = code_source_after_heading("## 11. Evaluate every available review checkpoint")
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+    latest = checkpoint_dir / "latest.pt"
+    best = checkpoint_dir / "best.pt"
+    latest.write_bytes(b"latest")
+    best.write_bytes(b"best")
+    commands: list[list[str]] = []
+
+    def run_command_spy(command):
+        commands.append(command)
+        if "--verify-only" in command:
+            return SimpleNamespace(
+                stdout=json.dumps(
+                    {"resume_verified": True, "state": {"global_step": 306}}
+                )
+            )
+        return SimpleNamespace(stdout="")
+
+    exec(
+        compile(source, NOTEBOOK_PATH.as_posix(), "exec"),
+        {
+            "RUN_STAGE": "evaluate",
+            "cfg": {"run": {"output_dir": str(run_dir)}},
+            "colab_config_path": Path("colab.yaml"),
+            "run_command": run_command_spy,
+            "Path": Path,
+        },
+    )
+
+    assert [command[1] for command in commands] == [
+        "scripts/evaluate.py",
+        "scripts/evaluate.py",
+        "scripts/pretrain.py",
+        "scripts/summarize_run.py",
+    ]
+    assert commands[2][-3:] == ["--resume-from", str(latest), "--verify-only"]
+    resume_report = json.loads((run_dir / "resume_verification.json").read_text())
+    assert resume_report["resume_verified"] is True
+    assert resume_report["state"]["global_step"] == 306
+
+
 def test_colab_separates_fast_local_data_from_persistent_drive_artifacts():
     source = code_source_after_heading("## 7. Build the fixed-path Colab config")
 

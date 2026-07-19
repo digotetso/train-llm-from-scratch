@@ -22,10 +22,20 @@ def main() -> None:
         default=None,
         help="Maximum additional successful optimizer updates in this invocation; the full LR schedule is unchanged.",
     )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Load and validate complete resume state without taking an optimizer update.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    result = run_pretraining(cfg, resume_from=args.resume_from, max_steps_override=args.max_steps)
+    result = run_pretraining(
+        cfg,
+        resume_from=args.resume_from,
+        max_steps_override=args.max_steps,
+        verify_only=args.verify_only,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
