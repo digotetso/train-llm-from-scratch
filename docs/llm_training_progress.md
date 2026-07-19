@@ -11,10 +11,11 @@ Primary repository: `train-llm-from-scratch`
 - Theory completed through Lesson 100, including positional encoding and RoPE rotation lessons before the build-first transition.
 - Numerical-stability theory completed: gradient clipping, underflow and overflow, `Inf`/`NaN`, BF16, skipped updates, and stability metrics.
 - Current phase: repository hardening and the first real 8M TinyStories T4 run.
-- Repository-readiness Tasks 1-10 and final review fixes are implemented through commit `e033a19`: byte-alphabet tokenizer coverage, schedule preservation, training observability and stability stops, artifact preflight, evaluation and summary artifacts, executable stage-gated Colab operations, fail-closed restorable-RNG and final-step gates, progress documentation, and the course foundation through Video 1.
-- Gate 0 verification on 2026-07-19 observed 158 passing readiness tests, 183 passing tests in the effective workspace, and 178 passing tests from a clean archive of committed `e033a19`. The difference is five uncommitted user-side tests; it is recorded rather than folded into the branch claim.
+- Repository-readiness Tasks 1-10 and final review fixes are implemented: byte-alphabet tokenizer coverage, schedule preservation, training observability and stability stops, artifact preflight, evaluation and summary artifacts, executable stage-gated Colab operations, fail-closed restorable-RNG and final-step gates, progress documentation, and the course foundation through Video 1.
+- Local verification on 2026-07-19 observes 184 passing tests after adding a regression test for synchronized CUDA benchmark timing.
 - The verified Mini report contains 8,391,936 trainable parameters. Its unchanged schedule contains 32,768 tokens per optimizer update, 6,104 total steps, 122 warmup steps, and a 20-step smoke invocation stop.
-- Real Colab data preparation: not started. No TinyStories or BabyLM prepared artifacts have been inspected.
+- Real Colab data preparation: completed for TinyStories. Preflight observed 1,799,248 training documents, 15,389 validation documents, zero split overlap, an 8,192-token vocabulary, 393,399,082 training tokens, and 3,140,122 validation tokens.
+- Real T4 preflight: passed all ten checks on a Tesla T4 with 14.56 GiB total GPU memory and 54.66 GiB free local disk. The first benchmark's loss, gradient norm, and memory were finite, but its throughput is rejected because the old timer did not synchronize asynchronous CUDA work. A corrected benchmark rerun is required.
 - Real T4 training: not started. Smoke, pilot, full training, runtime evaluation, and runtime summaries remain unobserved.
 - Course production is build-first and one video at a time. Video 1 is complete; later videos remain outline entries until their predecessor is taught, checked, and approved.
 
@@ -22,9 +23,10 @@ No percentage is used. Local tests establish local behavior only; they do not es
 
 ## Evidence Boundary
 
-- **Locally verified:** all CPU-testable repository-readiness criteria and gate behavior, exact Mini parameter and schedule math, notebook JSON validity, the 64-video outline and template, and the complete Video 1 package.
-- **Requires prepared TinyStories artifacts:** non-empty normalized splits, reconciled manifest statistics, zero train/validation overlap, an 8,192-entry production tokenizer, Unicode round trips with that tokenizer, and valid production shards.
-- **Requires Colab T4 evidence:** actual CUDA device identity, disk and Drive capacity, preflight results, finite configured-batch benchmark math, throughput, and peak-memory headroom.
+- **Locally verified:** all CPU-testable repository-readiness criteria and gate behavior, exact Mini parameter and schedule math, synchronized benchmark timing behavior, notebook JSON validity, the 64-video outline and template, and the complete Video 1 package.
+- **Verified from prepared TinyStories artifacts:** non-empty normalized splits, reconciled manifest statistics, zero train/validation overlap, an 8,192-entry production tokenizer, and valid production shards with EOS counts matching document counts.
+- **Verified from Colab T4 preflight:** CUDA device identity, local disk capacity, artifact integrity, parameter count, and schedule math.
+- **Requires a corrected Colab T4 benchmark:** trustworthy synchronized throughput and reconfirmed finite loss, gradient norm, and peak-memory headroom.
 - **Requires smoke, pilot, and full-run evidence:** checkpoint resume on the real run, finite learning curves, improved validation loss, durable Drive artifacts, pilot approval, completion through step 6,104, final `latest.pt`/`best.pt` evaluation, and persisted `resume_verification.json`.
 
 ## Canonical References

@@ -1,9 +1,55 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from matgpt.config import clone_config, load_config
 from scripts import benchmark_t4
+
+
+def test_timed_steps_warm_up_and_synchronize_cuda(monkeypatch):
+    events: list[str] = []
+    clock_values = iter([10.0, 12.5])
+    step_number = 0
+
+    def training_step() -> int:
+        nonlocal step_number
+        events.append(f"step-{step_number}")
+        result = step_number
+        step_number += 1
+        return result
+
+    monkeypatch.setattr(
+        benchmark_t4.torch.cuda,
+        "synchronize",
+        lambda device: events.append("sync"),
+    )
+    monkeypatch.setattr(
+        benchmark_t4.time,
+        "perf_counter",
+        lambda: events.append("clock") or next(clock_values),
+    )
+
+    result, elapsed = benchmark_t4.run_timed_steps(
+        training_step,
+        device=SimpleNamespace(type="cuda"),
+        steps=2,
+        warmup_steps=1,
+        before_timing=lambda: events.append("reset"),
+    )
+
+    assert result == 2
+    assert elapsed == 2.5
+    assert events == [
+        "step-0",
+        "sync",
+        "reset",
+        "clock",
+        "step-1",
+        "step-2",
+        "sync",
+        "clock",
+    ]
 
 
 def valid_cpu_measurements() -> dict[str, float]:

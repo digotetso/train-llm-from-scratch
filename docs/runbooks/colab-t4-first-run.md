@@ -5,10 +5,19 @@ beginner operating the stage-gated base-pretraining workflow on Google Colab.
 
 ## Evidence Status
 
-No real TinyStories or T4 run was performed while writing this runbook. GPU
-availability, wall time, cost, throughput, loss, gradient norm, and memory
-figures are **expected until observed** in the persisted artifacts from your
-own run. Do not present expected T4 values as measured results.
+A real TinyStories preparation and T4 preflight completed on 2026-07-19. The
+persisted preflight report passed all ten checks, including prepared-artifact
+integrity, an observed Tesla T4, 8,391,936 parameters, 32,768 tokens per
+optimizer update, and 6,104 scheduled steps. No smoke, pilot, or full training
+run has started.
+
+The first benchmark report recorded finite loss, gradient norm, and memory, but
+its throughput is not accepted as evidence. That benchmark stopped its timer
+before synchronizing asynchronous CUDA work and included cold-start work in the
+first batch size. The corrected benchmark performs one unmeasured warmup step,
+synchronizes CUDA before timing, resets peak-memory measurement, and
+synchronizes again before stopping the timer. Rerun `prepare` with the corrected
+script and review the replacement `benchmark.json` before selecting `smoke`.
 
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
@@ -137,7 +146,9 @@ python scripts/train_tokenizer.py --config "$CONFIG"
 python scripts/tokenize_and_shard.py --config "$CONFIG"
 ```
 
-During `prepare`, and again before every training stage:
+During `prepare`, and again before every training stage. Each batch-size
+benchmark performs one unmeasured warmup step followed by the configured five
+synchronized measured steps:
 
 ```bash
 python scripts/preflight_t4.py \

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import math
 import sys
 from pathlib import Path
 import time
+from typing import TypeVar
 
 import torch
 
@@ -18,6 +20,42 @@ from matgpt.training.amp import autocast_context, make_grad_scaler
 from matgpt.training.optim import build_optimizer
 from matgpt.training.pretrain import get_device
 from matgpt.utils.seed import set_seed
+
+
+T = TypeVar("T")
+
+
+def _synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def run_timed_steps(
+    step_fn: Callable[[], T],
+    *,
+    device: torch.device,
+    steps: int,
+    warmup_steps: int = 1,
+    before_timing: Callable[[], None] | None = None,
+) -> tuple[T, float]:
+    if steps < 1:
+        raise ValueError("Benchmark steps must be at least 1")
+    if warmup_steps < 0:
+        raise ValueError("Benchmark warmup_steps cannot be negative")
+
+    for _ in range(warmup_steps):
+        step_fn()
+
+    _synchronize_device(device)
+    if before_timing is not None:
+        before_timing()
+
+    start = time.perf_counter()
+    for _ in range(steps):
+        result = step_fn()
+    _synchronize_device(device)
+    elapsed = max(time.perf_counter() - start, 1e-6)
+    return result, elapsed
 
 
 def parse_batch_sizes(raw: str) -> list[int]:
@@ -92,11 +130,9 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
 
     if device.type == "cuda":
         torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats(device)
 
-    start = time.time()
     try:
-        for _ in range(steps):
+        def training_step() -> tuple[torch.Tensor, torch.Tensor]:
             x = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
             y = torch.randint(0, vocab_size, (batch_size, context_length), device=device)
             optimizer.zero_grad(set_to_none=True)
@@ -109,7 +145,18 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
             )
             scaler.step(optimizer)
             scaler.update()
-        elapsed = max(time.time() - start, 1e-6)
+            return loss, grad_norm
+
+        before_timing = None
+        if device.type == "cuda":
+            before_timing = lambda: torch.cuda.reset_peak_memory_stats(device)
+        (loss, grad_norm), elapsed = run_timed_steps(
+            training_step,
+            device=device,
+            steps=steps,
+            warmup_steps=1,
+            before_timing=before_timing,
+        )
         loss_value = float(loss.detach().cpu())
         grad_norm_value = float(grad_norm.detach().cpu())
         peak_memory_mb = (
