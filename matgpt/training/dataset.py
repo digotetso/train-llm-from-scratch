@@ -58,6 +58,12 @@ class PackedTokenDataset:
             y[row] = window[1:]
         return torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
 
+    def get_rng_state(self) -> dict[str, Any]:
+        return self.rng.bit_generator.state
+
+    def set_rng_state(self, state: dict[str, Any]) -> None:
+        self.rng.bit_generator.state = state
+
 
 def metadata_path_for_split(shard_dir: str | Path, split: str) -> Path:
     return Path(shard_dir) / f"{split}_metadata.json"

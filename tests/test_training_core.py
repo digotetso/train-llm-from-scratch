@@ -7,8 +7,9 @@ import torch
 
 from matgpt.model.gpt import GPT, GPTConfig
 from matgpt.training.amp import OptimizerStepTracker, require_finite_loss, step_optimizer_with_scaler
-from matgpt.training.checkpoint import load_checkpoint, save_checkpoint
+from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint, save_checkpoint
 from matgpt.training.dataset import PackedTokenDataset
+from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.optim import build_optimizer, cosine_warmup_lr
 
 
@@ -137,3 +138,94 @@ def test_checkpoint_save_load_restores_model_equivalence(tmp_path: Path):
     assert payload["state"]["tokens_processed"] == 1024
     assert payload["extra"]["dataset_manifest_hash"] == "abc"
     assert torch.allclose(logits_before, logits_after)
+
+
+def test_packed_token_dataset_rng_state_round_trips(tmp_path: Path):
+    dataset = PackedTokenDataset.from_metadata(write_shard_metadata(tmp_path), context_length=8, seed=0)
+    _ = dataset.sample_batch(batch_size=2, device=torch.device("cpu"))
+    state = dataset.get_rng_state()
+    expected = dataset.sample_batch(batch_size=2, device=torch.device("cpu"))
+
+    restored = PackedTokenDataset.from_metadata(write_shard_metadata(tmp_path), context_length=8, seed=0)
+    restored.set_rng_state(state)
+    actual = restored.sample_batch(batch_size=2, device=torch.device("cpu"))
+
+    assert torch.equal(actual[0], expected[0])
+    assert torch.equal(actual[1], expected[1])
+
+
+def test_validate_checkpoint_compatibility_rejects_artifact_mismatch():
+    payload = {
+        "extra": {
+            "config_sha256": "old-config",
+            "tokenizer_sha256": "same-tokenizer",
+            "dataset_manifest_hash": "same-dataset",
+        }
+    }
+
+    try:
+        validate_checkpoint_compatibility(
+            payload,
+            {
+                "config_sha256": "new-config",
+                "tokenizer_sha256": "same-tokenizer",
+                "dataset_manifest_hash": "same-dataset",
+            },
+        )
+    except ValueError as exc:
+        assert "config_sha256" in str(exc)
+    else:
+        raise AssertionError("expected artifact mismatch to be rejected")
+
+
+def test_validate_checkpoint_compatibility_rejects_missing_fingerprints():
+    expected = {
+        "config_sha256": "config",
+        "tokenizer_sha256": "tokenizer",
+        "dataset_manifest_hash": "dataset",
+    }
+
+    for missing_key in expected:
+        checkpoint_extra = dict(expected)
+        checkpoint_extra.pop(missing_key)
+        with pytest.raises(ValueError, match=missing_key):
+            validate_checkpoint_compatibility({"extra": checkpoint_extra}, expected)
+
+
+def test_checkpoint_can_be_validated_before_state_is_applied(tmp_path: Path):
+    torch.manual_seed(7)
+    source = GPT(tiny_config())
+    source_optimizer = build_optimizer(source, "adamw", 1e-3, 0.1, (0.9, 0.95))
+    checkpoint = tmp_path / "latest.pt"
+    save_checkpoint(
+        checkpoint,
+        source,
+        source_optimizer,
+        None,
+        {"global_step": 3, "tokens_processed": 1024},
+        {"run": {"name": "unit"}},
+        {
+            "config_sha256": "expected-config",
+            "tokenizer_sha256": "expected-tokenizer",
+            "dataset_manifest_hash": "expected-dataset",
+        },
+    )
+    restored = GPT(tiny_config())
+    before = {name: value.detach().clone() for name, value in restored.state_dict().items()}
+
+    payload = load_checkpoint(checkpoint)
+    assert all(torch.equal(before[name], value) for name, value in restored.state_dict().items())
+    validate_checkpoint_compatibility(
+        payload,
+        {
+            "config_sha256": "expected-config",
+            "tokenizer_sha256": "expected-tokenizer",
+            "dataset_manifest_hash": "expected-dataset",
+        },
+    )
+    apply_checkpoint_payload(payload, model=restored)
+
+    assert all(
+        torch.equal(source.state_dict()[name], restored.state_dict()[name])
+        for name in source.state_dict()
+    )
