@@ -24,6 +24,57 @@ def parse_batch_sizes(raw: str) -> list[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 
+def validate_benchmark_measurements(
+    measurements: dict[str, float], *, device_type: str
+) -> None:
+    required_fields = (
+        "loss",
+        "grad_norm",
+        "tokens_per_second",
+        "peak_memory_mb",
+        "total_memory_mb",
+        "memory_fraction",
+    )
+    for field in required_fields:
+        value = float(measurements[field])
+        if not math.isfinite(value):
+            raise FloatingPointError(f"Benchmark {field} is not finite: {value}")
+
+    if measurements["tokens_per_second"] <= 0:
+        raise ValueError("Benchmark tokens_per_second must be positive")
+
+    if device_type == "cuda":
+        if measurements["total_memory_mb"] <= 0:
+            raise ValueError("CUDA total_memory_mb must be positive")
+        if measurements["peak_memory_mb"] < 0:
+            raise ValueError("CUDA peak_memory_mb must be nonnegative")
+        if measurements["memory_fraction"] < 0:
+            raise ValueError("CUDA memory_fraction must be nonnegative")
+        expected_fraction = (
+            measurements["peak_memory_mb"] / measurements["total_memory_mb"]
+        )
+        if not math.isclose(
+            measurements["memory_fraction"],
+            expected_fraction,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "CUDA memory_fraction does not match "
+                "peak_memory_mb / total_memory_mb"
+            )
+    elif device_type == "cpu":
+        memory_values = (
+            measurements["peak_memory_mb"],
+            measurements["total_memory_mb"],
+            measurements["memory_fraction"],
+        )
+        if memory_values != (0.0, 0.0, 0.0):
+            raise ValueError("CPU benchmark memory fields must be zero")
+    else:
+        raise ValueError(f"Unsupported benchmark device type: {device_type}")
+
+
 def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
     device = get_device()
     model = GPT(GPTConfig.from_dict(cfg["model"])).to(device)
@@ -61,10 +112,6 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
         elapsed = max(time.time() - start, 1e-6)
         loss_value = float(loss.detach().cpu())
         grad_norm_value = float(grad_norm.detach().cpu())
-        if not math.isfinite(loss_value) or not math.isfinite(grad_norm_value):
-            raise FloatingPointError(
-                f"Non-finite benchmark result: loss={loss_value} grad_norm={grad_norm_value}"
-            )
         peak_memory_mb = (
             torch.cuda.max_memory_allocated(device) / (1024 * 1024)
             if device.type == "cuda"
@@ -75,9 +122,7 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
             if device.type == "cuda"
             else 0.0
         )
-        return {
-            "batch_size": batch_size,
-            "status": "ok",
+        measurements = {
             "loss": loss_value,
             "grad_norm": grad_norm_value,
             "tokens_per_second": tokens_per_step * steps / elapsed,
@@ -85,7 +130,13 @@ def benchmark_batch_size(cfg: dict, batch_size: int, steps: int) -> dict:
             "total_memory_mb": total_memory_mb,
             "memory_fraction": peak_memory_mb / total_memory_mb if total_memory_mb else 0.0,
         }
-    except (RuntimeError, FloatingPointError) as exc:
+        validate_benchmark_measurements(measurements, device_type=device.type)
+        return {
+            "batch_size": batch_size,
+            "status": "ok",
+            **measurements,
+        }
+    except (RuntimeError, FloatingPointError, ValueError) as exc:
         if device.type == "cuda":
             torch.cuda.empty_cache()
         return {"batch_size": batch_size, "status": "failed", "error": str(exc)[:500]}

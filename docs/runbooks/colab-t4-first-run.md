@@ -50,10 +50,24 @@ shards/
 config/mini_8m.yaml
 ```
 
-The notebook copies `normalized/`, `tokenizer/`, and `shards/` to the matching
-Drive root after successful preparation. At the start of a later session, it
-restores any missing local directory from Drive. The fixed `/content` path is
-important because shard metadata records absolute local paths.
+The notebook validates `normalized/`, `tokenizer/`, and `shards/` before it
+skips or publishes them. Tokenizer metadata must match `tokenizer.json`; shard
+metadata, hashes, sizes, token totals, and every referenced binary payload must
+be complete. The fixed `/content` path is important because shard metadata
+records absolute local paths.
+
+Each Drive artifact directory is copied to a temporary sibling such as
+`.shards.syncing-<id>`, validated there, and then replaces the prior directory.
+Publication never merges files into an existing artifact directory. Interrupted
+temporary copies are not treated as snapshots. Restore likewise validates a
+complete Drive snapshot in a `.restoring-<id>` local directory before replacing
+an incomplete local copy.
+
+`FORCE_REBUILD_PREPARED` defaults to `False`. Set it to `True` only for a
+`prepare` stage when neither the local artifact nor its Drive snapshot is
+complete. It may remove only `normalized/`, `tokenizer/`, or `shards/` beneath
+the ephemeral `LOCAL_ROOT`; it does not delete the Drive copy. A successful
+rebuild publishes a new complete Drive snapshot.
 
 Durable run evidence is written directly to Drive:
 
@@ -78,8 +92,10 @@ active training. Do not move the local root between sessions.
 ## Exact Stage Order
 
 1. Select `RUN_STAGE = "prepare"` and run the notebook top to bottom.
-2. Start a fresh run with `RUN_STAGE = "smoke"`. This performs 20 successful
-   updates, then resumes `latest.pt` for 5 additional successful updates.
+2. Select `RUN_STAGE = "smoke"`. With no `latest.pt`, this performs 20
+   successful updates and then a 5-update resume check. At exact step 20 it
+   performs only the resume check; at exact step 25 it runs no training command.
+   Every other smoke checkpoint step is rejected.
 3. Select `RUN_STAGE = "pilot"`. It resumes and stops at global step 306,
    approximately 10M configured Mini tokens.
 4. Select `RUN_STAGE = "evaluate"`. Review all gate evidence with the user and
@@ -97,7 +113,8 @@ single run lineage.
 The notebook writes a fixed local Colab config and uses it for every command.
 `$CONFIG` below represents that generated YAML path.
 
-Preparation, only when each expected output set is absent:
+Preparation, only when the corresponding integrity check fails and the local
+artifact has been safely cleared or restored:
 
 ```bash
 python scripts/prepare_dataset.py --config "$CONFIG"
@@ -164,10 +181,10 @@ python scripts/summarize_run.py --run-dir "$RUN_DIR"
 | --- | --- | --- |
 | 0. Scope | The operator has selected the intended model and stage, accepts unobserved time/cost, and understands that `full` requires manual approval. | Settings cell and operator confirmation. |
 | 1. Storage and device | `/content` and Drive usage print successfully; local free space is at least 20 GiB. Training stages observe CUDA and a GPU name containing `T4`. | Storage/GPU cell output. |
-| 2. Preparation | Manifest, both normalized splits, tokenizer files, and both shard metadata files exist locally; synchronization completes for all three artifact directories. | Preparation output and Drive directories. |
+| 2. Preparation | Manifest and split counts validate; tokenizer JSON matches its metadata hash; combined/split shard metadata validate; every referenced shard payload has the expected size and hash. Each Drive artifact is published through a validated temporary replacement snapshot. | Preparation output and Drive directories. |
 | 3. Preflight | Process exits zero, top-level status is `pass`, all ten checks pass, and the JSON is persisted. For Mini, confirm preflight training math reports the configured 32,768 tokens/update and 6,104 steps. | `run/preflight.json`. |
-| 4. Benchmark | The configured micro-batch result has status `ok`; loss and pre-clip gradient norm are finite; throughput is finite and positive; memory fraction is finite and below 0.90. | `run/benchmark.json`. |
-| 5. Smoke | No prior `latest.pt` exists; the first invocation finishes at exactly global step 20 with no non-finite failure. | `latest.pt`, command output, `metrics.csv`. |
+| 4. Benchmark | Loss, pre-clip gradient norm, throughput, peak memory, total memory, and memory fraction are finite; throughput is positive. On CUDA, total memory is positive, peak memory and fraction are nonnegative, and fraction equals peak/total before the below-0.90 gate. CPU-only tests retain exact zero-memory fields. | `run/benchmark.json`. |
+| 5. Smoke | No checkpoint runs the 20-update smoke; exact step 20 runs only the 5-update resume check; exact step 25 is already complete. Post-command checkpoints are exactly 20 and 25, and every other lineage is rejected. | `latest.pt`, command output, `metrics.csv`. |
 | 6. Resume check | Loading `latest.pt` and running 5 additional successful updates finishes at exactly global step 25. The full LR schedule remains unchanged. | Updated `latest.pt`, `metrics.csv`. |
 | 7. Pilot stop | Resume begins from durable `latest.pt` and finishes at exactly global step 306. This is a stop point, not promotion approval. | Updated `latest.pt`, `metrics.csv`. |
 | 8. Pilot review | All reviewed rows are finite; late training-loss median is below early median; first-to-last finite validation loss improves; late/early throughput ratio is at least 0.80; benchmark memory remains below 0.90; skipped-update counters are reviewed; samples/evaluations are usable. Investigate a warning if every logged peak-memory value strictly increases. | Notebook review output, `benchmark.json`, `metrics.csv`, `run_summary.md`, samples, evaluations. |
@@ -188,8 +205,11 @@ Stop without promoting when any of these occurs:
   JSON;
 - the configured benchmark batch fails, loss or gradient norm is non-finite,
   throughput is not positive, or memory fraction is at least 0.90;
-- smoke does not begin fresh, step 20 or step 25 is not observed, or checkpoint
-  resume reports an artifact/config mismatch;
+- a prepared-artifact hash, metadata record, payload size, or payload file is
+  incomplete, or a Drive directory was not published as a validated snapshot;
+- a smoke checkpoint is anything other than absent, exact step 20, or exact
+  step 25; a post-command step is not exact; or resume reports an
+  artifact/config mismatch;
 - pilot does not stop at step 306;
 - training or validation evidence is non-finite, late loss does not improve,
   validation loss does not improve, throughput ratio is below 0.80, or skipped
@@ -206,18 +226,26 @@ intervals, checkpoint intervals, or test expectations.
 
 1. Start a new Colab session, mount the same Drive, select the same `MODEL`, and
    keep the same project/config inputs.
-2. Select the stage that was interrupted and rerun top to bottom. Missing local
-   prepared directories restore from Drive before preflight.
-3. If `prepare` was interrupted, rerun `prepare`; completed output sets are
-   skipped and the successful set is synchronized again.
-4. If smoke completed through step 25, do not rerun `smoke`; select `pilot`.
-5. If smoke was interrupted before a valid `latest.pt` was written, preserve or
-   rename the partial Drive `run/` directory for diagnosis, then start smoke
-   with a new empty run directory. A partial metrics file is not a checkpoint.
-6. For pilot or full, the notebook loads durable `latest.pt`. Pilot recomputes
+2. Select the stage that was interrupted and rerun top to bottom. A missing or
+   incomplete local artifact restores only from a complete Drive snapshot.
+3. If neither local nor Drive preparation is complete, select `prepare`, set
+   `FORCE_REBUILD_PREPARED=True`, and rerun. The control clears only the named
+   directories under ephemeral `LOCAL_ROOT`; return it to `False` after a
+   complete snapshot is published.
+4. If `prepare` was interrupted during Drive publication, leave the
+   `.syncing-<id>` directory alone. Rerun `prepare`; only the last validated
+   destination directory is restorable, and successful publication replaces it.
+5. If smoke has no `latest.pt`, it runs the 20-update smoke and the 5-update
+   resume check. If a partial `metrics.csv` exists without a checkpoint,
+   preserve or rename the partial Drive `run/` directory first because metrics
+   alone are not resumable state.
+6. If smoke has `latest.pt` at step 20, rerunning `smoke` runs only the 5-update
+   resume check. At step 25 it runs no training and reports completion. Any
+   other checkpoint step is rejected for investigation.
+7. For pilot or full, the notebook loads durable `latest.pt`. Pilot recomputes
    `306 - current_step`; full resumes the unchanged schedule. Inspect metrics
    around the interruption for duplicate or non-monotonic rows before approval.
-7. Rerun `evaluate` after recovery so evaluation JSON and the summary describe
+8. Rerun `evaluate` after recovery so evaluation JSON and the summary describe
    the latest durable checkpoint.
 
 Never resume through a preflight checkpoint-compatibility failure. Preserve the

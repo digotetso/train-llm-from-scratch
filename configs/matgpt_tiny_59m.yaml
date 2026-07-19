@@ -1,0 +1,109 @@
+run:
+  name: matgpt_tiny_59m_babylm
+  seed: 42
+  output_dir: runs/matgpt_tiny_59m
+
+tracking:
+  wandb:
+    enabled: false
+    project: matgpt-t4-base
+    entity: null
+    tags:
+      - t4
+      - babylm
+      - 59m
+      - base-pretraining
+
+dataset:
+  hf_name: BabyLM-community/BabyLM-2026-Strict
+  hf_config: null
+  revision: f54c09fd23315a6f9c86f9dc80f725de7d8f9c64
+  text_field: null
+  train_split: train
+  validation_split: null
+  generated_validation_split: validation
+  validation_fraction: 0.01
+  license: MIT
+  stage: base_pretraining
+  language: en
+  raw_dir: matgpt/data/raw/babylm_2026_strict
+  normalized_dir: matgpt/data/normalized/babylm_2026_strict
+  max_train_documents: null
+  max_validation_documents: null
+  quality:
+    enabled: true
+    min_chars: 5
+    max_chars: null
+    exact_dedup: true
+    contamination_patterns_path: null
+
+tokenizer:
+  vocab_size: 16384
+  algorithm: byte_level_bpe
+  output_dir: matgpt/tokenizer/matgpt_tiny_59m
+  min_frequency: 2
+  special_tokens:
+    - "<|pad|>"
+    - "<|bos|>"
+    - "<|eos|>"
+    - "<|system|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+
+sharding:
+  output_dir: matgpt/data/shards/matgpt_tiny_59m
+  shard_size_tokens: 10000000
+  dtype: uint16
+  append_eos: true
+
+model:
+  vocab_size: 16384
+  context_length: 512
+  n_layers: 12
+  n_heads: 8
+  d_model: 512
+  d_ff: 2048
+  dropout: 0.0
+  norm_eps: 1.0e-5
+  rope_base: 10000.0
+  tie_embeddings: true
+  use_bias: false
+  activation: swiglu
+
+training:
+  precision: fp16
+  compile: false
+  micro_batch_size: 4
+  gradient_accumulation_steps: 16
+  max_tokens: 1000000000
+  optimizer: adamw
+  learning_rate: 3.0e-4
+  min_learning_rate: 3.0e-5
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_ratio: 0.03
+  eval_interval_tokens: 10000000
+  eval_batches: 64
+  checkpoint_interval_tokens: 25000000
+  sample_interval_tokens: 10000000
+  log_interval_steps: 10
+  save_best: true
+  keep_milestones: true
+  allow_artifact_mismatch: false
+  num_workers: 2
+  pin_memory: true
+
+evaluation:
+  max_new_tokens: 120
+  temperature: 0.8
+  top_k: 50
+  top_p: 0.95
+  prompts:
+    - "Python is a programming language that"
+    - "A token is"
+    - "An embedding is"
+    - "The purpose of pretraining is"
+    - "Once upon a time"
