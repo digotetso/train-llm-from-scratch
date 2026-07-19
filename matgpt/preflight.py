@@ -4,6 +4,7 @@ import json
 import platform
 import re
 import shutil
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -19,6 +20,20 @@ from matgpt.training.dataset import metadata_path_for_split
 from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.schedule import build_training_schedule
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
+
+
+CHECK_IDS = (
+    "config",
+    "source_revision",
+    "dataset_manifest",
+    "dataset_overlap",
+    "tokenizer",
+    "shards",
+    "output_storage",
+    "device",
+    "training_math",
+    "checkpoint",
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +67,40 @@ def _nonempty_jsonl_rows(path: Path):
                 yield line_number, json.loads(line)
 
 
+def _normalized_split_evidence(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required JSONL artifact is missing: {path}")
+    document_count = 0
+    total_chars = 0
+    document_hashes = []
+    for line_number, row in _nonempty_jsonl_rows(path):
+        if not isinstance(row, dict):
+            raise TypeError(f"{path}:{line_number} must contain a JSON object")
+        text = row.get("text")
+        if not isinstance(text, str):
+            raise TypeError(f"{path}:{line_number} text must be a string")
+        text_hash = sha256_text(text)
+        if row.get("text_sha256") != text_hash:
+            raise ValueError(
+                f"{path}:{line_number} text_sha256 does not match normalized text"
+            )
+        if "num_chars" in row and (
+            type(row["num_chars"]) is not int or row["num_chars"] != len(text)
+        ):
+            raise ValueError(
+                f"{path}:{line_number} num_chars does not match normalized text"
+            )
+        document_count += 1
+        total_chars += len(text)
+        document_hashes.append(text_hash)
+    return {
+        "document_count": document_count,
+        "raw_bytes": path.stat().st_size,
+        "total_chars": total_chars,
+        "documents_sha256": sha256_text("".join(document_hashes)),
+    }
+
+
 def _check_config(cfg: dict[str, Any]) -> dict[str, Any]:
     validate_config(cfg)
     return {"run_name": cfg["run"]["name"]}
@@ -79,12 +128,22 @@ def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
     if stored_hash != sha256_json(hash_payload):
         raise ValueError("Dataset manifest_sha256 does not match manifest content")
     counts = {}
+    split_evidence = {}
     for split in (dataset_cfg["train_split"], effective_validation_split(dataset_cfg)):
-        rows = sum(1 for _ in _nonempty_jsonl_rows(normalized / f"{split}.jsonl"))
-        expected = int(manifest["split_stats"][split]["document_count"])
-        if rows != expected or rows < 1:
-            raise ValueError(f"{split} document count mismatch: file={rows} manifest={expected}")
-        counts[split] = rows
+        observed = _normalized_split_evidence(normalized / f"{split}.jsonl")
+        expected = manifest["split_stats"][split]
+        for field_name, observed_value in observed.items():
+            if field_name not in expected:
+                raise ValueError(f"{split} manifest is missing {field_name} evidence")
+            if expected[field_name] != observed_value:
+                raise ValueError(
+                    f"{split} {field_name} mismatch: "
+                    f"file={observed_value} manifest={expected[field_name]}"
+                )
+        if observed["document_count"] < 1:
+            raise ValueError(f"{split} has no normalized documents")
+        counts[split] = observed["document_count"]
+        split_evidence[split] = observed
     quality = manifest.get("quality_filter")
     if quality:
         accepted = int(quality["accepted_documents"])
@@ -100,7 +159,11 @@ def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
                 "Quality counts do not reconcile: "
                 f"total={total} accepted={accepted} rejected={rejected} reasons={reason_total}"
             )
-    return {"manifest_sha256": stored_hash, "document_counts": counts}
+    return {
+        "manifest_sha256": stored_hash,
+        "document_counts": counts,
+        "split_evidence": split_evidence,
+    }
 
 
 def _check_dataset_overlap(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -152,24 +215,49 @@ def _check_tokenizer(cfg: dict[str, Any]) -> dict[str, Any]:
 def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
     dtype_map = {"uint16": np.dtype(np.uint16), "uint32": np.dtype(np.uint32)}
     tokenizer = load_tokenizer(cfg["tokenizer"]["output_dir"])
+    tokenizer_metadata = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])
     eos_id = tokenizer.token_to_id("<|eos|>")
     if eos_id is None:
         raise ValueError("Tokenizer has no <|eos|> ID")
     details = {}
     dataset_cfg = cfg["dataset"]
+    sharding_cfg = cfg["sharding"]
+    output_root = Path(sharding_cfg["output_dir"]).resolve()
+    manifest = _read_json(Path(dataset_cfg["normalized_dir"]) / "manifest.json")
     for split in (dataset_cfg["train_split"], effective_validation_split(dataset_cfg)):
-        metadata = _read_json(metadata_path_for_split(cfg["sharding"]["output_dir"], split))
+        metadata = _read_json(metadata_path_for_split(sharding_cfg["output_dir"], split))
         stored_hash = metadata.get("metadata_sha256")
         hash_payload = dict(metadata)
         hash_payload.pop("metadata_sha256", None)
         if stored_hash != sha256_json(hash_payload):
             raise ValueError(f"{split} metadata_sha256 does not match metadata content")
+        expected_provenance = {
+            "split": split,
+            "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
+            "dtype": sharding_cfg["dtype"],
+            "append_eos": sharding_cfg["append_eos"],
+            "shard_size_tokens": sharding_cfg["shard_size_tokens"],
+            "total_documents": manifest["split_stats"][split]["document_count"],
+        }
+        for field_name, expected_value in expected_provenance.items():
+            observed_value = metadata.get(field_name)
+            if type(observed_value) is not type(expected_value) or observed_value != expected_value:
+                raise ValueError(
+                    f"{split} shard metadata {field_name} mismatch: "
+                    f"observed={observed_value!r} expected={expected_value!r}"
+                )
         dtype = dtype_map[metadata["dtype"]]
         total_tokens = 0
         eos_count = 0
         maximum_id = -1
         for shard in metadata["shards"]:
-            path = Path(shard["path"])
+            path = Path(shard["path"]).resolve()
+            try:
+                path.relative_to(output_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{split} shard path is outside sharding.output_dir: {path}"
+                ) from exc
             expected_tokens = int(shard["num_tokens"])
             expected_bytes = expected_tokens * dtype.itemsize
             if not path.is_file() or path.stat().st_size != expected_bytes:
@@ -211,9 +299,14 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
 def _check_output_storage(cfg: dict[str, Any], min_free_disk_gb: float) -> dict[str, Any]:
     output_dir = Path(cfg["run"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
-    probe = output_dir / ".preflight-write-probe"
-    probe.write_text("ok\n", encoding="utf-8")
-    probe.unlink()
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix=".preflight-",
+        dir=output_dir,
+    ) as probe:
+        probe.write("ok\n")
+        probe.flush()
     free_gb = shutil.disk_usage(output_dir).free / (1024**3)
     if free_gb < min_free_disk_gb:
         raise ValueError(
@@ -273,34 +366,81 @@ def _check_checkpoint(cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _environment_from_device_check(device_check: PreflightCheck | None) -> dict[str, Any]:
+    environment = {
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+    }
+    if device_check is not None and device_check.status == "pass":
+        environment.update(
+            {
+                "cuda_available": device_check.details["cuda_available"],
+                "device_name": device_check.details["device_name"],
+            }
+        )
+    else:
+        environment.update(
+            {
+                "cuda_available": None,
+                "device_name": "unavailable",
+                "device_probe_error": (
+                    device_check.message
+                    if device_check is not None
+                    else "not probed because configuration could not be loaded"
+                ),
+            }
+        )
+    return environment
+
+
+def build_config_failure_report(exc: Exception) -> dict[str, Any]:
+    config_message = f"{type(exc).__name__}: {exc}"
+    checks = [PreflightCheck("config", "fail", config_message)]
+    checks.extend(
+        PreflightCheck(
+            name,
+            "fail",
+            "not run because configuration could not be loaded",
+        )
+        for name in CHECK_IDS[1:]
+    )
+    return {
+        "status": "fail",
+        "environment": _environment_from_device_check(None),
+        "checks": [asdict(check) for check in checks],
+    }
+
+
+def write_preflight_report(report: dict[str, Any], report_path: str | Path) -> Path:
+    path = Path(report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def build_preflight_report(
     cfg: dict[str, Any],
     require_t4: bool,
     min_free_disk_gb: float,
 ) -> dict[str, Any]:
-    check_functions = [
-        ("config", lambda: _check_config(cfg)),
-        ("source_revision", lambda: _check_source_revision(cfg)),
-        ("dataset_manifest", lambda: _check_dataset_manifest(cfg)),
-        ("dataset_overlap", lambda: _check_dataset_overlap(cfg)),
-        ("tokenizer", lambda: _check_tokenizer(cfg)),
-        ("shards", lambda: _check_shards(cfg)),
-        ("output_storage", lambda: _check_output_storage(cfg, min_free_disk_gb)),
-        ("device", lambda: _check_device(require_t4)),
-        ("training_math", lambda: _check_training_math(cfg)),
-        ("checkpoint", lambda: _check_checkpoint(cfg)),
-    ]
-    checks = [_run_check(name, function) for name, function in check_functions]
-    cuda_available = torch.cuda.is_available()
+    check_functions = dict(
+        config=lambda: _check_config(cfg),
+        source_revision=lambda: _check_source_revision(cfg),
+        dataset_manifest=lambda: _check_dataset_manifest(cfg),
+        dataset_overlap=lambda: _check_dataset_overlap(cfg),
+        tokenizer=lambda: _check_tokenizer(cfg),
+        shards=lambda: _check_shards(cfg),
+        output_storage=lambda: _check_output_storage(cfg, min_free_disk_gb),
+        device=lambda: _check_device(require_t4),
+        training_math=lambda: _check_training_math(cfg),
+        checkpoint=lambda: _check_checkpoint(cfg),
+    )
+    checks = [_run_check(name, check_functions[name]) for name in CHECK_IDS]
+    device_check = next(check for check in checks if check.name == "device")
     return {
         "status": "pass" if all(check.status == "pass" for check in checks) else "fail",
-        "environment": {
-            "python_version": platform.python_version(),
-            "torch_version": torch.__version__,
-            "cuda_version": torch.version.cuda,
-            "cuda_available": cuda_available,
-            "device_name": torch.cuda.get_device_name(0) if cuda_available else "cpu",
-        },
+        "environment": _environment_from_device_check(device_check),
         "checks": [asdict(check) for check in checks],
     }
 
@@ -312,9 +452,7 @@ def run_preflight(
     min_free_disk_gb: float = 0.0,
 ) -> dict[str, Any]:
     report = build_preflight_report(cfg, require_t4, min_free_disk_gb)
-    path = Path(report_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_preflight_report(report, report_path)
     if report["status"] != "pass":
         failures = [check for check in report["checks"] if check["status"] == "fail"]
         raise RuntimeError(

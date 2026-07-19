@@ -9,6 +9,8 @@ from matgpt.data.prepare import make_document_record, write_jsonl_records, write
 from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.preflight import build_preflight_report, run_preflight
 from matgpt.tokenizer.train import train_tokenizer_from_config
+from matgpt.utils.hashing import sha256_json
+from scripts.preflight_t4 import main as preflight_main
 
 
 SPECIAL_TOKENS = [
@@ -21,6 +23,29 @@ SPECIAL_TOKENS = [
     "<|end|>",
 ]
 REVISION = "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64"
+CHECK_IDS = [
+    "config",
+    "source_revision",
+    "dataset_manifest",
+    "dataset_overlap",
+    "tokenizer",
+    "shards",
+    "output_storage",
+    "device",
+    "training_math",
+    "checkpoint",
+]
+
+
+def _check(report, name):
+    return next(item for item in report["checks"] if item["name"] == name)
+
+
+def _write_hashed_json(path: Path, payload: dict, hash_field: str) -> None:
+    payload = dict(payload)
+    payload.pop(hash_field, None)
+    payload[hash_field] = sha256_json(payload)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -109,6 +134,7 @@ def test_preflight_passes_complete_synthetic_artifacts(synthetic_preflight_cfg, 
 
     assert report["status"] == "pass"
     assert all(check["status"] == "pass" for check in report["checks"])
+    assert [check["name"] for check in report["checks"]] == CHECK_IDS
     assert (tmp_path / "preflight.json").exists()
 
 
@@ -143,3 +169,161 @@ def test_preflight_rejects_incompatible_latest_checkpoint(synthetic_preflight_cf
 
     check = next(item for item in report["checks"] if item["name"] == "checkpoint")
     assert check["status"] == "fail"
+
+
+def test_failed_device_probe_persists_complete_report(
+    synthetic_preflight_cfg,
+    tmp_path,
+    monkeypatch,
+):
+    report_path = tmp_path / "failed-preflight.json"
+
+    def unavailable():
+        raise RuntimeError("cuda probe unavailable")
+
+    monkeypatch.setattr(torch.cuda, "is_available", unavailable)
+
+    with pytest.raises(RuntimeError, match="device"):
+        run_preflight(synthetic_preflight_cfg, report_path)
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "fail"
+    assert [check["name"] for check in report["checks"]] == CHECK_IDS
+    assert _check(report, "device")["status"] == "fail"
+    assert report["environment"]["cuda_available"] is None
+    assert report["environment"]["device_name"] == "unavailable"
+    assert report["environment"]["device_probe_error"] == "cuda probe unavailable"
+
+
+def test_cli_persists_deterministic_report_for_malformed_config(tmp_path):
+    config_path = tmp_path / "malformed.yaml"
+    config_path.write_text("run: [\n", encoding="utf-8")
+    report_paths = [tmp_path / "first.json", tmp_path / "second.json"]
+
+    exit_codes = [
+        preflight_main(
+            [
+                "--config",
+                str(config_path),
+                "--report-path",
+                str(report_path),
+            ]
+        )
+        for report_path in report_paths
+    ]
+    reports = [json.loads(path.read_text(encoding="utf-8")) for path in report_paths]
+
+    assert exit_codes == [1, 1]
+    assert reports[0] == reports[1]
+    assert reports[0]["status"] == "fail"
+    assert [check["name"] for check in reports[0]["checks"]] == CHECK_IDS
+    assert _check(reports[0], "config")["status"] == "fail"
+
+
+def test_cli_uses_safe_fallback_report_for_invalid_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "invalid.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = preflight_main(["--config", str(config_path)])
+
+    report_path = tmp_path / "preflight.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert report["status"] == "fail"
+    assert _check(report, "config")["status"] == "fail"
+
+
+def test_preflight_recomputes_normalized_record_hashes(synthetic_preflight_cfg):
+    train_path = Path(synthetic_preflight_cfg["dataset"]["normalized_dir"]) / "train.jsonl"
+    lines = train_path.read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[0])
+    record["text"] += " tampered"
+    lines[0] = json.dumps(record, ensure_ascii=False, sort_keys=True)
+    train_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "dataset_manifest")
+    assert check["status"] == "fail"
+    assert "text_sha256" in check["message"]
+
+
+@pytest.mark.parametrize("field", ["raw_bytes", "total_chars", "documents_sha256"])
+def test_preflight_recomputes_manifest_split_evidence(synthetic_preflight_cfg, field):
+    manifest_path = (
+        Path(synthetic_preflight_cfg["dataset"]["normalized_dir"]) / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    split_stats = manifest["split_stats"]["train"]
+    split_stats[field] = "0" * 64 if field == "documents_sha256" else split_stats[field] + 1
+    _write_hashed_json(manifest_path, manifest, "manifest_sha256")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "dataset_manifest")
+    assert check["status"] == "fail"
+    assert field in check["message"]
+
+
+@pytest.mark.parametrize(
+    ("field", "stale_value"),
+    [
+        ("split", "other"),
+        ("tokenizer_sha256", "0" * 64),
+        ("dtype", "uint32"),
+        ("append_eos", False),
+        ("shard_size_tokens", 4097),
+        ("total_documents", 41),
+    ],
+)
+def test_preflight_rejects_stale_shard_provenance(
+    synthetic_preflight_cfg,
+    field,
+    stale_value,
+):
+    metadata_path = (
+        Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / "train_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata[field] = stale_value
+    _write_hashed_json(metadata_path, metadata, "metadata_sha256")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "shards")
+    assert check["status"] == "fail"
+    assert field in check["message"]
+
+
+def test_preflight_rejects_shard_path_outside_output_root(
+    synthetic_preflight_cfg,
+    tmp_path,
+):
+    metadata_path = (
+        Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / "train_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    source_path = Path(metadata["shards"][0]["path"])
+    outside_path = tmp_path / "outside.bin"
+    outside_path.write_bytes(source_path.read_bytes())
+    metadata["shards"][0]["path"] = str(outside_path)
+    _write_hashed_json(metadata_path, metadata, "metadata_sha256")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "shards")
+    assert check["status"] == "fail"
+    assert "outside sharding.output_dir" in check["message"]
+
+
+def test_output_storage_does_not_destroy_preexisting_probe_name(synthetic_preflight_cfg):
+    output_dir = Path(synthetic_preflight_cfg["run"]["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    collision = output_dir / ".preflight-write-probe"
+    collision.write_text("user-owned\n", encoding="utf-8")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    assert _check(report, "output_storage")["status"] == "pass"
+    assert collision.read_text(encoding="utf-8") == "user-owned\n"
