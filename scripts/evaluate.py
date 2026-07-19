@@ -17,6 +17,7 @@ from matgpt.tokenizer.io import load_tokenizer
 from matgpt.training.checkpoint import load_checkpoint
 from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
 from matgpt.training.pretrain import get_device
+from matgpt.training.run_summary import write_evaluation_result
 from matgpt.data.prepare import effective_validation_split
 
 
@@ -24,9 +25,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a MatGPT base checkpoint.")
     parser.add_argument("--config", required=True, help="Path to MatGPT YAML config.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path.")
+    parser.add_argument("--output", help="Path for the evaluation JSON artifact.")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    default_output = Path(cfg["run"]["output_dir"]) / "evaluation" / f"{Path(args.checkpoint).stem}.json"
+    output_path = Path(args.output) if args.output else default_output
     device = get_device()
     model = GPT(GPTConfig.from_dict(cfg["model"])).to(device)
     load_checkpoint(args.checkpoint, model=model, map_location=device)
@@ -55,7 +59,14 @@ def main() -> None:
         top_p=cfg["evaluation"]["top_p"],
         device=device,
     )
-    print(json.dumps({"val_loss": val_loss, "perplexity": perplexity(val_loss), "samples": samples}, indent=2))
+    result = {
+        "checkpoint": str(Path(args.checkpoint)),
+        "val_loss": val_loss,
+        "perplexity": perplexity(val_loss),
+        "samples": samples,
+    }
+    write_evaluation_result(output_path, result)
+    print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
