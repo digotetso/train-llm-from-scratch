@@ -215,6 +215,28 @@ def test_verify_only_restores_resume_state_without_changing_run_evidence(
     assert (run_dir / "metrics.csv").read_bytes() == metrics_before
 
 
+def test_resume_checkpoint_load_preserves_rng_tensors_on_cpu(tmp_path, monkeypatch):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    real_load_checkpoint = pretrain_module.load_checkpoint
+    load_locations = []
+
+    def load_checkpoint_probe(*args, **kwargs):
+        load_locations.append(kwargs.get("map_location"))
+        return real_load_checkpoint(*args, **kwargs)
+
+    monkeypatch.setattr(
+        pretrain_module,
+        "load_checkpoint",
+        load_checkpoint_probe,
+    )
+
+    run_pretraining(cfg, resume_from=checkpoint, verify_only=True)
+
+    assert load_locations == ["cpu"]
+
+
 @pytest.mark.parametrize(
     "missing_path",
     [

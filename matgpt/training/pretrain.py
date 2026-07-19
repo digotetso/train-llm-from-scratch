@@ -310,7 +310,7 @@ def run_pretraining(
     state = {"global_step": 0, "tokens_processed": 0, "best_val_loss": float("inf")}
     payload = None
     if resume_from is not None:
-        payload = load_checkpoint(resume_from, map_location=device)
+        payload = load_checkpoint(resume_from, map_location="cpu")
         validate_complete_resume_checkpoint(payload, device)
         if not cfg["training"].get("allow_artifact_mismatch", False):
             validate_checkpoint_compatibility(payload, extra)
