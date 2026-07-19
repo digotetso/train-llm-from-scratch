@@ -18,3 +18,13 @@ def test_tiny_config_keeps_12_layers_and_uses_59m_name():
     assert report["size_label_parameters"] == 59_000_000
     assert report["parameter_count"] == 58_733_056
     assert report["size_label_matches"] is True
+
+
+def test_mini_config_has_exact_trainable_parameter_count():
+    cfg = load_config("configs/matgpt_mini_8m.yaml")
+
+    report = build_model_report(cfg)
+
+    assert report["size_label_parameters"] == 8_000_000
+    assert report["parameter_count"] == 8_391_936
+    assert report["size_label_matches"] is True

@@ -293,6 +293,117 @@ def test_five_consecutive_skips_abort_without_advancing_schedule_or_checkpoint(t
     assert first["state"]["attempted_steps"] == 1
 
 
+def test_non_finite_resumed_micro_batch_aborts_before_backward_or_side_effects(tmp_path, monkeypatch):
+    cfg = synthetic_pretraining_config(tmp_path)
+    cfg["training"].update(
+        {
+            "eval_interval_tokens": 32,
+            "checkpoint_interval_tokens": 32,
+            "sample_interval_tokens": 32,
+        }
+    )
+    monkeypatch.setattr(pretrain_module, "get_device", lambda: torch.device("cpu"))
+    run_pretraining(cfg, max_steps_override=1)
+
+    run_dir = tmp_path / "run"
+    checkpoint = run_dir / "checkpoints" / "latest.pt"
+    metrics_path = run_dir / "metrics.csv"
+    checkpoint_before = checkpoint.read_bytes()
+    metrics_before = metrics_path.read_bytes()
+    payload_before = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    counter_keys = (
+        "attempted_steps",
+        "global_step",
+        "tokens_processed",
+        "optimizer_steps_skipped_total",
+        "consecutive_optimizer_steps_skipped",
+    )
+    counters_before = {key: payload_before["state"][key] for key in counter_keys}
+    assert counters_before == {
+        "attempted_steps": 1,
+        "global_step": 1,
+        "tokens_processed": 16,
+        "optimizer_steps_skipped_total": 0,
+        "consecutive_optimizer_steps_skipped": 0,
+    }
+
+    backward_calls = []
+    optimizer_attempts = []
+    cleanup_calls = {"optimizer": 0, "tracker": 0}
+    side_effect_calls = {"evaluation": 0, "sampling": 0, "checkpoint": 0}
+    real_optimizer_step_tracker = pretrain_module.OptimizerStepTracker
+
+    class OptimizerStepTrackerProbe:
+        def __init__(self, optimizer):
+            self.inner = real_optimizer_step_tracker(optimizer)
+
+        @property
+        def count(self):
+            return self.inner.count
+
+        def close(self):
+            cleanup_calls["optimizer"] += 1
+            self.inner.close()
+
+    class ExperimentTrackerProbe:
+        def log(self, metrics, step=None):
+            pass
+
+        def finish(self):
+            cleanup_calls["tracker"] += 1
+
+    def return_nan_loss(self, idx, targets=None):
+        return None, torch.tensor(float("nan"), device=idx.device, requires_grad=True)
+
+    def record_backward(tensor, *args, **kwargs):
+        backward_calls.append("backward")
+
+    def record_optimizer_attempt(scaler, optimizer, tracker):
+        optimizer_attempts.append("optimizer")
+        scale = float(scaler.get_scale())
+        return ScalerStepResult(True, scale, scale)
+
+    def record_evaluation(**kwargs):
+        side_effect_calls["evaluation"] += 1
+        return 1.0
+
+    def record_sampling(**kwargs):
+        side_effect_calls["sampling"] += 1
+        return []
+
+    def record_checkpoint(*args, **kwargs):
+        side_effect_calls["checkpoint"] += 1
+
+    monkeypatch.setattr(GPT, "forward", return_nan_loss)
+    monkeypatch.setattr(torch.Tensor, "backward", record_backward)
+    monkeypatch.setattr(pretrain_module, "OptimizerStepTracker", OptimizerStepTrackerProbe)
+    monkeypatch.setattr(
+        pretrain_module,
+        "create_tracker",
+        lambda *args, **kwargs: ExperimentTrackerProbe(),
+    )
+    monkeypatch.setattr(pretrain_module, "step_optimizer_with_scaler", record_optimizer_attempt)
+    monkeypatch.setattr(pretrain_module, "evaluate_loss", record_evaluation)
+    monkeypatch.setattr(pretrain_module, "generate_samples", record_sampling)
+    monkeypatch.setattr(pretrain_module, "save_checkpoint", record_checkpoint)
+
+    with pytest.raises(
+        FloatingPointError,
+        match="Non-finite micro-batch loss at global_step=1",
+    ):
+        run_pretraining(cfg, resume_from=checkpoint, max_steps_override=1)
+
+    payload_after = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    counters_after = {key: payload_after["state"][key] for key in counter_keys}
+    assert counters_after == counters_before
+    assert checkpoint.read_bytes() == checkpoint_before
+    assert metrics_path.read_bytes() == metrics_before
+    assert backward_calls == []
+    assert optimizer_attempts == []
+    assert side_effect_calls == {"evaluation": 0, "sampling": 0, "checkpoint": 0}
+    assert cleanup_calls == {"optimizer": 1, "tracker": 1}
+
+
 def test_validation_metric_uses_attempted_step_after_skipped_update(tmp_path, monkeypatch):
     cfg = synthetic_pretraining_config(tmp_path)
     cfg["training"].update(
