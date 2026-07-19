@@ -26,6 +26,11 @@ def _write_if_missing_or_equal(path: Path, text: str, label: str) -> None:
     _atomic_write_text(path, text)
 
 
+def _validate_if_exists(path: Path, text: str, label: str) -> None:
+    if path.exists() and path.read_text(encoding="utf-8") != text:
+        raise ValueError(f"Existing {label} conflicts with the current run: {path}")
+
+
 def _json_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -39,6 +44,34 @@ def _write_json_if_missing_or_equal(path: Path, payload: dict[str, Any], label: 
     _write_if_missing_or_equal(path, _json_text(payload), label)
 
 
+def _fingerprints(extra: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "config_sha256": extra["config_sha256"],
+        "tokenizer_sha256": extra["tokenizer_sha256"],
+        "dataset_manifest_hash": extra["dataset_manifest_hash"],
+        "git_commit": extra["git_commit"],
+        "parameter_count": extra["parameter_count"],
+    }
+
+
+def validate_run_artifacts(
+    run_dir: Path,
+    cfg: dict[str, Any],
+    extra: dict[str, Any],
+) -> None:
+    run_dir = Path(run_dir)
+    _validate_if_exists(
+        run_dir / "config.snapshot.yaml",
+        config_to_yaml(cfg),
+        "configuration snapshot",
+    )
+    _validate_if_exists(
+        run_dir / "fingerprints.json",
+        _json_text(_fingerprints(extra)),
+        "fingerprints",
+    )
+
+
 def write_run_artifacts(
     run_dir: Path,
     cfg: dict[str, Any],
@@ -46,6 +79,7 @@ def write_run_artifacts(
     device: torch.device,
 ) -> dict[str, str]:
     run_dir = Path(run_dir)
+    validate_run_artifacts(run_dir, cfg, extra)
     config_text = config_to_yaml(cfg)
     _write_if_missing_or_equal(run_dir / "config.snapshot.yaml", config_text, "configuration snapshot")
     environment = {
@@ -58,13 +92,7 @@ def write_run_artifacts(
         "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
     }
     _write_json_if_missing(run_dir / "environment.json", environment)
-    fingerprints = {
-        "config_sha256": extra["config_sha256"],
-        "tokenizer_sha256": extra["tokenizer_sha256"],
-        "dataset_manifest_hash": extra["dataset_manifest_hash"],
-        "git_commit": extra["git_commit"],
-        "parameter_count": extra["parameter_count"],
-    }
+    fingerprints = _fingerprints(extra)
     _write_json_if_missing_or_equal(run_dir / "fingerprints.json", fingerprints, "fingerprints")
     return {
         "config": str(run_dir / "config.snapshot.yaml"),
