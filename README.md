@@ -3,7 +3,7 @@
 This repository contains the base-pretraining framework for validating the MatGPT course models before recording the course:
 
 - `MatGPT-Mini 8M` on `roneneldan/TinyStories`
-- `MatGPT-Tiny 46M` on `BabyLM-community/BabyLM-2026-Strict`
+- `MatGPT-Tiny 59M` on `BabyLM-community/BabyLM-2026-Strict`
 
 The goal is not a toy training loop. The framework is built around quality-critical small-model decisions: deterministic data preparation, training-tokenizer-only fitting, packed token streams, FP16 T4 training, gradient accumulation, warmup/cosine scheduling, checkpoint resume, validation loss, perplexity, and fixed prompt samples.
 
