@@ -11,12 +11,17 @@ def ensure_dir(path: str | Path) -> Path:
     return out
 
 
-def append_csv_row(path: str | Path, row: Mapping[str, object]) -> None:
+def append_csv_row(
+    path: str | Path,
+    row: Mapping[str, object],
+    fieldnames: tuple[str, ...] | list[str] | None = None,
+) -> None:
     csv_path = Path(path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not csv_path.exists()
+    fields = list(fieldnames) if fieldnames is not None else list(row.keys())
     with csv_path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="raise")
         if write_header:
             writer.writeheader()
         writer.writerow(row)

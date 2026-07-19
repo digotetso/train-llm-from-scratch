@@ -55,6 +55,23 @@ def save_checkpoint(
     os.replace(tmp, out)
 
 
+def apply_checkpoint_payload(
+    payload: dict[str, Any],
+    model: torch.nn.Module | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scaler: Any | None = None,
+    restore_rng: bool = False,
+) -> None:
+    if model is not None:
+        model.load_state_dict(payload["model"])
+    if optimizer is not None and payload.get("optimizer") is not None:
+        optimizer.load_state_dict(payload["optimizer"])
+    if scaler is not None and payload.get("scaler") is not None:
+        scaler.load_state_dict(payload["scaler"])
+    if restore_rng:
+        restore_rng_state(payload.get("rng_state"))
+
+
 def load_checkpoint(
     path: str | Path,
     model: torch.nn.Module | None = None,
@@ -64,12 +81,5 @@ def load_checkpoint(
     restore_rng: bool = False,
 ) -> dict[str, Any]:
     payload = torch.load(Path(path), map_location=map_location, weights_only=False)
-    if model is not None:
-        model.load_state_dict(payload["model"])
-    if optimizer is not None and payload.get("optimizer") is not None:
-        optimizer.load_state_dict(payload["optimizer"])
-    if scaler is not None and payload.get("scaler") is not None:
-        scaler.load_state_dict(payload["scaler"])
-    if restore_rng:
-        restore_rng_state(payload.get("rng_state"))
+    apply_checkpoint_payload(payload, model, optimizer, scaler, restore_rng)
     return payload
