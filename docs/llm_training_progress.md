@@ -15,7 +15,9 @@ Primary repository: `train-llm-from-scratch`
 - Local verification on 2026-07-19 observes 184 passing tests after adding a regression test for synchronized CUDA benchmark timing.
 - The verified Mini report contains 8,391,936 trainable parameters. Its unchanged schedule contains 32,768 tokens per optimizer update, 6,104 total steps, 122 warmup steps, and a 20-step smoke invocation stop.
 - Real Colab data preparation: completed for TinyStories. Preflight observed 1,799,248 training documents, 15,389 validation documents, zero split overlap, an 8,192-token vocabulary, 393,399,082 training tokens, and 3,140,122 validation tokens.
-- Real T4 preflight: passed all ten checks on a Tesla T4 with 14.56 GiB total GPU memory and 54.66 GiB free local disk. The first benchmark's loss, gradient norm, and memory were finite, but its throughput is rejected because the old timer did not synchronize asynchronous CUDA work. A corrected benchmark rerun is required.
+- Real T4 preflight: passed all ten checks on a Tesla T4 with 14.56 GiB total GPU memory and more than 57 GiB free local disk on the accepted rerun.
+- Corrected T4 benchmark: passed. At the configured micro-batch size of 16 it observed loss `9.0535`, pre-clip gradient norm `0.7336`, about `99,961` tokens/second, and `919.9` MiB peak allocated memory (`6.17%`). Batch sizes 8, 16, 24, and 32 all remained finite and below the memory stop line. The speed curve rose and then leveled off, unlike the rejected asynchronous timing report.
+- Smoke decision: approved from preparation, preflight, and corrected benchmark evidence. Smoke has not started yet.
 - Real T4 training: not started. Smoke, pilot, full training, runtime evaluation, and runtime summaries remain unobserved.
 - Course production is build-first and one video at a time. Video 1 is complete; later videos remain outline entries until their predecessor is taught, checked, and approved.
 
@@ -25,8 +27,7 @@ No percentage is used. Local tests establish local behavior only; they do not es
 
 - **Locally verified:** all CPU-testable repository-readiness criteria and gate behavior, exact Mini parameter and schedule math, synchronized benchmark timing behavior, notebook JSON validity, the 64-video outline and template, and the complete Video 1 package.
 - **Verified from prepared TinyStories artifacts:** non-empty normalized splits, reconciled manifest statistics, zero train/validation overlap, an 8,192-entry production tokenizer, and valid production shards with EOS counts matching document counts.
-- **Verified from Colab T4 preflight:** CUDA device identity, local disk capacity, artifact integrity, parameter count, and schedule math.
-- **Requires a corrected Colab T4 benchmark:** trustworthy synchronized throughput and reconfirmed finite loss, gradient norm, and peak-memory headroom.
+- **Verified from Colab T4 preflight and corrected benchmark:** CUDA device identity, local disk capacity, artifact integrity, parameter count, schedule math, synchronized throughput, finite loss and gradient norm, and peak-memory headroom.
 - **Requires smoke, pilot, and full-run evidence:** checkpoint resume on the real run, finite learning curves, improved validation loss, durable Drive artifacts, pilot approval, completion through step 6,104, final `latest.pt`/`best.pt` evaluation, and persisted `resume_verification.json`.
 
 ## Canonical References

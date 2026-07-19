@@ -12,12 +12,15 @@ optimizer update, and 6,104 scheduled steps. No smoke, pilot, or full training
 run has started.
 
 The first benchmark report recorded finite loss, gradient norm, and memory, but
-its throughput is not accepted as evidence. That benchmark stopped its timer
-before synchronizing asynchronous CUDA work and included cold-start work in the
-first batch size. The corrected benchmark performs one unmeasured warmup step,
-synchronizes CUDA before timing, resets peak-memory measurement, and
-synchronizes again before stopping the timer. Rerun `prepare` with the corrected
-script and review the replacement `benchmark.json` before selecting `smoke`.
+its throughput was rejected because the timer stopped before synchronizing
+asynchronous CUDA work and included cold-start work in the first batch size.
+The corrected benchmark performs one unmeasured warmup step, synchronizes CUDA
+before timing, resets peak-memory measurement, and synchronizes again before
+stopping the timer. Its replacement report passed on 2026-07-19. At the
+configured micro-batch size of 16 it observed loss `9.0535`, gradient norm
+`0.7336`, throughput about `99,961` tokens/second, and peak allocated memory
+about `919.9` MiB (`6.17%` of reported T4 memory). Smoke training was approved
+from this replacement evidence; the smoke run itself remains unobserved.
 
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
