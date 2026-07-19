@@ -60,97 +60,19 @@ For W&B logging, set `ENABLE_WANDB = True` in the notebook. The YAML configs kee
 
 The 8M config pins `roneneldan/TinyStories` to commit `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`. The byte-level tokenizer starts with the complete byte alphabet; configuration rejects a vocabulary that cannot hold that alphabet and the configured special tokens.
 
-Run `prepare` before any training-stage preflight. Preparation creates and validates the normalized data, tokenizer, and shards; `preflight_t4.py` then verifies those artifacts, persistent storage, CUDA, and the required T4 before `smoke`, `pilot`, or `full` can proceed. See the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md) for prerequisites, exact evidence, and stop conditions.
+For a first real run, use only [the stage-gated Colab notebook](notebooks/train_matgpt_t4_base_colab.ipynb) with the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md). Do not begin a first run from standalone CLI commands in this README.
 
-`--max-steps` means additional successful updates in the current invocation; it does not rewrite the configured full learning-rate schedule. `smoke` runs 20 updates followed by a five-update resume check. `pilot` stops at global step 306, then `evaluate` records the evidence. `full` is selected manually only after explicit user and Codex pilot approval.
+The required notebook order is: `prepare` validates the normalized data, tokenizer, and shards; before any training it runs T4 preflight and the configured-batch benchmark; `smoke` runs 20 updates followed by a five-update resume check; `pilot` stops at global step 306; `evaluate` records and reviews the evidence; and `full` is manually selected only after explicit user and Codex pilot approval. `--max-steps` means additional successful updates in the current invocation and does not rewrite the configured full learning-rate schedule.
 
-`scripts/evaluate.py` writes an evaluation JSON artifact, while `scripts/summarize_run.py` writes `run_summary.md`. Local tests use synthetic fixtures and cannot, by themselves, prove T4 allocation, prepared-artifact integrity, benchmark results, or training quality.
+The notebook runs evaluation and summary generation: `scripts/evaluate.py` writes evaluation JSON artifacts, and `scripts/summarize_run.py` writes `run_summary.md`. Local tests use synthetic fixtures and cannot, by themselves, prove T4 allocation, prepared-artifact integrity, benchmark results, or training quality.
 
-## 8M TinyStories Base Run
+## Configured Training Runs
 
-Prepare normalized data:
+The Mini configuration targets `200M` training tokens, and the Tiny configuration targets `1B`. These are configured schedule targets, not observed runtime results. The stage-gated notebook and runbook are the only documented procedure for a first real T4 run; its commands preserve the schedule and prevent a pilot from promoting itself.
 
-```bash
-python scripts/prepare_dataset.py --config configs/matgpt_mini_8m.yaml
-```
+The Mini configuration is the first real-run model. The Tiny configuration remains a later, separate experiment; the BabyLM deterministic validation split is configured by `validation_fraction: 0.01` in `configs/matgpt_tiny_59m.yaml`.
 
-Train the 8K byte-level BPE tokenizer on the TinyStories training split:
-
-```bash
-python scripts/train_tokenizer.py --config configs/matgpt_mini_8m.yaml
-```
-
-Tokenize once and create packed `uint16` shards:
-
-```bash
-python scripts/tokenize_and_shard.py --config configs/matgpt_mini_8m.yaml
-```
-
-Run a short smoke train:
-
-```bash
-python scripts/pretrain.py --config configs/matgpt_mini_8m.yaml --max-steps 20
-```
-
-Benchmark safe micro-batch sizes on the current T4:
-
-```bash
-python scripts/benchmark_t4.py \
-  --config configs/matgpt_mini_8m.yaml \
-  --batch-sizes 8,16,24,32
-```
-
-Run the full configured target:
-
-```bash
-python scripts/pretrain.py --config configs/matgpt_mini_8m.yaml
-```
-
-Resume after Colab interruption:
-
-```bash
-python scripts/pretrain.py \
-  --config configs/matgpt_mini_8m.yaml \
-  --resume-from runs/matgpt_mini_8m/checkpoints/latest.pt
-```
-
-## 46M BabyLM Base Run
-
-BabyLM-2026-Strict currently exposes a training split. The framework therefore creates a deterministic hash-based validation split using `validation_fraction: 0.01` in `configs/matgpt_tiny_46m.yaml`.
-
-```bash
-python scripts/prepare_dataset.py --config configs/matgpt_tiny_46m.yaml
-python scripts/train_tokenizer.py --config configs/matgpt_tiny_46m.yaml
-python scripts/tokenize_and_shard.py --config configs/matgpt_tiny_46m.yaml
-python scripts/pretrain.py --config configs/matgpt_tiny_46m.yaml --max-steps 20
-python scripts/benchmark_t4.py --config configs/matgpt_tiny_46m.yaml --batch-sizes 2,4,6,8
-python scripts/pretrain.py --config configs/matgpt_tiny_46m.yaml
-```
-
-Resume:
-
-```bash
-python scripts/pretrain.py \
-  --config configs/matgpt_tiny_46m.yaml \
-  --resume-from runs/matgpt_tiny_46m/checkpoints/latest.pt
-```
-
-## Evaluate and Sample
-
-```bash
-python scripts/evaluate.py \
-  --config configs/matgpt_tiny_46m.yaml \
-  --checkpoint runs/matgpt_tiny_46m/checkpoints/best.pt
-```
-
-Generate from a base checkpoint:
-
-```bash
-python scripts/chat.py \
-  --config configs/matgpt_tiny_46m.yaml \
-  --checkpoint runs/matgpt_tiny_46m/checkpoints/best.pt \
-  --prompt "A token is"
-```
+After an approved run, use the runbook `evaluate` stage for checkpoint evaluation and samples. Local multiple-choice task evaluation and interactive generation are advanced/debug workflows, not first-run promotion commands.
 
 ## Outputs
 
