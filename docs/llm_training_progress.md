@@ -31,7 +31,7 @@ No percentage is used. Local tests establish local behavior only; they do not es
 
 **Prerequisites:** select an NVIDIA T4 runtime in the [Colab notebook](../notebooks/train_matgpt_t4_base_colab.ipynb), mount writable Drive storage, provide the required dataset access, and keep one unchanged Mini config and run lineage. The Mini config pins `roneneldan/TinyStories` to `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; the tokenizer is configured and tested for complete byte coverage.
 
-**Prepare before preflight:** set `RUN_STAGE = "prepare"` and run the notebook. It prepares normalized JSONL, trains the tokenizer, creates shards, and validates their snapshots. After the artifacts exist, the training stages run:
+**Prepare and collect gate evidence:** set `RUN_STAGE = "prepare"` on a T4 and run the notebook. It prepares normalized JSONL, trains the tokenizer, creates shards, validates their snapshots, and then runs:
 
 ```bash
 python scripts/preflight_t4.py \
@@ -45,7 +45,7 @@ python scripts/benchmark_t4.py \
   --steps 5
 ```
 
-Expected evidence is a passing `run/preflight.json`, finite configured-batch fields in `run/benchmark.json`, and the prepared manifest, tokenizer, and shard metadata. Stop without starting smoke if preparation is incomplete, preflight fails, the benchmark has a non-finite value or non-positive throughput, or the T4/storage gate fails. See the runbook for the complete gate criteria and recovery rules.
+Expected evidence is a passing `run/preflight.json`, finite configured-batch fields in `run/benchmark.json`, and the prepared manifest, tokenizer, and shard metadata. The benchmark uses a temporary model but the `prepare` stage does not run pretraining or create a checkpoint. Stop and review both reports before selecting `smoke`; do not start smoke if preparation is incomplete, preflight fails, the benchmark has a non-finite value or non-positive throughput, or the T4/storage gate fails. See the runbook for the complete gate criteria and recovery rules.
 
 **Training sequence:** `smoke` performs 20 successful updates followed by a five-update resume check. `--max-steps` limits the current invocation and preserves the configured full learning-rate schedule. `pilot` stops at global step 306. Run `evaluate` and review the persisted evidence; only explicit user and Codex approval permits manually selecting `full`.
 

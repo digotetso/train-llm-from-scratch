@@ -28,7 +28,7 @@ does not shorten or restart the learning-rate schedule.
 
 - A Google account with enough Drive capacity for synchronized prepared data,
   checkpoints, metrics, evaluations, and samples.
-- A Colab runtime manually set to an NVIDIA T4 for `smoke`, `pilot`, and `full`.
+- A Colab runtime manually set to an NVIDIA T4 for `prepare`, `smoke`, `pilot`, and `full`.
   T4 allocation is not guaranteed.
 - At least 20 GiB free under `/content` before preparation or training.
 - This repository available through `REPO_URL`, or already checked out at
@@ -99,7 +99,11 @@ active training. Do not move the local root between sessions.
 
 ## Exact Stage Order
 
-1. Select `RUN_STAGE = "prepare"` and run the notebook top to bottom.
+1. Select `RUN_STAGE = "prepare"` and run the notebook top to bottom. This
+   prepares and validates the artifacts, runs strict T4 preflight, runs the
+   temporary five-step batch benchmark, and persists `preflight.json` and
+   `benchmark.json`. It does not run the pretraining command or create a
+   training checkpoint. Stop and review both reports before selecting `smoke`.
 2. Select `RUN_STAGE = "smoke"`. With no `latest.pt`, this performs 20
    successful updates and then a 5-update resume check. At exact step 20 it
    performs only the resume check; at exact step 25 it runs no training command.
@@ -130,7 +134,7 @@ python scripts/train_tokenizer.py --config "$CONFIG"
 python scripts/tokenize_and_shard.py --config "$CONFIG"
 ```
 
-Before every training stage:
+During `prepare`, and again before every training stage:
 
 ```bash
 python scripts/preflight_t4.py \
@@ -188,7 +192,7 @@ python scripts/summarize_run.py --run-dir "$RUN_DIR"
 | Gate | Pass criteria | Evidence |
 | --- | --- | --- |
 | 0. Scope | The operator has selected the intended model and stage, accepts unobserved time/cost, and understands that `full` requires manual approval. | Settings cell and operator confirmation. |
-| 1. Storage and device | `/content` and Drive usage print successfully; local free space is at least 20 GiB. Training stages observe CUDA and a GPU name containing `T4`. | Storage/GPU cell output. |
+| 1. Storage and device | `/content` and Drive usage print successfully; local free space is at least 20 GiB. `prepare` and training stages observe CUDA and a GPU name containing `T4`. | Storage/GPU cell output. |
 | 2. Preparation | Manifest and split counts validate; tokenizer JSON matches its metadata hash; combined/split shard metadata validate; every referenced shard payload has the expected size and hash. Each Drive artifact is published through a validated temporary replacement snapshot. | Preparation output and Drive directories. |
 | 3. Preflight | Process exits zero, top-level status is `pass`, all ten checks pass, and the JSON is persisted. For Mini, confirm preflight training math reports the configured 32,768 tokens/update and 6,104 steps. | `run/preflight.json`. |
 | 4. Benchmark | Loss, pre-clip gradient norm, throughput, peak memory, total memory, and memory fraction are finite; throughput is positive. On CUDA, total memory is positive, peak memory and fraction are nonnegative, and fraction equals peak/total before the below-0.90 gate. CPU-only tests retain exact zero-memory fields. | `run/benchmark.json`. |

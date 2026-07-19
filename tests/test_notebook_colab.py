@@ -214,6 +214,36 @@ def test_colab_uses_full_schedule_and_structured_stage_branches():
     assert stage_values == ["smoke", "pilot", "full"]
 
 
+def test_colab_prepare_produces_t4_gate_evidence_without_pretraining():
+    device_source = code_source_after_heading("## 6. Gate storage and the GPU")
+    gate_source = code_source_after_heading(
+        "## 9. Gate training with preflight and benchmark evidence"
+    )
+    gate_tree = ast.parse(gate_source)
+    training_source = code_source_after_heading("## 10. Run the selected training stage")
+
+    evidence_stages = next(
+        {
+            element.value
+            for element in assignment.value.elts
+            if isinstance(element, ast.Constant)
+        }
+        for assignment in gate_tree.body
+        if isinstance(assignment, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "EVIDENCE_STAGES"
+            for target in assignment.targets
+        )
+        and isinstance(assignment.value, ast.Set)
+    )
+
+    assert evidence_stages == {"prepare", "smoke", "pilot", "full"}
+    assert 'if RUN_STAGE in {"prepare", "smoke", "pilot", "full"}:' in device_source
+    assert "scripts/preflight_t4.py" in gate_source
+    assert "scripts/benchmark_t4.py" in gate_source
+    assert 'if RUN_STAGE == "prepare"' not in training_source
+
+
 def test_colab_smoke_recovery_plans_absent_step_20_and_step_25_lineages():
     source = code_source_after_heading("## 10. Run the selected training stage")
     smoke_actions_for_step = notebook_function(source, "smoke_actions_for_step")
