@@ -390,12 +390,20 @@ def test_non_finite_resumed_micro_batch_aborts_before_backward_or_side_effects(t
     with pytest.raises(
         FloatingPointError,
         match="Non-finite micro-batch loss at global_step=1",
-    ):
+    ) as exc_info:
         run_pretraining(cfg, resume_from=checkpoint, max_steps_override=1)
 
-    payload_after = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    counters_after = {key: payload_after["state"][key] for key in counter_keys}
-    assert counters_after == counters_before
+    traceback = exc_info.value.__traceback__
+    while (
+        traceback is not None
+        and traceback.tb_frame.f_code is not run_pretraining.__code__
+    ):
+        traceback = traceback.tb_next
+    assert traceback is not None
+    live_state = traceback.tb_frame.f_locals["state"]
+    live_counters = {key: live_state[key] for key in counter_keys}
+    assert live_counters == counters_before
+
     assert checkpoint.read_bytes() == checkpoint_before
     assert metrics_path.read_bytes() == metrics_before
     assert backward_calls == []
