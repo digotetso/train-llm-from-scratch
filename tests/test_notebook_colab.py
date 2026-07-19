@@ -563,6 +563,8 @@ def test_colab_evaluate_verifies_resume_before_summary(tmp_path: Path):
     resume_report = json.loads((run_dir / "resume_verification.json").read_text())
     assert resume_report["resume_verified"] is True
     assert resume_report["state"]["global_step"] == 306
+    assert "resume_report_temporary.replace(resume_report_path)" in source
+    assert not (run_dir / "resume_verification.json.tmp").exists()
 
 
 def test_colab_separates_fast_local_data_from_persistent_drive_artifacts():

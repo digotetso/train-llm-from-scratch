@@ -215,6 +215,62 @@ def test_verify_only_restores_resume_state_without_changing_run_evidence(
     assert (run_dir / "metrics.csv").read_bytes() == metrics_before
 
 
+@pytest.mark.parametrize(
+    "missing_path",
+    [
+        "optimizer",
+        "scaler",
+        "rng_state",
+        "rng_state.python",
+        "state.attempted_steps",
+        "state.dataset_rng_state.train",
+        "state.dataset_rng_state.validation",
+    ],
+)
+def test_verify_only_rejects_incomplete_resume_state(
+    tmp_path,
+    monkeypatch,
+    missing_path,
+):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    keys = missing_path.split(".")
+    parent = payload
+    for key in keys[:-1]:
+        parent = parent[key]
+    parent.pop(keys[-1])
+    monkeypatch.setattr(
+        pretrain_module,
+        "load_checkpoint",
+        lambda *args, **kwargs: payload,
+    )
+
+    with pytest.raises(ValueError, match=missing_path):
+        run_pretraining(cfg, resume_from=checkpoint, verify_only=True)
+
+
+def test_verify_only_rejects_cuda_checkpoint_when_cuda_state_cannot_be_restored(
+    tmp_path,
+    monkeypatch,
+):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    payload["rng_state"]["torch_cuda"] = [payload["rng_state"]["torch_cpu"]]
+    monkeypatch.setattr(pretrain_module, "get_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(
+        pretrain_module,
+        "load_checkpoint",
+        lambda *args, **kwargs: payload,
+    )
+
+    with pytest.raises(ValueError, match="CUDA RNG state"):
+        run_pretraining(cfg, resume_from=checkpoint, verify_only=True)
+
+
 def test_fresh_run_rejects_an_initialized_metrics_file(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()

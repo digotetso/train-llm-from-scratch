@@ -102,6 +102,59 @@ def validate_checkpoint_compatibility(payload: dict[str, Any], expected_extra: d
         raise ValueError("Checkpoint artifact mismatch; refusing unsafe resume: " + "; ".join(mismatches))
 
 
+def validate_complete_resume_checkpoint(
+    payload: dict[str, Any],
+    device: torch.device,
+) -> None:
+    """Fail before restoration when a checkpoint cannot reproduce training state."""
+    missing = []
+    for key in ("model", "optimizer", "scaler", "state", "config", "extra", "rng_state"):
+        if key not in payload or payload[key] is None:
+            missing.append(key)
+
+    state = payload.get("state")
+    if isinstance(state, dict):
+        for key in (
+            "global_step",
+            "tokens_processed",
+            "best_val_loss",
+            "attempted_steps",
+            "optimizer_steps_skipped_total",
+            "consecutive_optimizer_steps_skipped",
+            "elapsed_seconds",
+        ):
+            if key not in state:
+                missing.append(f"state.{key}")
+        dataset_rng_state = state.get("dataset_rng_state")
+        if not isinstance(dataset_rng_state, dict):
+            missing.append("state.dataset_rng_state")
+        else:
+            for split in ("train", "validation"):
+                if split not in dataset_rng_state:
+                    missing.append(f"state.dataset_rng_state.{split}")
+
+    rng_state = payload.get("rng_state")
+    if isinstance(rng_state, dict):
+        for key in ("python", "numpy", "torch_cpu"):
+            if key not in rng_state:
+                missing.append(f"rng_state.{key}")
+
+    if missing:
+        raise ValueError(
+            "Checkpoint resume state incomplete; missing: " + ", ".join(missing)
+        )
+
+    checkpoint_has_cuda_rng = "torch_cuda" in rng_state
+    current_device_is_cuda = device.type == "cuda"
+    if checkpoint_has_cuda_rng and not current_device_is_cuda:
+        raise ValueError(
+            "Checkpoint contains CUDA RNG state, but the current device cannot "
+            "restore CUDA RNG state"
+        )
+    if current_device_is_cuda and not checkpoint_has_cuda_rng:
+        raise ValueError("Checkpoint resume state incomplete; missing: rng_state.torch_cuda")
+
+
 def _checkpoint_state(
     state: dict[str, Any],
     train_dataset: PackedTokenDataset,
@@ -188,6 +241,7 @@ def run_pretraining(
     payload = None
     if resume_from is not None:
         payload = load_checkpoint(resume_from, map_location=device)
+        validate_complete_resume_checkpoint(payload, device)
         if not cfg["training"].get("allow_artifact_mismatch", False):
             validate_checkpoint_compatibility(payload, extra)
     validate_run_artifacts(run_dir, cfg, extra)

@@ -188,6 +188,10 @@ Evaluation requires and runs once for both `latest.pt` and `best.pt`, verifies
 complete resume state without an update, persists that verification as
 `resume_verification.json`, and then writes the summary:
 
+Keep the T4 runtime active for this stage. A checkpoint containing CUDA RNG
+state cannot pass complete resume verification on CPU because CPU cannot
+restore that CUDA state.
+
 ```bash
 python scripts/evaluate.py --config "$CONFIG" --checkpoint "$CHECKPOINT"
 python scripts/pretrain.py \
