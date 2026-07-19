@@ -10,6 +10,14 @@ availability, wall time, cost, throughput, loss, gradient norm, and memory
 figures are **expected until observed** in the persisted artifacts from your
 own run. Do not present expected T4 values as measured results.
 
+Dataset provenance was checked against official Hugging Face repository
+metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
+`f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; 59M pins
+`BabyLM-community/BabyLM-2026-Strict` at
+`9e57baaaa91ac3c638746be14d1d5fa6c789f4cf`. The repository SHAs are verified;
+an actual authenticated dataset download and preparation remain Colab runtime
+gates.
+
 The Mini configuration has a fixed 200M-token target. Its configured batch math
 is 32,768 tokens per successful optimizer update and 6,104 full-schedule steps.
 Preflight must report those values before they are treated as observed for a

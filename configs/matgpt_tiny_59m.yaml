@@ -17,7 +17,7 @@ tracking:
 dataset:
   hf_name: BabyLM-community/BabyLM-2026-Strict
   hf_config: null
-  revision: f54c09fd23315a6f9c86f9dc80f725de7d8f9c64
+  revision: 9e57baaaa91ac3c638746be14d1d5fa6c789f4cf
   text_field: null
   train_split: train
   validation_split: null

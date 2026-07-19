@@ -9,7 +9,16 @@ from matgpt.config import load_config
 
 
 NOTEBOOK_PATH = Path("notebooks/train_matgpt_t4_base_colab.ipynb")
-APPROVED_REVISION = "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64"
+APPROVED_DATASET_REVISIONS = {
+    Path("configs/matgpt_mini_8m.yaml"): (
+        "roneneldan/TinyStories",
+        "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64",
+    ),
+    Path("configs/matgpt_tiny_59m.yaml"): (
+        "BabyLM-community/BabyLM-2026-Strict",
+        "9e57baaaa91ac3c638746be14d1d5fa6c789f4cf",
+    ),
+}
 
 
 def notebook_cells() -> list[dict]:
@@ -166,14 +175,13 @@ def test_colab_selectable_configs_exist_validate_and_are_pinned():
         and node.value.endswith(".yaml")
     }
 
-    assert selectable_paths == {
-        Path("configs/matgpt_mini_8m.yaml"),
-        Path("configs/matgpt_tiny_59m.yaml"),
-    }
+    assert selectable_paths == set(APPROVED_DATASET_REVISIONS)
     for path in selectable_paths:
         assert path.is_file(), f"Notebook-selectable config is not tracked locally: {path}"
         cfg = load_config(path)
-        assert cfg["dataset"]["revision"] == APPROVED_REVISION
+        expected_dataset, expected_revision = APPROVED_DATASET_REVISIONS[path]
+        assert cfg["dataset"]["hf_name"] == expected_dataset
+        assert cfg["dataset"]["revision"] == expected_revision
 
 
 def test_colab_uses_full_schedule_and_structured_stage_branches():

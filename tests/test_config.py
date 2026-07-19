@@ -14,7 +14,29 @@ def test_loads_mini_config_and_validates():
     assert cfg["run"]["name"] == "matgpt_mini_8m_tinystories"
     assert cfg["model"]["d_model"] == 256
     assert cfg["tokenizer"]["vocab_size"] == cfg["model"]["vocab_size"]
-    assert cfg["dataset"]["revision"] == "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64"
+    validate_config(cfg)
+
+
+@pytest.mark.parametrize(
+    ("config_path", "dataset_name", "revision"),
+    [
+        (
+            "configs/matgpt_mini_8m.yaml",
+            "roneneldan/TinyStories",
+            "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64",
+        ),
+        (
+            "configs/matgpt_tiny_59m.yaml",
+            "BabyLM-community/BabyLM-2026-Strict",
+            "9e57baaaa91ac3c638746be14d1d5fa6c789f4cf",
+        ),
+    ],
+)
+def test_configs_pin_verified_dataset_revisions(config_path, dataset_name, revision):
+    cfg = load_config(config_path)
+
+    assert cfg["dataset"]["hf_name"] == dataset_name
+    assert cfg["dataset"]["revision"] == revision
     validate_config(cfg)
 
 
