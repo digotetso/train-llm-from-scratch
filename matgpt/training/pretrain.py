@@ -112,19 +112,39 @@ def validate_complete_resume_checkpoint(
         if key not in payload or payload[key] is None:
             missing.append(key)
 
+    invalid = []
+    for key in ("model", "optimizer", "scaler", "state", "config", "extra", "rng_state"):
+        if key in payload and payload[key] is not None and not isinstance(payload[key], dict):
+            invalid.append(key)
+
     state = payload.get("state")
     if isinstance(state, dict):
-        for key in (
+        integer_state_keys = (
             "global_step",
             "tokens_processed",
-            "best_val_loss",
             "attempted_steps",
             "optimizer_steps_skipped_total",
             "consecutive_optimizer_steps_skipped",
-            "elapsed_seconds",
-        ):
+        )
+        for key in integer_state_keys:
             if key not in state:
                 missing.append(f"state.{key}")
+            elif (
+                not isinstance(state[key], int)
+                or isinstance(state[key], bool)
+                or state[key] < 0
+            ):
+                invalid.append(f"state.{key}")
+        for key in ("best_val_loss", "elapsed_seconds"):
+            if key not in state:
+                missing.append(f"state.{key}")
+            elif (
+                not isinstance(state[key], (int, float))
+                or isinstance(state[key], bool)
+                or not math.isfinite(float(state[key]))
+                or float(state[key]) < 0
+            ):
+                invalid.append(f"state.{key}")
         dataset_rng_state = state.get("dataset_rng_state")
         if not isinstance(dataset_rng_state, dict):
             missing.append("state.dataset_rng_state")
@@ -132,16 +152,46 @@ def validate_complete_resume_checkpoint(
             for split in ("train", "validation"):
                 if split not in dataset_rng_state:
                     missing.append(f"state.dataset_rng_state.{split}")
+                else:
+                    split_state = dataset_rng_state[split]
+                    if (
+                        not isinstance(split_state, dict)
+                        or not isinstance(split_state.get("bit_generator"), str)
+                        or not isinstance(split_state.get("state"), dict)
+                    ):
+                        invalid.append(f"state.dataset_rng_state.{split}")
 
     rng_state = payload.get("rng_state")
     if isinstance(rng_state, dict):
         for key in ("python", "numpy", "torch_cpu"):
             if key not in rng_state:
                 missing.append(f"rng_state.{key}")
+        python_rng = rng_state.get("python")
+        if python_rng is not None and (
+            not isinstance(python_rng, tuple) or len(python_rng) != 3
+        ):
+            invalid.append("rng_state.python")
+        numpy_rng = rng_state.get("numpy")
+        if numpy_rng is not None and (
+            not isinstance(numpy_rng, tuple) or len(numpy_rng) != 5
+        ):
+            invalid.append("rng_state.numpy")
+        torch_cpu_rng = rng_state.get("torch_cpu")
+        if torch_cpu_rng is not None and (
+            not isinstance(torch_cpu_rng, torch.Tensor)
+            or torch_cpu_rng.dtype != torch.uint8
+            or torch_cpu_rng.ndim != 1
+            or torch_cpu_rng.numel() == 0
+        ):
+            invalid.append("rng_state.torch_cpu")
 
     if missing:
         raise ValueError(
             "Checkpoint resume state incomplete; missing: " + ", ".join(missing)
+        )
+    if invalid:
+        raise ValueError(
+            "Checkpoint resume state invalid: " + ", ".join(invalid)
         )
 
     checkpoint_has_cuda_rng = "torch_cuda" in rng_state
@@ -153,6 +203,26 @@ def validate_complete_resume_checkpoint(
         )
     if current_device_is_cuda and not checkpoint_has_cuda_rng:
         raise ValueError("Checkpoint resume state incomplete; missing: rng_state.torch_cuda")
+    if current_device_is_cuda:
+        cuda_rng_states = rng_state["torch_cuda"]
+        expected_cuda_devices = torch.cuda.device_count()
+        valid_cuda_states = (
+            isinstance(cuda_rng_states, (list, tuple))
+            and expected_cuda_devices > 0
+            and len(cuda_rng_states) == expected_cuda_devices
+            and all(
+                isinstance(cuda_rng, torch.Tensor)
+                and cuda_rng.dtype == torch.uint8
+                and cuda_rng.ndim == 1
+                and cuda_rng.numel() > 0
+                for cuda_rng in cuda_rng_states
+            )
+        )
+        if not valid_cuda_states:
+            raise ValueError(
+                "Checkpoint resume state invalid: rng_state.torch_cuda must contain "
+                f"one nonempty byte tensor per CUDA device (expected {expected_cuda_devices})"
+            )
 
 
 def _checkpoint_state(

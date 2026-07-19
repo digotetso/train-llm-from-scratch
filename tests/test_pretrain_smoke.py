@@ -271,6 +271,57 @@ def test_verify_only_rejects_cuda_checkpoint_when_cuda_state_cannot_be_restored(
         run_pretraining(cfg, resume_from=checkpoint, verify_only=True)
 
 
+@pytest.mark.parametrize(
+    ("invalid_path", "invalid_value"),
+    [
+        ("optimizer", []),
+        ("state", []),
+        ("rng_state.python", []),
+        ("rng_state.numpy", []),
+        ("rng_state.torch_cpu", torch.tensor([], dtype=torch.uint8)),
+        ("state.dataset_rng_state.train", []),
+    ],
+)
+def test_complete_resume_validation_rejects_malformed_state(
+    tmp_path,
+    invalid_path,
+    invalid_value,
+):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    keys = invalid_path.split(".")
+    parent = payload
+    for key in keys[:-1]:
+        parent = parent[key]
+    parent[keys[-1]] = invalid_value
+
+    with pytest.raises(ValueError, match=invalid_path):
+        pretrain_module.validate_complete_resume_checkpoint(
+            payload,
+            torch.device("cpu"),
+        )
+
+
+def test_complete_resume_validation_rejects_empty_cuda_rng_state(
+    tmp_path,
+    monkeypatch,
+):
+    cfg = synthetic_pretraining_config(tmp_path)
+    run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    payload["rng_state"]["torch_cuda"] = []
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+
+    with pytest.raises(ValueError, match="rng_state.torch_cuda"):
+        pretrain_module.validate_complete_resume_checkpoint(
+            payload,
+            torch.device("cuda"),
+        )
+
+
 def test_fresh_run_rejects_an_initialized_metrics_file(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
