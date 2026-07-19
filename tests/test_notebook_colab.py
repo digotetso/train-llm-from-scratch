@@ -253,7 +253,11 @@ def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
             (run_dir / "preflight.json").write_text(
                 json.dumps({"status": "pass"}), encoding="utf-8"
             )
-        stdout = json.dumps(benchmark_payload) if "scripts/benchmark_t4.py" in command else ""
+        stdout = (
+            json.dumps(benchmark_payload)
+            if "scripts/benchmark_t4.py" in command
+            else ""
+        )
         return SimpleNamespace(stdout=stdout)
 
     prepare_artifacts_for_stage(
@@ -263,7 +267,17 @@ def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
                 "normalized",
                 "normalized dataset",
                 ["python", "scripts/prepare_dataset.py", "--config", "colab.yaml"],
-            )
+            ),
+            (
+                "tokenizer",
+                "tokenizer",
+                ["python", "scripts/train_tokenizer.py", "--config", "colab.yaml"],
+            ),
+            (
+                "shards",
+                "token shards",
+                ["python", "scripts/tokenize_and_shard.py", "--config", "colab.yaml"],
+            ),
         ],
         local_root=tmp_path / "local",
         artifact_status_fn=lambda _name, _path: (False, "missing"),
@@ -282,13 +296,29 @@ def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
         run_command_fn=command_spy,
         emit=messages.append,
     )
+    exec(
+        compile(training_source, NOTEBOOK_PATH.as_posix(), "exec"),
+        {
+            "RUN_STAGE": "prepare",
+            "cfg": {"run": {"output_dir": str(run_dir)}},
+            "colab_config_path": Path("colab.yaml"),
+            "SMOKE_MAX_STEPS": 20,
+            "RESUME_CHECK_STEPS": 5,
+            "PILOT_STOP_STEP": 306,
+            "run_command": command_spy,
+            "torch": SimpleNamespace(),
+            "Path": Path,
+        },
+    )
 
     assert [command[1] for command in commands] == [
         "scripts/prepare_dataset.py",
+        "scripts/train_tokenizer.py",
+        "scripts/tokenize_and_shard.py",
         "scripts/preflight_t4.py",
         "scripts/benchmark_t4.py",
     ]
-    assert lifecycle == ["validate", "validate_all", "sync"]
+    assert lifecycle == ["validate", "validate", "validate", "validate_all", "sync"]
     assert json.loads((run_dir / "preflight.json").read_text()) == {"status": "pass"}
     assert json.loads((run_dir / "benchmark.json").read_text()) == benchmark_payload
     assert any("Stop here" in message and "before selecting smoke" in message for message in messages)
@@ -301,6 +331,81 @@ def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
     assert "scripts/pretrain.py" not in prepare_source
     assert "scripts/pretrain.py" not in gate_source
     assert 'if RUN_STAGE == "prepare"' not in training_source
+
+
+@pytest.mark.parametrize(
+    ("run_stage", "expects_evidence"),
+    [
+        ("prepare", True),
+        ("smoke", True),
+        ("pilot", True),
+        ("full", True),
+        ("evaluate", False),
+    ],
+)
+def test_colab_evidence_gate_covers_every_stage(
+    tmp_path: Path,
+    run_stage: str,
+    expects_evidence: bool,
+):
+    gate_source = code_source_after_heading(
+        "## 9. Gate training with preflight and benchmark evidence"
+    )
+    run_evidence_gate = notebook_function(gate_source, "run_evidence_gate")
+    run_dir = tmp_path / run_stage
+    commands: list[list[str]] = []
+    messages: list[str] = []
+    benchmark_payload = {
+        "results": [
+            {
+                "batch_size": 8,
+                "status": "ok",
+                "loss": 1.0,
+                "grad_norm": 0.5,
+                "tokens_per_second": 100.0,
+                "memory_fraction": 0.5,
+            }
+        ]
+    }
+
+    def command_spy(command):
+        commands.append(command)
+        if "scripts/preflight_t4.py" in command:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "preflight.json").write_text(
+                json.dumps({"status": "pass"}), encoding="utf-8"
+            )
+        stdout = (
+            json.dumps(benchmark_payload)
+            if "scripts/benchmark_t4.py" in command
+            else ""
+        )
+        return SimpleNamespace(stdout=stdout)
+
+    result = run_evidence_gate(
+        run_stage=run_stage,
+        config_path=Path("colab.yaml"),
+        run_output_dir=run_dir,
+        batch_sizes="8,16,24,32",
+        micro_batch_size=8,
+        run_command_fn=command_spy,
+        emit=messages.append,
+    )
+
+    if expects_evidence:
+        assert [command[1] for command in commands] == [
+            "scripts/preflight_t4.py",
+            "scripts/benchmark_t4.py",
+        ]
+        assert result is not None
+        assert (run_dir / "preflight.json").is_file()
+        assert (run_dir / "benchmark.json").is_file()
+    else:
+        assert commands == []
+        assert result is None
+        assert messages == [
+            "Preflight and benchmark evidence gates skipped for 'evaluate'."
+        ]
 
 
 def test_colab_smoke_recovery_plans_absent_step_20_and_step_25_lineages():

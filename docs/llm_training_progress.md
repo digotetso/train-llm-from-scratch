@@ -12,7 +12,7 @@ Primary repository: `train-llm-from-scratch`
 - Numerical-stability theory completed: gradient clipping, underflow and overflow, `Inf`/`NaN`, BF16, skipped updates, and stability metrics.
 - Current phase: repository hardening and the first real 8M TinyStories T4 run.
 - Repository-readiness Tasks 1-10 are implemented through commit `87dc57d`: byte-alphabet tokenizer coverage, schedule preservation, training observability and stability stops, artifact preflight, evaluation and summary artifacts, executable stage-gated Colab operations, progress documentation, and the course foundation through Video 1.
-- Gate 0 verification on 2026-07-19 observed 131 passing readiness tests, 156 passing tests in the effective workspace, and 151 passing tests from a clean archive of committed `HEAD`. The difference is five uncommitted user-side tests; it is recorded rather than folded into the branch claim.
+- Gate 0 verification on 2026-07-19 observed 136 passing readiness tests, 161 passing tests in the effective workspace, and 156 passing tests from a clean archive of committed `HEAD`. The difference is five uncommitted user-side tests; it is recorded rather than folded into the branch claim.
 - The verified Mini report contains 8,391,936 trainable parameters. Its unchanged schedule contains 32,768 tokens per optimizer update, 6,104 total steps, 122 warmup steps, and a 20-step smoke invocation stop.
 - Real Colab data preparation: not started. No TinyStories or BabyLM prepared artifacts have been inspected.
 - Real T4 training: not started. Smoke, pilot, full training, runtime evaluation, and runtime summaries remain unobserved.
