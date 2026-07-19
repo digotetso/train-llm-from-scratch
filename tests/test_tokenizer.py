@@ -4,7 +4,6 @@ from pathlib import Path
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
 
-
 SPECIAL_TOKENS = [
     "<|pad|>",
     "<|bos|>",
@@ -14,7 +13,6 @@ SPECIAL_TOKENS = [
     "<|assistant|>",
     "<|end|>",
 ]
-
 
 def write_corpus(path: Path) -> None:
     records = [

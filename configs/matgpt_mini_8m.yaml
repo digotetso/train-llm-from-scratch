@@ -15,10 +15,11 @@ tracking:
       - base-pretraining
 
 dataset:
-  hf_name: roneneldan/TinyStories
+  hf_name: roneneldan/TinyStories  # Name of the source dataset.
   hf_config: null
   revision: f54c09fd23315a6f9c86f9dc80f725de7d8f9c64
-  text_field: text
+  text_field: text   # The field containing the actual story text.
+  # Names of the training and validation collections.
   train_split: train
   validation_split: validation
   license: CDLA-Sharing-1.0
@@ -28,6 +29,12 @@ dataset:
   normalized_dir: matgpt/data/normalized/tinystories
   max_train_documents: null
   max_validation_documents: null
+  quality:
+    enabled: true   # Turn quality checking on.
+    min_chars: 20   # Reject documents containing fewer than 20 characters.
+    max_chars: null
+    exact_dedup: true
+    contamination_patterns_path: null
 
 tokenizer:
   vocab_size: 8192
@@ -42,6 +49,14 @@ tokenizer:
     - "<|user|>"
     - "<|assistant|>"
     - "<|end|>"
+
+# <|pad|>       -> fills unused positions when padding is needed
+# <|bos|>       -> beginning of a sequence
+# <|eos|>       -> end of a sequence or document
+# <|system|>    -> beginning of system instructions
+# <|user|>      -> beginning of a user message
+# <|assistant|> -> beginning of an assistant message
+# <|end|>       -> general structured-content ending marker
 
 sharding:
   output_dir: matgpt/data/shards/matgpt_mini_8m
@@ -77,23 +92,24 @@ training:
   beta2: 0.95
   grad_clip: 1.0
   warmup_ratio: 0.02
-  eval_interval_tokens: 1000000
+  eval_interval_tokens: 5000000
   eval_batches: 64
-  checkpoint_interval_tokens: 5000000
-  sample_interval_tokens: 1000000
+  checkpoint_interval_tokens: 10000000
+  sample_interval_tokens: 5000000
   log_interval_steps: 10
   max_consecutive_skipped_updates: 5
   save_best: true
   keep_milestones: true
+  allow_artifact_mismatch: false
   num_workers: 2
   pin_memory: true
 
 evaluation:
-  max_new_tokens: 120
-  temperature: 0.8
-  top_k: 50
-  top_p: 0.95
+  max_new_tokens: 120 # Let the model add up to 120 new tokens
+  temperature: 0.8 # controls how random the choices are
+  top_k: 50 # Limit choices to likely tokens
+  top_p: 0.95 # Another was to limit choices  to likely tokens
   prompts:
-    - "Once upon a time"
+    - "Once upon a time" # starting text for the model
     - "The little dog wanted to"
     - "Lily found a small box"

@@ -18,9 +18,9 @@ def main() -> None:
     parser.add_argument("--config", required=True, help="Path to MatGPT YAML config.")
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
-    set_seed(cfg["run"]["seed"])
-    manifest = prepare_hf_dataset(cfg)
+    cfg = load_config(args.config) # Read settings.
+    set_seed(cfg["run"]["seed"])  # Make preparation repeatable.
+    manifest = prepare_hf_dataset(cfg)  # Prepare the corpus.
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

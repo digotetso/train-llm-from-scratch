@@ -231,8 +231,12 @@ def _checkpoint_state(
     val_dataset: PackedTokenDataset,
 ) -> dict[str, Any]:
     checkpoint_state = dict(state)
+
     checkpoint_state["dataset_rng_state"] = {
+        # Save random sampling progress for training data.
         "train": train_dataset.get_rng_state(),
+
+        # Save random sampling progress for validation data.
         "validation": val_dataset.get_rng_state(),
     }
     return checkpoint_state
@@ -301,9 +305,13 @@ def run_pretraining(
 
     extra = {
         "git_commit": get_git_commit(),
+        # Fingerprint of the training configuration.
         "config_sha256": sha256_text(config_to_yaml(cfg)),
+        # Fingerprint of the tokenizer.
         "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
+        # Fingerprint representing the prepared dataset.
         "dataset_manifest_hash": _optional_file_hash(Path(cfg["dataset"]["normalized_dir"]) / "manifest.json"),
+        # Count of trainable parameters in the model.
         "parameter_count": count_parameters(model),
     }
 
@@ -391,15 +399,38 @@ def run_pretraining(
             state["global_step"] < schedule.stop_step
             and state["tokens_processed"] < cfg["training"]["max_tokens"]
         ):
+            # Put model in training mode.
+            # train_model.train()
+
+            # Clear old gradients.
+            # optimizer.zero_grad(set_to_none=True)
+
+            # Get x and y from the dataset.
+            # x, y = train_dataset.sample_batch(...)
+
+            # Model predicts next-token logits and computes loss.
+            # _, loss = train_model(x, targets=y)
+
+            # Compute gradients.
+            # loss.backward()
+
+            # Update parameters.
+            # optimizer.step()
+
             train_model.train()
             optimizer.zero_grad(set_to_none=True)
             step_loss = 0.0
+
+            # Decide the learning rate for this step.
             lr = learning_rate_at_step(cfg, schedule, state["global_step"])
+
+            # Tell the optimizer to use that learning rate.
             set_optimizer_lr(optimizer, lr)
 
             for _ in range(cfg["training"]["gradient_accumulation_steps"]):
                 x, y = train_dataset.sample_batch(cfg["training"]["micro_batch_size"], device)
                 with autocast_context(device, cfg["training"]["precision"]):
+                        # Autocast is active only here. inside `with`
                     _, loss = train_model(x, targets=y)
                     scaled_loss = loss / cfg["training"]["gradient_accumulation_steps"]
                 require_finite_loss(
@@ -411,11 +442,27 @@ def run_pretraining(
                 )
                 # Gradient accumulation simulates a larger batch than fits in T4
                 # memory. Dividing the loss keeps the final gradient scale correct.
+
+                # scaled_loss is the mistake score for this training step.
+                # backward() computes gradients.
+                # Gradients tell each parameter how it contributed to the loss.
+                # Enlarge the loss before backward.
                 scaler.scale(scaled_loss).backward()
                 step_loss += float(loss.detach().cpu()) / cfg["training"]["gradient_accumulation_steps"]
 
+            # Restore the gradients' real sizes after FP16 gradient scaling.
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["training"]["grad_clip"])
+
+            # Calculate the combined gradient norm.
+            # If it exceeds grad_clip, scale the gradients down.
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                # Parameters whose gradients should be examined.
+                model.parameters(),
+
+                # Maximum allowed combined gradient norm.
+                cfg["training"]["grad_clip"],
+            )
+
             step_result = step_optimizer_with_scaler(scaler, optimizer, optimizer_step_tracker)
 
             state["attempted_steps"] += 1
@@ -426,7 +473,6 @@ def run_pretraining(
             else:
                 state["optimizer_steps_skipped_total"] += 1
                 state["consecutive_optimizer_steps_skipped"] += 1
-
             invocation_elapsed = max(1e-6, time.time() - invocation_start_time)
             state["elapsed_seconds"] = elapsed_before_invocation + invocation_elapsed
             tokens_per_second = calculate_tokens_per_second(
@@ -444,19 +490,40 @@ def run_pretraining(
                 train_metrics = {
                     "event": "train",
                     "attempted_step": state["attempted_steps"],
+                    # Current optimizer-step counter.
                     "global_step": state["global_step"],
+
+                    # Total training token positions processed.
                     "tokens_processed": state["tokens_processed"],
+
+                    # Current training mistake score.
                     "train_loss": step_loss,
+
+                    # Current learning rate.
                     "lr": lr,
+
+                    # Combined gradient size before clipping reduced it.
                     "grad_norm": float(grad_norm.detach().cpu()),
+
                     "grad_scale": step_result.scale_after,
+
                     "optimizer_step_skipped": optimizer_step_skipped,
+
                     "optimizer_steps_skipped_total": state["optimizer_steps_skipped_total"],
+
                     "consecutive_optimizer_steps_skipped": state["consecutive_optimizer_steps_skipped"],
+
+                    # Processing speed.
                     "tokens_per_second": tokens_per_second,
+
+                    # Highest recorded CUDA memory use.
                     "peak_memory_mb": _peak_memory_mb(device),
+
                     "elapsed_seconds": state["elapsed_seconds"],
                 }
+
+                # It writes them to CSV:
+                # runs/<run-name>/metrics.csv
                 append_metric(metrics_path, train_metrics)
                 tracker.log(train_metrics, step=state["global_step"])
 
@@ -477,7 +544,7 @@ def run_pretraining(
             ):
                 val_loss = evaluate_loss(
                     model=train_model,
-                    dataset=val_dataset,
+                    dataset=val_dataset, # Use validation data, not training data.
                     batch_size=cfg["training"]["micro_batch_size"],
                     eval_batches=cfg["training"]["eval_batches"],
                     device=device,
@@ -486,18 +553,18 @@ def run_pretraining(
                 val_metrics = {
                     "event": "validation",
                     "attempted_step": state["attempted_steps"],
-                    "global_step": state["global_step"],
-                    "tokens_processed": state["tokens_processed"],
-                    "val_loss": val_loss,
-                    "val_perplexity": perplexity(val_loss),
-                    "lr": lr,
+                    "global_step": state["global_step"],      # Which training step we are at.
+                    "tokens_processed": state["tokens_processed"],  # How many tokens trained on.
+                    "val_loss": val_loss,                     # Mistake score on validation data.
+                    "val_perplexity": perplexity(val_loss),   # Confusion score from validation loss.
+                    "lr": lr,                                 # Current learning rate.
                     "peak_memory_mb": _peak_memory_mb(device),
                     "elapsed_seconds": state["elapsed_seconds"],
-                }
+    }
                 append_metric(metrics_path, val_metrics)
                 tracker.log(val_metrics, step=state["global_step"])
-                if val_loss < state["best_val_loss"]:
-                    state["best_val_loss"] = val_loss
+                if val_loss < state["best_val_loss"]: # Is this the best validation loss so far?
+                    state["best_val_loss"] = val_loss  # Remember the new best score.
                     if cfg["training"]["save_best"]:
                         save_checkpoint(
                             checkpoint_dir / "best.pt",
@@ -514,17 +581,20 @@ def run_pretraining(
                 cfg["training"]["sample_interval_tokens"],
                 schedule.tokens_per_step,
             ):
+                # If enough training tokens have passed, generate sample text.
                 samples = generate_samples(
-                    model=train_model,
-                    tokenizer=tokenizer,
-                    prompts=cfg["evaluation"]["prompts"],
+                    model=train_model,                         # The model being trained.
+                    tokenizer=tokenizer,                       # Converts text <-> token IDs.
+                    prompts=cfg["evaluation"]["prompts"],      # Starting texts from config.
                     max_new_tokens=cfg["evaluation"]["max_new_tokens"],
-                    eos_id=eos_id,
+                    eos_id=eos_id,                             # Stop if end token appears.
                     temperature=cfg["evaluation"]["temperature"],
                     top_k=cfg["evaluation"]["top_k"],
                     top_p=cfg["evaluation"]["top_p"],
                     device=device,
                 )
+
+                # Save the generated text to a samples JSON file.
                 _write_samples(sample_dir / f"samples_{state['tokens_processed']:012d}.json", samples, dict(state))
                 tracker.log({"sample_text": samples[0]["text"] if samples else ""}, step=state["global_step"])
 

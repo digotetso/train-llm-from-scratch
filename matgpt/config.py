@@ -45,6 +45,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     sharding = cfg["sharding"]
     training = cfg["training"]
 
+    # Technical rule: d_model must be divisible by n_heads
     if model["d_model"] % model["n_heads"] != 0:
         raise ValueError("d_model must be divisible by n_heads")
     if model["vocab_size"] != tokenizer["vocab_size"]:

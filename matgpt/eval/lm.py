@@ -9,6 +9,8 @@ from matgpt.model.generation import generate
 from matgpt.training.amp import autocast_context
 
 
+# This function checks model loss on a dataset.
+# Usually this dataset is the validation dataset.
 @torch.no_grad()
 def evaluate_loss(
     model,
@@ -19,23 +21,31 @@ def evaluate_loss(
     precision: str,
 ) -> float:
     was_training = model.training
+
+    # model.eval() -> Put the model in evaluation mode
+    # We are checking it, not training it.
     model.eval()
     losses = []
     for _ in range(eval_batches):
+        # Get validation examples f
         x, y = dataset.sample_batch(batch_size, device)
         with autocast_context(device, precision):
+            # Ask the model to predict & compute mistake score
             _, loss = model(x, targets=y)
         losses.append(float(loss.detach().cpu()))
     if was_training:
-        model.train()
+        model.train() # Put model back into training mode afterward.
+    # Return --> Average the losses from several validation batches.
     return sum(losses) / max(1, len(losses))
 
 
 def perplexity(loss: float) -> float:
+    # Convert loss into perplexity.
+    # min(loss, 50.0) prevents the number from becoming too huge.
     return math.exp(min(loss, 50.0))
 
 
-@torch.no_grad()
+@torch.no_grad()  # Do not train or compute gradients during evaluation.
 def generate_samples(
     model,
     tokenizer,

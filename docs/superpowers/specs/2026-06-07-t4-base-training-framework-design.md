@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a production-quality validation framework for training MatGPT-Mini 8M on TinyStories and MatGPT-Tiny 46M on BabyLM-2026-Strict from random weights on a Google Colab T4. The framework prioritizes the best achievable model quality at these sizes: careful corpus handling, strong tokenizer validation, packed token streams, stable optimization, robust checkpoint resume, and honest evaluation.
+Build a production-quality validation framework for training MatGPT-Mini 8M on TinyStories and MatGPT-Tiny 59M on BabyLM-2026-Strict from random weights on a Google Colab T4. The framework prioritizes the best achievable model quality at these sizes: careful corpus handling, strong tokenizer validation, packed token streams, stable optimization, robust checkpoint resume, and honest evaluation.
 
 ## Scope
 
@@ -11,7 +11,7 @@ The first implementation covers base pretraining only. It creates extension poin
 In scope:
 
 - Repository scaffold under `matgpt/`, `scripts/`, `configs/`, and `tests/`.
-- T4-ready configs for `matgpt_mini_8m` and `matgpt_tiny_46m`.
+- T4-ready configs for `matgpt_mini_8m` and `matgpt_tiny_59m`.
 - Dataset acquisition through Hugging Face `datasets`.
 - Deterministic normalization, manifesting, official split preservation, and optional capped token/document sampling for smoke tests.
 - Tokenizer training and validation with reserved special tokens.
@@ -26,7 +26,7 @@ Out of scope for this pass:
 - SFT, DPO, ORPO, PPO, RLHF, and Gradio UI.
 - Distributed training.
 - Custom CUDA kernels.
-- Claims that the resulting 46M model is competitive with large pretrained assistants.
+- Claims that the resulting 59M model is competitive with large pretrained assistants.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ The framework is an importable Python package plus thin CLI scripts:
 ```text
 configs/
   matgpt_mini_8m.yaml
-  matgpt_tiny_46m.yaml
+  matgpt_tiny_59m.yaml
 matgpt/
   config.py
   utils/
@@ -67,7 +67,7 @@ HF dataset
 
 ## Quality Decisions
 
-Use official dataset splits when present. TinyStories and BabyLM are baseline corpora, so the framework preserves official splits rather than applying aggressive custom filters. Custom normalization removes only encoding/control-character noise and normalizes Unicode to NFKC.
+Use official dataset splits when present. TinyStories and BabyLM are baseline corpora, so the framework preserves official splits and applies conservative quality filters: minimum length, exact deduplication, and optional benchmark-contamination phrase checks. Custom normalization removes only encoding/control-character noise and normalizes Unicode to NFKC.
 
 Train tokenizers only on training documents. This avoids validation leakage and makes tokenizer reports meaningful.
 
@@ -80,6 +80,8 @@ Optimize for T4 stability. The loop uses FP16 autocast with GradScaler, gradient
 Use strong small-model architecture defaults. RMSNorm, RoPE, SwiGLU, tied embeddings, and PyTorch scaled-dot-product attention are included because they improve stability and quality without turning the code into a research framework.
 
 Use honest evaluation. Primary metrics are train loss, validation loss, perplexity, token throughput, gradient norm, peak memory, and fixed prompt generations. Qualitative samples are tracked at milestones, but not over-claimed.
+
+Use task probes as regression tests. Local multiple-choice JSONL evals complement validation loss so architecture, data, and hyperparameter changes can be compared on behavior, not only next-token loss.
 
 ## Configs
 
@@ -96,7 +98,7 @@ Use honest evaluation. Primary metrics are train loss, validation loss, perplexi
 - FP16
 - Initial run target: configurable, default smoke target kept small for local testing and overridden in Colab to 50M-100M tokens
 
-`matgpt_tiny_46m.yaml`:
+`matgpt_tiny_59m.yaml`:
 
 - Dataset: `BabyLM-community/BabyLM-2026-Strict`
 - Vocab: 16,384
@@ -107,7 +109,7 @@ Use honest evaluation. Primary metrics are train loss, validation loss, perplexi
 - Context: 512
 - Peak LR: 3e-4
 - FP16
-- Initial serious target: 100M tokens
+- Initial serious target: 1B tokens
 - Optional 8-bit AdamW when bitsandbytes is installed
 
 ## Checkpoint Contract
@@ -122,11 +124,14 @@ Each full checkpoint stores:
 - tokens processed
 - best validation loss
 - RNG states for Python, NumPy, CPU torch, and CUDA torch
+- packed-shard dataset sampler RNG state
 - config snapshot
 - tokenizer hash
 - dataset manifest hash
 - source commit hash if git is available
 - latest validation metrics and sample generations
+
+Resume validates the current config hash, tokenizer hash, and dataset manifest hash against the checkpoint metadata unless explicitly overridden.
 
 The framework keeps:
 
@@ -164,4 +169,4 @@ Small models can collapse with poor sampling or overly high learning rates. Conf
 
 ## Approval State
 
-The user approved the full-framework direction on 2026-06-07 and emphasized that all decisions should optimize for the best possible results from the 8M and 46M T4 models, not toy examples.
+The user approved the full-framework direction on 2026-06-07 and emphasized that all decisions should optimize for the best possible results from the 8M and 59M T4 models, not toy examples.

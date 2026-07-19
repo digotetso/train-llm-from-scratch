@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a full-quality T4 base-pretraining framework for MatGPT-Mini 8M on TinyStories and MatGPT-Tiny 46M on BabyLM-2026-Strict.
+**Goal:** Build a full-quality T4 base-pretraining framework for MatGPT-Mini 8M on TinyStories and MatGPT-Tiny 59M on BabyLM-2026-Strict.
 
 **Architecture:** Create an importable `matgpt` package with focused modules for config, data preparation, tokenization, sharding, model definition, training, checkpoints, generation, and evaluation. CLI scripts stay thin and delegate to package functions. Tests use local synthetic fixtures so core behavior is verifiable without internet access.
 
@@ -16,13 +16,13 @@
 - Create: `pyproject.toml`
 - Create: `README.md`
 - Create: `configs/matgpt_mini_8m.yaml`
-- Create: `configs/matgpt_tiny_46m.yaml`
+- Create: `configs/matgpt_tiny_59m.yaml`
 - Create: `matgpt/__init__.py`
 - Create: package subdirectory `__init__.py` files
 
 - [ ] Create dependency metadata with runtime and test dependencies.
 - [ ] Add model and training configs matching the approved design.
-- [ ] Add a concise README with the 8M and 46M command sequence.
+- [ ] Add a concise README with the 8M and 59M command sequence.
 - [ ] Verify config files load as YAML.
 
 ### Task 2: Config and Utility Modules
@@ -130,7 +130,7 @@
 
 - [ ] Run `pytest`.
 - [ ] Run any import/config smoke commands possible without network.
-- [ ] Document Colab command sequence for 8M and 46M.
+- [ ] Document Colab command sequence for 8M and 59M.
 - [ ] Report any commands that could not run locally because datasets require network access.
 
 ## Self-Review

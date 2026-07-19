@@ -11,10 +11,14 @@ import torch
 
 def capture_rng_state() -> dict[str, Any]:
     state: dict[str, Any] = {
+        # Save Python RNG's current position.
         "python": random.getstate(),
+        # Save NumPy RNG's current position.
         "numpy": np.random.get_state(),
+        # Save PyTorch CPU RNG's current position.
         "torch_cpu": torch.get_rng_state(),
     }
+    # Save GPU RNG state when a GPU is being used.
     if torch.cuda.is_available():
         state["torch_cuda"] = torch.cuda.get_rng_state_all()
     return state

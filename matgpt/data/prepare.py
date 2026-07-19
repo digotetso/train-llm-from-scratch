@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from matgpt.data.normalize import normalize_text
+from matgpt.data.quality import DataQualityPolicy, QualityFilter
 from matgpt.utils.hashing import sha256_json, sha256_text
 
 
@@ -37,15 +38,27 @@ def make_document_record(
     text: str,
     source_id: str | int | None = None,
 ) -> dict[str, Any]:
+    # Clean and standardize the document text.
     normalized = normalize_text(text)
+
+    # Choose an identifier for this source document.
     source = str(source_id) if source_id is not None else str(index)
     return {
+        # Unique name for this document.
         "id": f"{dataset_name}/{split}/{source}",
+
+        # Dataset from which the document came.
         "dataset": dataset_name,
+
+        # Whether this is training or validation data.
         "split": split,
         "source_id": source,
+
+        # The cleaned text used later in the pipeline.
         "text": normalized,
         "text_sha256": sha256_text(normalized),
+
+        # Number of characters in the cleaned text.
         "num_chars": len(normalized),
     }
 
@@ -90,7 +103,11 @@ def assign_hash_split(record: dict[str, Any], validation_fraction: float) -> str
 
     if validation_fraction <= 0.0:
         return "train"
+    # Convert part of the document hash into a number from 0 to 1.
     value = int(record["text_sha256"][:16], 16) / float(16**16 - 1)
+
+    # Small values go to validation.
+    # Everything else goes to training.
     return "validation" if value < validation_fraction else "train"
 
 
@@ -102,10 +119,19 @@ def write_jsonl_records(path: str | Path, records: Iterable[dict[str, Any]]) -> 
     total_chars = 0
     documents_digest = hashlib.sha256()
 
+    # open the output file for writing in text mode with UTF-8 encoding
     with out.open("w", encoding="utf-8") as f:
+
+        # process one document record at a time
         for record in records:
+
+            # convert the python dictionary to a JSON string with sorted keys and no ASCII escaping
             line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+            # write the JSON string to the file followed by a newline
             f.write(line + "\n")
+
+            # count the document that was just written
             document_count += 1
             encoded = line.encode("utf-8")
             raw_bytes += len(encoded) + 1
@@ -196,17 +222,36 @@ def write_manifest(
     language: str,
     split_stats: dict[str, Any],
     notes: str,
+    quality_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     manifest = {
+        # creates manifest.json
         "dataset_name": dataset_name,
+
+        # Which dataset version was used?
         "version_or_commit": version_or_commit or "unknown",
+
+        # What rules allow this dataset to be used?
         "license": license_name,
+
+        # What kind of training is it intended for?
         "stage": stage,
+
+        # What language does it contain?
         "language": language,
         "download_date": datetime.now(timezone.utc).date().isoformat(),
+
+        # Information about training and validation files.
         "split_stats": split_stats,
         "notes": notes,
     }
+
+    # The quality-filter report is added:
+    if quality_report is not None:
+        manifest["quality_filter"] = quality_report
+
+    # Finally, the manifest receives its own fingerprint:
+    # This fingerprint helps checkpoints detect whether the prepared dataset information changed.
     manifest["manifest_sha256"] = sha256_json(manifest)
 
     out = Path(path)
@@ -226,6 +271,7 @@ def prepare_hf_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
     ds_cfg = cfg["dataset"]
     normalized_dir = Path(ds_cfg["normalized_dir"])
     normalized_dir.mkdir(parents=True, exist_ok=True)
+    quality_filter = QualityFilter(DataQualityPolicy.from_dataset_config(ds_cfg))
 
     dataset_kwargs: dict[str, Any] = {}
     if ds_cfg.get("hf_config"):
@@ -251,6 +297,7 @@ def prepare_hf_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
                 text_field=text_field,
                 max_documents=max_docs,
             )
+            records = quality_filter.filter(records)
             path = normalized_dir / f"{split}.jsonl"
             split_stats[split] = write_jsonl_records(path, records)
             split_stats[split]["text_field"] = text_field
@@ -272,6 +319,7 @@ def prepare_hf_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
             text_field=text_field,
             max_documents=None,
         )
+        records = quality_filter.filter(records)
         train_stats, val_stats = write_hash_split_jsonl_records(
             train_path=train_path,
             validation_path=val_path,
@@ -290,6 +338,7 @@ def prepare_hf_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
         split_stats[validation_split]["generated_from_split"] = train_split
         split_stats[validation_split]["validation_fraction"] = validation_fraction
 
+# creates manifest.json
     return write_manifest(
         normalized_dir / "manifest.json",
         dataset_name=ds_cfg["hf_name"],
@@ -299,4 +348,5 @@ def prepare_hf_dataset(cfg: dict[str, Any]) -> dict[str, Any]:
         language=ds_cfg["language"],
         split_stats=split_stats,
         notes=f"Prepared from Hugging Face dataset {ds_cfg['hf_name']}.",
+        quality_report=quality_filter.report(),
     )

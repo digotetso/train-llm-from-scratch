@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "matgpt-training"
 version = "0.1.0"
-description = "T4-oriented base-pretraining framework for MatGPT 8M and 46M models."
+description = "T4-oriented base-pretraining framework for MatGPT 8M and 59M models."
 requires-python = ">=3.10"
 dependencies = [
   "datasets>=2.19.0",

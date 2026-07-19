@@ -58,7 +58,10 @@ def tokenize_jsonl_to_shards(
 
     tokenizer = load_tokenizer(tokenizer_dir)
     tokenizer_metadata = load_tokenizer_metadata(tokenizer_dir)
+
+    # Find the EOS token's ID.
     eos_id = tokenizer.token_to_id("<|eos|>")
+
     if append_eos and eos_id is None:
         raise ValueError("Tokenizer must define <|eos|> when append_eos is true.")
     if dtype == "uint16" and tokenizer.get_vocab_size() > 65535:
@@ -71,21 +74,40 @@ def tokenize_jsonl_to_shards(
     total_documents = 0
 
     with Path(input_path).open("r", encoding="utf-8") as f:
+        # Read one prepared JSONL record at a time.
         for line in f:
             if not line.strip():
                 continue
             record = json.loads(line)
+
+            # Take the text.
+            # Split it into tokens.
+            # Convert those tokens into token IDs.
+            # Store the result in ids.
             ids = tokenizer.encode(record["text"]).ids
+
+            # Add EOS after every document.
+            # Mark the end of the document.
             if append_eos:
                 ids.append(eos_id)
+
             total_documents += 1
+
+            # Add each ID to the current shard.
+            # The list is not cleared after each document. It is cleared only when the current shard becomes full.
+            # Those IDs are appended to the same shard list:
             for token_id in ids:
                 shard_tokens.append(int(token_id))
                 total_tokens += 1
-                if len(shard_tokens) >= shard_size_tokens:
-                    shards.append(_flush_shard(shard_tokens, out, split, len(shards), dtype))
-                    shard_tokens = []
 
+                # Has the shard reached its requested size?
+                if len(shard_tokens) >= shard_size_tokens:
+                    # Write this shard to disk.
+                    shards.append(_flush_shard(shard_tokens, out, split, len(shards), dtype))
+
+                    # Start collecting the next shard.
+                    shard_tokens = []
+    #  After all documents are processed, the remaining partial shard is also saved:
     if shard_tokens:
         shards.append(_flush_shard(shard_tokens, out, split, len(shards), dtype))
 

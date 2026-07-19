@@ -51,6 +51,8 @@ def generate(
             next_logits = next_logits / temperature
             next_logits = _apply_top_k(next_logits, top_k)
             next_logits = _apply_top_p(next_logits, top_p)
+
+
             probs = F.softmax(next_logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
         input_ids = torch.cat((input_ids, next_id), dim=1)

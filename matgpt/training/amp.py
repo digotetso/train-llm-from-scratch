@@ -7,16 +7,27 @@ import torch
 
 
 def autocast_context(device: torch.device, precision: str):
+
+    #  If training is not using a CUDA GPU,
+    # do not enable CUDA's automatic precision selection.
     if device.type != "cuda":
         return nullcontext()
+
+    # If the configuration requests fp16,
+    # let PyTorch use FP16 for suitable CUDA calculations.
     if precision == "fp16":
         return torch.autocast(device_type="cuda", dtype=torch.float16)
+
+    # Use BF16 autocasting when requested.
     if precision == "bf16":
         return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     return nullcontext()
 
 
 def make_grad_scaler(device: torch.device, precision: str):
+    # The repo enables GradScaler only for FP16
+    # It does not enable it for BF16.
+    # BF16’s much wider numerical range makes gradient overflow and underflow less likely, so BF16 training commonly does not require gradient scaling.
     enabled = device.type == "cuda" and precision == "fp16"
     try:
         return torch.amp.GradScaler("cuda", enabled=enabled)

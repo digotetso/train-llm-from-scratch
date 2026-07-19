@@ -5,7 +5,24 @@ This repository contains the base-pretraining framework for validating the MatGP
 - `MatGPT-Mini 8M` on `roneneldan/TinyStories`
 - `MatGPT-Tiny 59M` on `BabyLM-community/BabyLM-2026-Strict`
 
-The goal is not a toy training loop. The framework is built around quality-critical small-model decisions: deterministic data preparation, training-tokenizer-only fitting, packed token streams, FP16 T4 training, gradient accumulation, warmup/cosine scheduling, checkpoint resume, validation loss, perplexity, and fixed prompt samples.
+The goal is not a toy training loop. The framework is built around quality-critical small-model decisions: deterministic data preparation, exact deduplication and contamination hooks, training-tokenizer-only fitting, packed token streams, FP16 T4 training, gradient accumulation, warmup/cosine scheduling, checkpoint resume, validation loss, perplexity, task evaluation, and fixed prompt samples.
+
+## Big-Lab Discipline In This Repo
+
+The repo cannot copy big-lab compute, but it now copies more of the training discipline:
+
+- data quality filtering is configured under `dataset.quality`;
+- checkpoints refuse unsafe resumes when the config, tokenizer, or data manifest hash changes;
+- dataset sampler RNG state is saved so interrupted runs can resume deterministically;
+- model size labels can be checked against actual parameter counts;
+- full-run token targets are larger than the original smoke-oriented defaults;
+- local multiple-choice JSONL tasks can be evaluated alongside validation loss.
+
+Before a serious run, inspect the model size:
+
+```bash
+python scripts/model_report.py --config configs/matgpt_tiny_59m.yaml
+```
 
 ## Install
 
@@ -80,6 +97,7 @@ After an approved run, use the runbook `evaluate` stage for checkpoint evaluatio
 Each run writes:
 
 - normalized JSONL files and corpus manifest
+- data-quality filter counts in the corpus manifest
 - tokenizer artifacts and tokenizer report
 - packed binary token shards and metadata
 - persisted `preflight.json` and `benchmark.json` gate evidence
@@ -96,4 +114,4 @@ The test suite uses synthetic local fixtures and does not download datasets:
 pytest
 ```
 
-Current coverage includes config validation, normalization, tokenizer round trip, sharding, GPT forward/causality, checkpoint equivalence, batch sampling, optimizer setup, and tiny fixed-batch overfit.
+Current coverage includes config validation, normalization, data-quality filtering, tokenizer round trip, sharding, GPT forward/causality, checkpoint equivalence, deterministic batch sampling resume, optimizer setup, task eval scoring, model-size reporting, and tiny fixed-batch overfit.
