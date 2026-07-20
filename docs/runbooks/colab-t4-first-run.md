@@ -8,8 +8,7 @@ beginner operating the stage-gated base-pretraining workflow on Google Colab.
 A real TinyStories preparation and T4 preflight completed on 2026-07-19. The
 persisted preflight report passed all ten checks, including prepared-artifact
 integrity, an observed Tesla T4, 8,391,936 parameters, 32,768 tokens per
-optimizer update, and 6,104 scheduled steps. No smoke, pilot, or full training
-run has started.
+optimizer update, and 6,104 scheduled steps.
 
 The first benchmark report recorded finite loss, gradient norm, and memory, but
 its throughput was rejected because the timer stopped before synchronizing
@@ -20,7 +19,16 @@ stopping the timer. Its replacement report passed on 2026-07-19. At the
 configured micro-batch size of 16 it observed loss `9.0535`, gradient norm
 `0.7336`, throughput about `99,961` tokens/second, and peak allocated memory
 about `919.9` MiB (`6.17%` of reported T4 memory). Smoke training was approved
-from this replacement evidence; the smoke run itself remains unobserved.
+from this replacement evidence.
+
+The smoke and resume check passed on 2026-07-20. The first invocation reached
+exact step 20 with 655,360 processed tokens; the resumed invocation reached
+exact step 25 with 819,200 processed tokens. Logged training loss fell from
+`8.8405` at step 10 to `8.3794` at step 20, throughput remained near
+`97k-100k` tokens/second, peak allocated memory was about `951.9` MiB, FP16
+gradient scale remained `65,536`, and no optimizer update was skipped. Logged
+gradient norms `2.4192` and `1.8880` are pre-clip values; the configured norm
+limit remained `1.0`. Pilot training is approved but remains unobserved.
 
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
