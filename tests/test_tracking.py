@@ -1,4 +1,5 @@
 import csv
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,3 +99,49 @@ def test_run_artifact_preflight_is_read_only_on_conflict(tmp_path: Path):
 
     after = {name: Path(path).read_text(encoding="utf-8") for name, path in paths.items()}
     assert after == before
+
+
+def test_run_artifacts_allow_new_provenance_commit_without_rewriting_origin(tmp_path: Path):
+    cfg = {"run": {"name": "unit"}}
+    original = {
+        "config_sha256": "config",
+        "tokenizer_sha256": "tokenizer",
+        "dataset_manifest_hash": "dataset",
+        "git_commit": "original-commit",
+        "parameter_count": 10,
+    }
+    paths = write_run_artifacts(tmp_path, cfg, original, torch.device("cpu"))
+    resumed = {**original, "git_commit": "documentation-only-commit"}
+
+    validate_run_artifacts(tmp_path, cfg, resumed)
+    write_run_artifacts(tmp_path, cfg, resumed, torch.device("cpu"))
+
+    stored = json.loads(Path(paths["fingerprints"]).read_text(encoding="utf-8"))
+    assert stored["git_commit"] == "original-commit"
+
+
+@pytest.mark.parametrize(
+    ("field", "new_value"),
+    [
+        ("config_sha256", "changed-config"),
+        ("tokenizer_sha256", "changed-tokenizer"),
+        ("dataset_manifest_hash", "changed-dataset"),
+        ("parameter_count", 11),
+    ],
+)
+def test_run_artifacts_reject_training_identity_mismatch(
+    tmp_path: Path, field: str, new_value
+):
+    cfg = {"run": {"name": "unit"}}
+    original = {
+        "config_sha256": "config",
+        "tokenizer_sha256": "tokenizer",
+        "dataset_manifest_hash": "dataset",
+        "git_commit": "original-commit",
+        "parameter_count": 10,
+    }
+    write_run_artifacts(tmp_path, cfg, original, torch.device("cpu"))
+    incompatible = {**original, field: new_value}
+
+    with pytest.raises(ValueError, match=field):
+        validate_run_artifacts(tmp_path, cfg, incompatible)

@@ -30,6 +30,17 @@ gradient scale remained `65,536`, and no optimizer update was skipped. Logged
 gradient norms `2.4192` and `1.8880` are pre-clip values; the configured norm
 limit remained `1.0`. Pilot training is approved but remains unobserved.
 
+The first pilot command stopped before checkpoint state was applied because
+`fingerprints.json` compared its original `git_commit` with a newer
+documentation commit byte-for-byte. The run's configuration, tokenizer,
+dataset, and parameter count were unchanged, and `latest.pt` remained at step
+25. Fingerprint validation now treats those four fields as the training
+identity while preserving the original commit as provenance. A changed commit
+does not overwrite that origin record; checkpoint metadata records the commit
+used when each later checkpoint is saved. Operators must still review code
+changes between stages. The changes that triggered this recovery were
+documentation and run-validation fixes, not model or optimizer math.
+
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
 `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; 59M pins

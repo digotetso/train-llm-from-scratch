@@ -40,10 +40,6 @@ def _write_json_if_missing(path: Path, payload: dict[str, Any]) -> None:
         _atomic_write_text(path, _json_text(payload))
 
 
-def _write_json_if_missing_or_equal(path: Path, payload: dict[str, Any], label: str) -> None:
-    _write_if_missing_or_equal(path, _json_text(payload), label)
-
-
 def _fingerprints(extra: dict[str, Any]) -> dict[str, Any]:
     return {
         "config_sha256": extra["config_sha256"],
@@ -52,6 +48,36 @@ def _fingerprints(extra: dict[str, Any]) -> dict[str, Any]:
         "git_commit": extra["git_commit"],
         "parameter_count": extra["parameter_count"],
     }
+
+
+_TRAINING_IDENTITY_FIELDS = (
+    "config_sha256",
+    "tokenizer_sha256",
+    "dataset_manifest_hash",
+    "parameter_count",
+)
+
+
+def _validate_fingerprints_if_exists(
+    path: Path,
+    expected: dict[str, Any],
+) -> None:
+    if not path.exists():
+        return
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Existing fingerprints are invalid JSON: {path}") from exc
+    if not isinstance(stored, dict):
+        raise ValueError(f"Existing fingerprints must contain a JSON object: {path}")
+    for field in (*_TRAINING_IDENTITY_FIELDS, "git_commit"):
+        if field not in stored:
+            raise ValueError(f"Existing fingerprints are missing {field}: {path}")
+    for field in _TRAINING_IDENTITY_FIELDS:
+        if stored[field] != expected[field]:
+            raise ValueError(
+                f"Existing fingerprints {field} conflicts with the current run: {path}"
+            )
 
 
 def validate_run_artifacts(
@@ -65,10 +91,9 @@ def validate_run_artifacts(
         config_to_yaml(cfg),
         "configuration snapshot",
     )
-    _validate_if_exists(
+    _validate_fingerprints_if_exists(
         run_dir / "fingerprints.json",
-        _json_text(_fingerprints(extra)),
-        "fingerprints",
+        _fingerprints(extra),
     )
 
 
@@ -93,7 +118,7 @@ def write_run_artifacts(
     }
     _write_json_if_missing(run_dir / "environment.json", environment)
     fingerprints = _fingerprints(extra)
-    _write_json_if_missing_or_equal(run_dir / "fingerprints.json", fingerprints, "fingerprints")
+    _write_json_if_missing(run_dir / "fingerprints.json", fingerprints)
     return {
         "config": str(run_dir / "config.snapshot.yaml"),
         "environment": str(run_dir / "environment.json"),
