@@ -49,9 +49,9 @@ validation perplexity reached `18.96`. Logged training loss declined from
 at `65,536`, no optimizer update was skipped, peak allocated memory stayed
 flat at about `951.9` MiB, and cumulative throughput remained near
 `90k-100k` tokens/second after startup and evaluation overhead. The saved
-notebook contained no error output. These results approve the `evaluate`
-stage; full training remains unapproved until evaluation artifacts, resume
-verification, samples, and the generated run summary are reviewed.
+notebook contained no error output. These results approved the `evaluate`
+stage; full training remained unapproved until evaluation artifacts, resume
+verification, samples, and the generated run summary were reviewed.
 
 The pilot `evaluate` stage then loaded both checkpoints successfully. It
 measured standalone validation loss `2.9459` and perplexity `19.03`, while
@@ -61,8 +61,12 @@ samples were story-like but imperfect. The first comparison used stochastic
 generation without resetting an evaluation seed, so differences between the
 two sample sets were not a fair checkpoint comparison. The evaluation CLI now
 resets the configured run seed before each checkpoint and records
-`evaluation_seed` in its JSON. Rerun `evaluate` with this revision and review
-the replacement `best.json` and `latest.json` before approving `full`.
+`evaluation_seed` in its JSON. The corrected artifacts both recorded seed `42`
+and matched exactly in validation loss (`2.9459`), perplexity (`19.03`), and all
+three generated samples. The resume evidence remained complete and healthy.
+Promotion to `full` was approved on 2026-07-20. Starting at step 306, the full
+stage has 5,798 successful updates and 189,988,864 token positions remaining
+before the required stop at exact step 6,104.
 
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
