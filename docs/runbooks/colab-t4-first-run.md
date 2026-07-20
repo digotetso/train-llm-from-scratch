@@ -28,7 +28,7 @@ exact step 25 with 819,200 processed tokens. Logged training loss fell from
 `97k-100k` tokens/second, peak allocated memory was about `951.9` MiB, FP16
 gradient scale remained `65,536`, and no optimizer update was skipped. Logged
 gradient norms `2.4192` and `1.8880` are pre-clip values; the configured norm
-limit remained `1.0`. Pilot training is approved but remains unobserved.
+limit remained `1.0`. This evidence approved the later pilot stage.
 
 The first pilot command stopped before checkpoint state was applied because
 `fingerprints.json` compared its original `git_commit` with a newer
@@ -68,13 +68,34 @@ Promotion to `full` was approved on 2026-07-20. Starting at step 306, the full
 stage has 5,798 successful updates and 189,988,864 token positions remaining
 before the required stop at exact step 6,104.
 
+The full stage passed on 2026-07-20 at exact step 6,104 with 200,015,872
+processed token positions. Its saved notebook had 13 sequentially executed
+code cells and no error outputs. The 651 metric rows were unique, finite, and
+monotonic; every recorded token count equaled `global_step * 32,768`. Training
+loss reached `1.6116`, final validation loss was `1.7085`, and the lowest
+training-time validation observation was `1.6953` at step 5,188. No optimizer
+update was skipped, peak allocated memory remained `951.9` MiB, and cumulative
+tracked training time was `2,381.3` seconds.
+
+Final fixed-seed evaluation loaded both checkpoints successfully and complete
+resume verification restored step 6,104 without taking an update. With seed
+`42`, `latest.pt` measured validation loss `1.7152` and perplexity `5.56`, while
+`best.pt` measured loss `1.7315` and perplexity `5.65`. The final samples were
+substantially more coherent than the pilot samples, with some repetition and
+semantic inconsistency remaining. `latest.pt` is the selected final model: it
+won the fair same-batch standalone comparison by about `0.94%` in loss.
+`best.pt` records the checkpoint that obtained the lowest periodic
+training-time result on a different randomly sampled validation window. Future
+runs should use a fixed validation sample or a larger deterministic sweep for
+checkpoint selection.
+
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
 `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; 59M pins
 `BabyLM-community/BabyLM-2026-Strict` at
 `9e57baaaa91ac3c638746be14d1d5fa6c789f4cf`. The repository SHAs are verified;
-an actual authenticated dataset download and preparation remain Colab runtime
-gates.
+the TinyStories download and preparation are verified by this run, while an
+authenticated BabyLM download and preparation remain future Colab gates.
 
 The Mini configuration has a fixed 200M-token target. Its configured batch math
 is 32,768 tokens per successful optimizer update and 6,104 full-schedule steps.
