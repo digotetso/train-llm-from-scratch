@@ -41,6 +41,18 @@ used when each later checkpoint is saved. Operators must still review code
 changes between stages. The changes that triggered this recovery were
 documentation and run-validation fixes, not model or optimizer math.
 
+The pilot rerun passed on 2026-07-20 at exact step 306 with 10,027,008
+processed tokens. Validation loss improved from the step-zero baseline
+`9.0790` to `3.7332` near five million tokens and `2.9422` at the pilot stop;
+validation perplexity reached `18.96`. Logged training loss declined from
+`8.8405` at step 10 to roughly `3.0` near the stop. FP16 gradient scale stayed
+at `65,536`, no optimizer update was skipped, peak allocated memory stayed
+flat at about `951.9` MiB, and cumulative throughput remained near
+`90k-100k` tokens/second after startup and evaluation overhead. The saved
+notebook contained no error output. These results approve the `evaluate`
+stage; full training remains unapproved until evaluation artifacts, resume
+verification, samples, and the generated run summary are reviewed.
+
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
 `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; 59M pins
