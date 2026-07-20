@@ -53,6 +53,17 @@ notebook contained no error output. These results approve the `evaluate`
 stage; full training remains unapproved until evaluation artifacts, resume
 verification, samples, and the generated run summary are reviewed.
 
+The pilot `evaluate` stage then loaded both checkpoints successfully. It
+measured standalone validation loss `2.9459` and perplexity `19.03`, while
+read-only resume verification confirmed step 306, 10,027,008 processed tokens,
+zero skipped optimizer updates, and the unchanged 6,104-step schedule. The
+samples were story-like but imperfect. The first comparison used stochastic
+generation without resetting an evaluation seed, so differences between the
+two sample sets were not a fair checkpoint comparison. The evaluation CLI now
+resets the configured run seed before each checkpoint and records
+`evaluation_seed` in its JSON. Rerun `evaluate` with this revision and review
+the replacement `best.json` and `latest.json` before approving `full`.
+
 Dataset provenance was checked against official Hugging Face repository
 metadata on 2026-07-19. Mini pins `roneneldan/TinyStories` at
 `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`; 59M pins
@@ -159,8 +170,10 @@ active training. Do not move the local root between sessions.
    approximately 10M configured Mini tokens.
 4. Select `RUN_STAGE = "evaluate"`. Both `latest.pt` and `best.pt` are required.
    The notebook evaluates both and verifies complete `latest.pt` resume state
-   without taking an optimizer update. Review all gate evidence with the user
-   and Codex. Step 306 alone is not approval.
+   without taking an optimizer update. Each evaluation artifact must record the
+   configured `evaluation_seed`, and both checkpoints must be evaluated with
+   that same seed. Review all gate evidence with the user and Codex. Step 306
+   alone is not approval.
 5. Only after explicit approval, manually select `RUN_STAGE = "full"`. The
    notebook never changes this selection automatically.
 6. Select `RUN_STAGE = "evaluate"` again after full training.

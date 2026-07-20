@@ -20,6 +20,7 @@ from matgpt.training.pretrain import get_device, validate_checkpoint_compatibili
 from matgpt.training.run_summary import write_evaluation_result
 from matgpt.data.prepare import effective_validation_split
 from matgpt.utils.hashing import sha256_file, sha256_text
+from matgpt.utils.seed import set_seed
 
 
 def main() -> None:
@@ -30,6 +31,8 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    evaluation_seed = int(cfg["run"]["seed"])
+    set_seed(evaluation_seed)
     default_output = Path(cfg["run"]["output_dir"]) / "evaluation" / f"{Path(args.checkpoint).stem}.json"
     output_path = Path(args.output) if args.output else default_output
     device = get_device()
@@ -73,6 +76,7 @@ def main() -> None:
     )
     result = {
         "checkpoint": str(Path(args.checkpoint)),
+        "evaluation_seed": evaluation_seed,
         "val_loss": val_loss,
         "perplexity": perplexity(val_loss),
         "samples": samples,

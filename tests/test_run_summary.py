@@ -341,6 +341,13 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     }
 
     monkeypatch.setattr(evaluate_script, "load_config", lambda path: cfg)
+    seed_calls = []
+    monkeypatch.setattr(
+        evaluate_script,
+        "set_seed",
+        lambda seed: seed_calls.append(seed),
+        raising=False,
+    )
     monkeypatch.setattr(evaluate_script, "get_device", lambda: "cpu")
     monkeypatch.setattr(evaluate_script, "GPTConfig", FakeConfig)
     monkeypatch.setattr(evaluate_script, "GPT", FakeModel)
@@ -372,10 +379,12 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     output = requested_output if explicit_output else configured_output
     assert json.loads(output.read_text(encoding="utf-8")) == {
         "checkpoint": str(checkpoint),
+        "evaluation_seed": 17,
         "perplexity": 109.9,
         "samples": [{"prompt": "Hello", "text": "Hello world"}],
         "val_loss": 4.7,
     }
+    assert seed_calls == [17]
     assert json.loads(capsys.readouterr().out) == json.loads(output.read_text(encoding="utf-8"))
 
 
