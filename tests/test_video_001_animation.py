@@ -184,7 +184,7 @@ def test_on_screen_copy_contains_required_distinctions_without_deferred_explanat
         assert forbidden not in flattened
 
 
-def test_first_four_section_methods_exist():
+def test_first_four_section_methods_remain_available_to_the_final_scene():
     animation = load_animation_module()
     for method in [
         "show_hook",
@@ -192,4 +192,25 @@ def test_first_four_section_methods_exist():
         "show_technical_meaning",
         "show_tiny_example",
     ]:
-        assert callable(getattr(animation.Video001PartOnePreview, method))
+        assert callable(getattr(animation._Video001PartOne, method))
+
+
+def test_repository_excerpt_lines_are_present_in_the_approved_script():
+    script = (VIDEO_DIR / "script.md").read_text(encoding="utf-8")
+    for line in (
+        *literal_assignment("NORMALIZE_CODE_LINES"),
+        *literal_assignment("PREPARE_CODE_LINES"),
+    ):
+        assert line.strip() in script
+
+
+def test_final_scene_implements_every_timeline_method():
+    animation = load_animation_module()
+    for spec in animation.timeline():
+        assert callable(getattr(animation.Video001ComputerLearningFromText, spec.method))
+
+
+def test_final_scene_is_the_only_non_preview_delivery_scene():
+    animation = load_animation_module()
+    assert issubclass(animation.Video001ComputerLearningFromText, animation.TimedLessonScene)
+    assert not hasattr(animation, "Video001PartOnePreview")

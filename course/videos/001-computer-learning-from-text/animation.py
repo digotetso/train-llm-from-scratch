@@ -400,11 +400,9 @@ class TimedLessonScene(Scene):
         return title.to_edge(UP, buff=0.28)
 
 
-class Video001PartOnePreview(TimedLessonScene):
+class _Video001PartOne(TimedLessonScene):
     def construct(self) -> None:
         for spec in select_sections():
-            if spec.start >= 360:
-                continue
             self.next_section(spec.name)
             self.begin_timed_section(spec)
             getattr(self, spec.method)()
@@ -725,3 +723,260 @@ class Video001PartOnePreview(TimedLessonScene):
         ).shift(1.3 * UP)
         self.beat(12, FadeTransform(boards, loop))
         self.hold(36)
+
+
+class Video001ComputerLearningFromText(_Video001PartOne):
+    def show_repository_walkthrough(self) -> None:
+        self.clear_stage(2)
+        title = self.section_title("Repository walkthrough: preparation before learning")
+        normalize_panel, normalize_lines = make_panel(
+            "matgpt/data/normalize.py",
+            NORMALIZE_CODE_LINES,
+            accent=PALETTE["fixed"],
+            width=12.4,
+            height=5.7,
+            line_font_size=23,
+        )
+        normalize_panel.shift(0.25 * DOWN)
+        self.beat(4, FadeIn(title))
+        self.beat(10, FadeIn(normalize_panel, shift=UP))
+
+        marker = SurroundingRectangle(
+            normalize_lines[0],
+            color=PALETTE["context"],
+            buff=0.07,
+        )
+        self.beat(8, Create(marker))
+        for line in normalize_lines[1:]:
+            target = SurroundingRectangle(
+                line,
+                color=PALETTE["context"],
+                buff=0.07,
+            )
+            self.beat(10, Transform(marker, target))
+            self.hold(3)
+
+        nfkc = VGroup(
+            make_card("①", color=PALETTE["context"], width=1.4),
+            Arrow(LEFT, RIGHT, color=PALETTE["detail"], buff=0).scale(0.6),
+            make_card("1", color=PALETTE["fixed"], width=1.4),
+        ).arrange(RIGHT, buff=0.35).shift(0.8 * UP)
+        warning = make_card(
+            "Policy choice—not lossless cleanup",
+            color=PALETTE["error"],
+            width=7.2,
+            height=0.95,
+            font_size=27,
+        ).next_to(nfkc, DOWN, buff=0.55)
+        self.beat(
+            10,
+            FadeOut(normalize_panel),
+            FadeOut(marker),
+            FadeOut(title),
+            FadeIn(nfkc),
+        )
+        self.beat(8, FadeIn(warning))
+        self.hold(8)
+
+        prepare_panel, _ = make_panel(
+            "matgpt/data/prepare.py",
+            PREPARE_CODE_LINES,
+            accent=PALETTE["fixed"],
+            width=7.0,
+            height=4.1,
+            line_font_size=25,
+        )
+        record = make_card(
+            '{"text": normalized, "num_chars": len(normalized)}',
+            color=PALETTE["fixed"],
+            width=5.1,
+            height=1.45,
+            font_size=23,
+        )
+        record.next_to(prepare_panel, RIGHT, buff=0.35)
+        self.beat(
+            10,
+            FadeOut(nfkc),
+            FadeOut(warning),
+            FadeIn(prepare_panel),
+        )
+        self.beat(12, FadeIn(record, shift=RIGHT))
+        separation = make_card(
+            "PREPARATION ≠ LEARNING",
+            color=PALETTE["error"],
+            width=6.2,
+            height=0.95,
+            font_size=29,
+        ).to_edge(DOWN, buff=0.3)
+        self.beat(8, FadeIn(separation))
+        self.hold(30)
+
+    def show_live_mini_lab(self) -> None:
+        self.clear_stage(2)
+        title = self.section_title("Live mini-lab: predict, run, explain")
+        source_lines = (
+            'text = "Cat"',
+            'print("Human text:", text)',
+            'print("Character numbers:", [ord(character) for character in text])',
+            'print("UTF-8 bytes:", list(text.encode("utf-8")))',
+            'print("Can the mathematical model use this raw Python string as numeric input? No")',
+            'print("Learning begins after text is represented as numbers.")',
+        )
+        source_panel, source = make_panel(
+            "lab.py",
+            source_lines,
+            accent=PALETTE["fixed"],
+            width=12.5,
+            height=5.8,
+            line_font_size=21,
+        )
+        source_panel.shift(0.25 * DOWN)
+        self.beat(4, FadeIn(title))
+        self.beat(10, FadeIn(source_panel))
+        self.beat(8, Indicate(source[0], color=PALETTE["context"]))
+
+        predict = VGroup(
+            make_card("Predict first", color=PALETTE["context"], width=3.0),
+            make_card("[67, 97, 116]", color=PALETTE["fixed"], width=3.5),
+            make_card("[67, 97, 116]", color=PALETTE["fixed"], width=3.5),
+        ).arrange(DOWN, buff=0.3)
+        self.beat(
+            10,
+            FadeOut(source_panel),
+            FadeOut(title),
+            FadeIn(predict),
+        )
+        self.hold(10)
+
+        command = "python course/videos/001-computer-learning-from-text/lab.py"
+        terminal_panel, terminal_lines = make_panel(
+            "TERMINAL",
+            (f"$ {command}", *LAB_OUTPUT_LINES),
+            accent=PALETTE["learning"],
+            width=12.7,
+            height=6.2,
+            line_font_size=21,
+        )
+        self.beat(12, FadeTransform(predict, terminal_panel))
+        for line in terminal_lines[1:]:
+            self.beat(7, Indicate(line, color=PALETTE["fixed"]))
+        self.hold(10)
+
+        edit = VGroup(
+            make_card('text = "Cat"', color=PALETTE["fixed"], width=3.6),
+            Arrow(LEFT, RIGHT, color=PALETTE["detail"], buff=0).scale(0.6),
+            make_card('text = "A"', color=PALETTE["context"], width=3.6),
+            make_card("[65]", color=PALETTE["fixed"], width=2.0),
+        ).arrange(RIGHT, buff=0.35)
+        self.beat(12, FadeOut(terminal_panel), FadeIn(edit))
+        restore = make_card(
+            'restore: text = "Cat"',
+            color=PALETTE["learning"],
+            width=4.8,
+        ).next_to(edit, DOWN, buff=0.7)
+        self.beat(8, FadeIn(restore))
+        self.hold(45)
+
+    def show_common_mistake(self) -> None:
+        self.clear_stage(2)
+        fixed = VGroup(
+            make_card("A", color=PALETTE["context"], width=1.5),
+            make_card("65", color=PALETTE["fixed"], width=1.5),
+        ).arrange(RIGHT, buff=0.5).shift(1.5 * UP)
+        contexts = VGroup(
+            *(
+                make_card(
+                    label,
+                    color=PALETTE["context"],
+                    width=2.3,
+                    height=0.85,
+                    font_size=24,
+                )
+                for label in ["grade", "note", "blood type", "word"]
+            )
+        ).arrange(RIGHT, buff=0.25)
+        self.beat(6, FadeIn(fixed))
+        self.beat(
+            8,
+            LaggedStart(*(FadeIn(card, shift=UP) for card in contexts), lag_ratio=0.2),
+        )
+        self.beat(6, Indicate(fixed[1], color=PALETTE["fixed"]))
+
+        false_claim = make_card(
+            "65 = meaning of A",
+            color=PALETTE["error"],
+            width=4.4,
+        ).shift(1.6 * DOWN)
+        strike = Line(
+            false_claim.get_corner(LEFT + DOWN),
+            false_claim.get_corner(RIGHT + UP),
+            color=PALETTE["error"],
+            stroke_width=6,
+        )
+        self.beat(6, FadeIn(false_claim))
+        self.beat(4, Create(strike))
+
+        comparison = VGroup(
+            make_card("fixed mapping", color=PALETTE["fixed"], width=3.0),
+            make_card("learning update", color=PALETTE["learning"], width=3.0),
+        ).arrange(RIGHT, buff=1.1)
+        self.beat(
+            8,
+            *(FadeOut(mobject) for mobject in tuple(self.mobjects)),
+            FadeIn(comparison),
+        )
+        self.hold(20)
+
+    def show_recap_and_exercise(self) -> None:
+        self.clear_stage(2)
+        pipeline = make_pipeline(
+            ["TEXT", "NUMBERS", "PREDICTION", "ERROR", "PARAMETER UPDATE"]
+        ).shift(1.8 * UP)
+        self.beat(
+            8,
+            LaggedStart(*(FadeIn(part, shift=RIGHT) for part in pipeline), lag_ratio=0.1),
+        )
+
+        recap = VGroup(
+            make_text("1  Programs receive represented data.", font_size=29),
+            make_text("2  Unicode and UTF-8 define numeric representations.", font_size=29),
+            make_text("3  Representation is not human meaning or learning.", font_size=29),
+            make_text(
+                "4  Learning updates parameters to reduce prediction error.",
+                font_size=29,
+            ),
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.24).next_to(pipeline, DOWN, buff=0.65)
+        self.beat(
+            10,
+            LaggedStart(*(FadeIn(line, shift=UP) for line in recap), lag_ratio=0.18),
+        )
+        self.hold(8)
+
+        exercise = make_card(
+            "The number 65 is assigned to ___, but it does not encode ___.",
+            color=PALETTE["context"],
+            width=11.8,
+            height=1.35,
+            font_size=31,
+        ).shift(0.5 * UP)
+        restore = make_card(
+            'Return lab.py to text = "Cat"',
+            color=PALETTE["learning"],
+            width=6.0,
+            height=0.9,
+            font_size=26,
+        ).next_to(exercise, DOWN, buff=0.55)
+        next_video = make_text(
+            "Next: assigned character numbers in more detail",
+            font_size=27,
+            color=PALETTE["detail"],
+        ).to_edge(DOWN, buff=0.35)
+        self.beat(
+            8,
+            FadeOut(pipeline),
+            FadeOut(recap),
+            FadeIn(exercise),
+        )
+        self.beat(6, FadeIn(restore))
+        self.beat(4, FadeIn(next_video))
+        self.hold(14)
