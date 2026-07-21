@@ -19,5 +19,8 @@ checkpoints/
 runs/
 logs/
 
+# Generated Manim video output
+course/videos/001-computer-learning-from-text/media/
+
 *.pt
 *.safetensors

@@ -6,13 +6,13 @@
 
 **Architecture:** A single `Video001ComputerLearningFromText` scene owns eight named Manim sections and delegates each timestamped segment to a focused method. Literal timeline and copy contracts remain inspectable without importing the optional Manim dependency; runtime helpers validate timing, scale development previews, and keep every section within its declared budget.
 
-**Tech Stack:** Python 3.10+, Manim Community 0.20.1, Pango text rendering, pytest 8+, uv, FFmpeg/ffprobe, Markdown.
+**Tech Stack:** Python 3.11+ for video work, Manim Community 0.20.1, Pango text rendering, pytest 8+, uv, FFmpeg/ffprobe, Markdown. The repository's non-video workflows retain their Python 3.10+ support.
 
 ## Global Constraints
 
 - Preserve the user's modified `course/videos/001-computer-learning-from-text/script.md`, untracked `course/labs/`, and untracked `og_script_v1.md`.
 - Use Manim Community Edition 0.20.1, not ManimGL.
-- Keep Manim in the optional `video` dependency group; training and ordinary course workflows must not require video tooling.
+- Keep Manim in the optional `video` dependency group with a Python 3.11+ environment marker; training and ordinary course workflows must retain Python 3.10+ support and must not require video tooling.
 - Produce one silent 1920x1080, 30 fps, 16:9 MP4.
 - Normal timing must total exactly 840 seconds with boundaries at 0, 45, 120, 240, 360, 540, 720, 780, and 840 seconds.
 - Preview timing must preserve content and order while applying `VIDEO001_TIMING_SCALE=0.05`.
@@ -103,7 +103,9 @@ def literal_assignment(name: str):
 def test_video_dependency_is_optional_and_pinned():
     with Path("pyproject.toml").open("rb") as file:
         project = tomllib.load(file)
-    assert project["project"]["optional-dependencies"]["video"] == ["manim==0.20.1"]
+    assert project["project"]["optional-dependencies"]["video"] == [
+        "manim==0.20.1; python_version >= '3.11'"
+    ]
 
 
 def test_timeline_matches_every_approved_script_boundary():
@@ -173,7 +175,7 @@ Add to `[project.optional-dependencies]` in `pyproject.toml`:
 
 ```toml
 video = [
-  "manim==0.20.1",
+  "manim==0.20.1; python_version >= '3.11'",
 ]
 ```
 
