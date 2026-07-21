@@ -1,9 +1,12 @@
 import ast
 import configparser
+import importlib.util
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 
 VIDEO_DIR = Path("course/videos/001-computer-learning-from-text")
@@ -79,3 +82,87 @@ def test_manim_config_targets_the_final_delivery_format():
     assert cli["background_color"] == "#0B1020"
     assert cli["output_file"] == "video-001-computer-learning-from-text"
     assert cli["media_dir"] == "course/videos/001-computer-learning-from-text/media"
+
+
+def load_animation_module(media_dir: Path | None = None):
+    manim = pytest.importorskip("manim")
+    if media_dir is not None:
+        manim.config.media_dir = str(media_dir)
+    spec = importlib.util.spec_from_file_location("video001_animation", ANIMATION_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_runtime_timeline_validation_and_selection():
+    animation = load_animation_module()
+    specs = animation.timeline()
+    animation.validate_timeline(specs)
+    assert specs[-1].end == 840
+    assert [item.slug for item in animation.select_sections("live-mini-lab")] == ["live-mini-lab"]
+    with pytest.raises(ValueError, match="Unknown Video 001 section"):
+        animation.select_sections("missing")
+
+
+def test_timing_scale_is_positive_and_no_greater_than_one():
+    animation = load_animation_module()
+    assert animation.timing_scale("0.05") == pytest.approx(0.05)
+    assert animation.timing_scale("1") == pytest.approx(1.0)
+    for invalid in ["0", "-0.1", "1.01", "not-a-number"]:
+        with pytest.raises(ValueError, match="VIDEO001_TIMING_SCALE"):
+            animation.timing_scale(invalid)
+
+
+def test_section_clock_rejects_overspending_and_reports_remainder():
+    animation = load_animation_module()
+    clock = animation.SectionClock(budget=45)
+    clock.consume(12)
+    assert clock.remaining == pytest.approx(33)
+    with pytest.raises(ValueError, match="exceeds section budget"):
+        clock.consume(34)
+
+
+def test_shared_cards_fit_the_safe_frame_width(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    card = animation.make_card(
+        "A deliberately long beginner-facing label",
+        color=animation.PALETTE["fixed"],
+    )
+    animation.fit_to_frame(card)
+    assert card.width <= animation.config.frame_width - 0.7
+    assert card.height <= animation.config.frame_height - 0.7
+
+
+def test_panel_value_row_and_pipeline_helpers_have_stable_hierarchies(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    panel, lines = animation.make_panel(
+        "TERMINAL",
+        ["first", "second"],
+        accent=animation.PALETTE["fixed"],
+    )
+    values = animation.make_value_row([67, 97, 116], color=animation.PALETTE["fixed"])
+    pipeline = animation.make_pipeline(["TEXT", "NUMBERS", "PREDICTION", "ERROR"])
+    assert len(lines) == 2
+    assert len(values) == 3
+    assert len(pipeline) == 7
+    assert pipeline[6][0].get_stroke_color().to_hex() == animation.PALETTE["error"]
+    for mobject in [panel, values, pipeline]:
+        animation.fit_to_frame(mobject)
+        assert mobject.width <= animation.config.frame_width - 0.7
+
+
+def test_timed_scene_rejects_beats_without_an_active_section():
+    animation = load_animation_module()
+    scene = animation.TimedLessonScene()
+    scene._section_clock = None
+    with pytest.raises(RuntimeError, match="begin_timed_section"):
+        scene.hold(1)
+
+
+def test_visual_helpers_use_supplied_temporary_media_directory(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    animation.make_card("cache probe", color=animation.PALETTE["fixed"])
+    assert list((tmp_path / "manim-media" / "texts").glob("*.svg"))
+    assert not Path("media").exists()
