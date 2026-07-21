@@ -153,6 +153,64 @@ def test_panel_value_row_and_pipeline_helpers_have_stable_hierarchies(tmp_path):
         assert mobject.width <= animation.config.frame_width - 0.7
 
 
+def test_technical_representation_stages_do_not_overlap(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    stages = animation.make_technical_representation_stages()
+
+    for stage in stages:
+        for index, left in enumerate(stage):
+            for right in stage[index + 1 :]:
+                horizontal_gap = max(
+                    right.get_left()[0] - left.get_right()[0],
+                    left.get_left()[0] - right.get_right()[0],
+                )
+                vertical_gap = max(
+                    right.get_bottom()[1] - left.get_top()[1],
+                    left.get_bottom()[1] - right.get_top()[1],
+                )
+                assert horizontal_gap >= 0 or vertical_gap >= 0
+
+    byte_values = stages[-1][-2]
+    for card in byte_values:
+        assert card[0].get_fill_color().to_hex() == animation.PALETTE["background"]
+        assert card[1][0].get_color().to_hex() == animation.PALETTE["text"]
+
+
+def test_hook_split_keeps_each_word_clear_of_its_panel(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    human_word, program_word, human_panel, program_panel, _ = animation.make_hook_split()
+
+    for word, panel in [(human_word, human_panel), (program_word, program_panel)]:
+        assert word.get_bottom()[1] > panel.get_top()[1]
+
+
+def test_line_focus_does_not_scale_long_terminal_copy(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    line = animation.make_text("A long terminal result", font_size=21)
+    original_width = line.width
+    focus = animation.make_line_focus(line)
+    scene = animation.Scene()
+    scene.add(line)
+    focus._setup_scene(scene)
+    focus.begin()
+    focus.interpolate(0.5)
+    assert line.width == pytest.approx(original_width)
+
+
+def test_repository_pair_and_recap_pipeline_are_frame_safe(tmp_path):
+    animation = load_animation_module(tmp_path / "manim-media")
+    prepare_panel, record, separation = animation.make_prepare_repository_layout()
+    repository_layout = animation.VGroup(prepare_panel, record, separation)
+    safe_half_width = animation.config.frame_width / 2 - 0.35
+    assert repository_layout.get_left()[0] >= -safe_half_width
+    assert repository_layout.get_right()[0] <= safe_half_width
+
+    pipeline = animation.make_recap_pipeline()
+    assert pipeline[-1][1].original_text == "PARAMETER\nUPDATE"
+    assert pipeline.get_left()[0] >= -safe_half_width
+    assert pipeline.get_right()[0] <= safe_half_width
+
+
 def test_timed_scene_rejects_beats_without_an_active_section():
     animation = load_animation_module()
     scene = animation.TimedLessonScene()

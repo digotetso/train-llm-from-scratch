@@ -358,6 +358,140 @@ def make_pipeline(labels: Iterable[str]) -> VGroup:
     return fit_to_frame(VGroup(*parts).arrange(RIGHT, buff=0.2))
 
 
+def make_hook_split() -> tuple[Text, Text, VGroup, VGroup, Line]:
+    human_word = make_text("cat", font_size=96, weight=BOLD).move_to(
+        3.4 * LEFT + 2.1 * UP
+    )
+    program_word = human_word.copy().move_to(3.4 * RIGHT + 2.1 * UP)
+    human_panel, _ = make_panel(
+        "PERSON",
+        ["animal", "memory", "sound"],
+        accent=PALETTE["context"],
+        width=5.5,
+        height=3.4,
+        line_font_size=28,
+    )
+    human_panel.move_to(3.4 * LEFT + 0.7 * DOWN)
+    program_panel, _ = make_panel(
+        "PYTHON PROGRAM",
+        ['text = "cat"', "c    a    t"],
+        accent=PALETTE["fixed"],
+        width=5.5,
+        height=3.4,
+        line_font_size=28,
+    )
+    program_panel.move_to(3.4 * RIGHT + 0.7 * DOWN)
+    divider = Line(
+        3.1 * UP,
+        3.1 * DOWN,
+        color=PALETTE["detail"],
+        stroke_opacity=0.5,
+    )
+    return human_word, program_word, human_panel, program_panel, divider
+
+
+def make_line_focus(mobject: Mobject) -> Animation:
+    return Circumscribe(
+        mobject,
+        color=PALETTE["fixed"],
+        buff=0.08,
+        fade_out=True,
+    )
+
+
+def make_prepare_repository_layout() -> tuple[VGroup, VGroup, VGroup]:
+    prepare_panel, _ = make_panel(
+        "matgpt/data/prepare.py",
+        PREPARE_CODE_LINES,
+        accent=PALETTE["fixed"],
+        width=7.0,
+        height=4.1,
+        line_font_size=25,
+    )
+    record = make_card(
+        '{"text": normalized, "num_chars": len(normalized)}',
+        color=PALETTE["fixed"],
+        width=5.1,
+        height=1.45,
+        font_size=23,
+    )
+    VGroup(prepare_panel, record).arrange(RIGHT, buff=0.35)
+    separation = make_card(
+        "PREPARATION ≠ LEARNING",
+        color=PALETTE["error"],
+        width=6.2,
+        height=0.95,
+        font_size=29,
+    ).to_edge(DOWN, buff=0.3)
+    return prepare_panel, record, separation
+
+
+def make_recap_pipeline() -> VGroup:
+    return make_pipeline(
+        ["TEXT", "NUMBERS", "PREDICTION", "ERROR", "PARAMETER\nUPDATE"]
+    )
+
+
+def make_technical_representation_stages() -> tuple[VGroup, VGroup, VGroup]:
+    """Build the three stable layouts used by the technical explanation."""
+    title = make_text(
+        "Characters become numeric representations",
+        font_size=30,
+        color=PALETTE["detail"],
+        weight=BOLD,
+    ).to_edge(UP, buff=0.28)
+    characters = make_value_row(
+        ["C", "a", "t"],
+        color=PALETTE["context"],
+    ).move_to(2.25 * UP)
+    ord_label = make_card(
+        "ord(character)",
+        color=PALETTE["fixed"],
+        width=3.2,
+        height=0.9,
+        font_size=26,
+    ).move_to(1.15 * UP)
+    numbers = make_value_row(
+        [67, 97, 116],
+        color=PALETTE["fixed"],
+    ).move_to(0.05 * UP)
+
+    bit_cells = VGroup(
+        *(
+            Square(
+                side_length=0.45,
+                stroke_color=PALETTE["fixed"],
+                fill_color=PALETTE["background"],
+                fill_opacity=1,
+            )
+            for _ in range(8)
+        )
+    ).arrange(RIGHT, buff=0.08)
+    bit_values = VGroup(*(make_text(bit, font_size=20) for bit in "01000011"))
+    for bit, cell in zip(bit_values, bit_cells):
+        bit.move_to(cell)
+    byte = VGroup(bit_cells, bit_values).next_to(numbers, DOWN, buff=0.4)
+    byte_label = make_text(
+        "byte: 0–255",
+        font_size=28,
+        color=PALETTE["fixed"],
+    ).next_to(byte, DOWN, buff=0.18)
+
+    bytes_row = numbers.copy().move_to(1.45 * DOWN)
+    warning = make_card(
+        "These match here—not for every character",
+        color=PALETTE["error"],
+        width=8.1,
+        height=0.85,
+        font_size=25,
+    ).to_edge(DOWN, buff=0.28)
+
+    numeric_stage = VGroup(title, characters, ord_label, numbers)
+    binary_stage = VGroup(title, characters, ord_label, numbers, byte, byte_label)
+    byte_values_stage = VGroup(title, characters, ord_label, numbers, bytes_row, warning)
+    return numeric_stage, binary_stage, byte_values_stage
+
+
 class TimedLessonScene(Scene):
     def setup(self) -> None:
         super().setup()
@@ -413,39 +547,16 @@ class _Video001PartOne(TimedLessonScene):
         self.beat(4, Write(word))
         self.hold(6)
 
+        human_target, program_target, human, program, divider = make_hook_split()
         program_word = word.copy()
         self.add(program_word)
-        divider = Line(
-            3.1 * UP,
-            3.1 * DOWN,
-            color=PALETTE["detail"],
-            stroke_opacity=0.5,
-        )
         self.beat(
             6,
-            word.animate.move_to(3.4 * LEFT + 1.3 * UP),
-            program_word.animate.move_to(3.4 * RIGHT + 1.3 * UP),
+            word.animate.move_to(human_target),
+            program_word.animate.move_to(program_target),
             Create(divider),
         )
 
-        human, _ = make_panel(
-            "PERSON",
-            ["animal", "memory", "sound"],
-            accent=PALETTE["context"],
-            width=5.5,
-            height=3.4,
-            line_font_size=28,
-        )
-        human.move_to(3.4 * LEFT + 0.7 * DOWN)
-        program, _ = make_panel(
-            "PYTHON PROGRAM",
-            ['text = "cat"', "c    a    t"],
-            accent=PALETTE["fixed"],
-            width=5.5,
-            height=3.4,
-            line_font_size=28,
-        )
-        program.move_to(3.4 * RIGHT + 0.7 * DOWN)
         self.beat(8, FadeIn(human, shift=UP), FadeIn(program, shift=UP))
         self.hold(8)
 
@@ -534,22 +645,12 @@ class _Video001PartOne(TimedLessonScene):
 
     def show_technical_meaning(self) -> None:
         self.clear_stage(2)
-        title = self.section_title("Characters become numeric representations")
-        characters = make_value_row(
-            ["C", "a", "t"],
-            color=PALETTE["context"],
-        ).shift(2.0 * UP)
-        numbers = make_value_row(
-            [67, 97, 116],
-            color=PALETTE["fixed"],
-        ).shift(0.3 * UP)
-        ord_label = make_card(
-            "ord(character)",
-            color=PALETTE["fixed"],
-            width=3.2,
-            height=0.9,
-            font_size=26,
-        ).move_to(0.85 * UP)
+        numeric_stage, binary_stage, byte_values_stage = (
+            make_technical_representation_stages()
+        )
+        title, characters, ord_label, numbers = numeric_stage
+        byte, byte_label = binary_stage[-2:]
+        bytes_row, warning = byte_values_stage[-2:]
         self.beat(4, FadeIn(title))
         self.beat(
             6,
@@ -568,38 +669,15 @@ class _Video001PartOne(TimedLessonScene):
         )
         self.hold(8)
 
-        bits = VGroup(
-            *(
-                Square(
-                    side_length=0.45,
-                    stroke_color=PALETTE["fixed"],
-                    fill_color=PALETTE["background"],
-                    fill_opacity=1,
-                )
-                for _ in range(8)
-            )
-        ).arrange(RIGHT, buff=0.08)
-        bit_values = VGroup(*(make_text(bit, font_size=20) for bit in "01000011"))
-        for bit, cell in zip(bit_values, bits):
-            bit.move_to(cell)
-        byte = VGroup(bits, bit_values).next_to(numbers, DOWN, buff=0.7)
-        byte_label = make_text(
-            "byte: 0–255",
-            font_size=28,
-            color=PALETTE["fixed"],
-        ).next_to(byte, DOWN, buff=0.25)
         self.beat(8, FadeIn(byte))
         self.beat(5, FadeIn(byte_label))
 
-        bytes_row = numbers.copy().set_color(PALETTE["fixed"]).shift(2.2 * DOWN)
-        warning = make_card(
-            "These match here—not for every character",
-            color=PALETTE["error"],
-            width=8.1,
-            height=0.85,
-            font_size=25,
-        ).to_edge(DOWN, buff=0.28)
-        self.beat(10, TransformFromCopy(numbers, bytes_row))
+        self.beat(
+            10,
+            FadeOut(byte),
+            FadeOut(byte_label),
+            TransformFromCopy(numbers, bytes_row),
+        )
         self.beat(6, FadeIn(warning))
         self.hold(8)
 
@@ -778,22 +856,7 @@ class Video001ComputerLearningFromText(_Video001PartOne):
         self.beat(8, FadeIn(warning))
         self.hold(8)
 
-        prepare_panel, _ = make_panel(
-            "matgpt/data/prepare.py",
-            PREPARE_CODE_LINES,
-            accent=PALETTE["fixed"],
-            width=7.0,
-            height=4.1,
-            line_font_size=25,
-        )
-        record = make_card(
-            '{"text": normalized, "num_chars": len(normalized)}',
-            color=PALETTE["fixed"],
-            width=5.1,
-            height=1.45,
-            font_size=23,
-        )
-        record.next_to(prepare_panel, RIGHT, buff=0.35)
+        prepare_panel, record, separation = make_prepare_repository_layout()
         self.beat(
             10,
             FadeOut(nfkc),
@@ -801,13 +864,6 @@ class Video001ComputerLearningFromText(_Video001PartOne):
             FadeIn(prepare_panel),
         )
         self.beat(12, FadeIn(record, shift=RIGHT))
-        separation = make_card(
-            "PREPARATION ≠ LEARNING",
-            color=PALETTE["error"],
-            width=6.2,
-            height=0.95,
-            font_size=29,
-        ).to_edge(DOWN, buff=0.3)
         self.beat(8, FadeIn(separation))
         self.hold(30)
 
@@ -859,7 +915,7 @@ class Video001ComputerLearningFromText(_Video001PartOne):
         )
         self.beat(12, FadeTransform(predict, terminal_panel))
         for line in terminal_lines[1:]:
-            self.beat(7, Indicate(line, color=PALETTE["fixed"]))
+            self.beat(7, make_line_focus(line))
         self.hold(10)
 
         edit = VGroup(
@@ -929,9 +985,7 @@ class Video001ComputerLearningFromText(_Video001PartOne):
 
     def show_recap_and_exercise(self) -> None:
         self.clear_stage(2)
-        pipeline = make_pipeline(
-            ["TEXT", "NUMBERS", "PREDICTION", "ERROR", "PARAMETER UPDATE"]
-        ).shift(1.8 * UP)
+        pipeline = make_recap_pipeline().shift(1.8 * UP)
         self.beat(
             8,
             LaggedStart(*(FadeIn(part, shift=RIGHT) for part in pipeline), lag_ratio=0.1),
