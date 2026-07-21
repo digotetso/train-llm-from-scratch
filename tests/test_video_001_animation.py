@@ -166,3 +166,30 @@ def test_visual_helpers_use_supplied_temporary_media_directory(tmp_path):
     animation.make_card("cache probe", color=animation.PALETTE["fixed"])
     assert list((tmp_path / "manim-media" / "texts").glob("*.svg"))
     assert not Path("media").exists()
+
+
+def test_on_screen_copy_contains_required_distinctions_without_deferred_explanations():
+    copy = literal_assignment("ON_SCREEN_COPY")
+    flattened = "\n".join(text for items in copy.values() for text in items).lower()
+    for required in [
+        "fixed representation",
+        "adjustable parameters",
+        "these match here—not for every character",
+        "illustration—not observed training output",
+        "preparation ≠ learning",
+        "policy choice—not lossless cleanup",
+    ]:
+        assert required in flattened
+    for forbidden in ["token embedding", "tensor", "logit", "gradient", "attention"]:
+        assert forbidden not in flattened
+
+
+def test_first_four_section_methods_exist():
+    animation = load_animation_module()
+    for method in [
+        "show_hook",
+        "show_fixed_versus_adjustable",
+        "show_technical_meaning",
+        "show_tiny_example",
+    ]:
+        assert callable(getattr(animation.Video001PartOnePreview, method))
