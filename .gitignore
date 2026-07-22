@@ -23,5 +23,9 @@ logs/
 # Generated Manim video output
 course/videos/001-computer-learning-from-text/media/
 
+# Generated After Effects video output
+course/videos/*/after-effects/exports/*
+!course/videos/*/after-effects/exports/.gitkeep
+
 *.pt
 *.safetensors

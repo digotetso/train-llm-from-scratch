@@ -1,0 +1,18 @@
+run:
+  name: matgpt_mini_8m_tinystories
+  seed: 42
+  output_dir: runs/matgpt_mini_8m
+
+dataset:
+  hf_name: roneneldan/TinyStories
+  
+tokenizer:
+  vocab_size: 8192
+
+model:
+  vocab_size: 8192
+  context_length: 256
+  n_layers: 6
+
+training:
+  max_tokens: 200000000
