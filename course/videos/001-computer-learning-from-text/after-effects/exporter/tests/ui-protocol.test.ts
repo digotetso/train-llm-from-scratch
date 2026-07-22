@@ -944,7 +944,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
   }
 });
 
-test("built UI accepts Figma-forwarded controller envelopes from a non-parent source", () => {
+test("built UI accepts Figma-forwarded controller envelopes with routing metadata", () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-ui-runtime-"));
   try {
     const pluginIdFile = join(fixture, ".figma-plugin-id");
@@ -1050,10 +1050,27 @@ test("built UI accepts Figma-forwarded controller envelopes from a non-parent so
 
     sandbox.messageJson = JSON.stringify({
       pluginMessage: { type: "selection", generation: 2, frames: [] },
-      unexpected: true
+      pluginId: "987654321012345678"
     });
     runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
-    assert.equal(elements.get("status")?.textContent, "1 frame selected.");
+    assert.equal(elements.get("status")?.textContent, "0 frames selected.");
+
+    sandbox.messageJson = JSON.stringify({ pluginId: "987654321012345678" });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    assert.equal(elements.get("status")?.textContent, "0 frames selected.");
+
+    runInContext(`
+      const inheritedEnvelope = Object.create({
+        pluginMessage: {
+          type: "selection",
+          generation: 3,
+          frames: [{ nodeId: "95:44", name: "Inherited", duration: 28 }]
+        }
+      });
+      inheritedEnvelope.pluginId = "987654321012345678";
+      window.dispatchMessage({ source: nonParentSource, data: inheritedEnvelope });
+    `, context);
+    assert.equal(elements.get("status")?.textContent, "0 frames selected.");
 
     sandbox.messageJson = JSON.stringify({
       pluginMessage: { type: "selection", generation: 2, frames: [], unexpected: true }

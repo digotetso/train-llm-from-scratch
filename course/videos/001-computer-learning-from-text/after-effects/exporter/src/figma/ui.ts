@@ -463,7 +463,7 @@ function startRuntime(): void {
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.data === null || typeof event.data !== "object" || Array.isArray(event.data)) return;
     const envelope = event.data as UnknownRecord;
-    if (Object.keys(envelope).length !== 1 || !Object.prototype.hasOwnProperty.call(envelope, "pluginMessage")) return;
+    if (!Object.prototype.hasOwnProperty.call(envelope, "pluginMessage")) return;
     void ui.handleMessage(envelope.pluginMessage);
   });
   ui.refresh();
