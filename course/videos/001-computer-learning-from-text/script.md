@@ -6,9 +6,15 @@
 
 When you read `cat`, you probably do more than notice three letters. You may picture an animal, remember a pet, or hear the word in your head. Your experience supplies meaning almost instantly.
 
-But what does a computer receive? It does not receive your memories or your idea of a cat. It receives written items represented as data. So how can a mathematical system begin with that represented text and eventually improve its predictions?
+Now think about what you may have seen an AI system do. It can rewrite an essay, improve an email, or write code. You type in text, and useful text comes back.
 
-That is our one question. By the end, you will be able to explain why text needs a numeric representation before a model can learn from it. We will build the answer with three letters, three numbers, and a tiny Python file you can run yourself.
+But what does the computer receive when you type? It does not receive your memories or your idea of a cat. Underneath the familiar text box, its mathematical operations work with numbers.
+
+So here is our question: before an AI system can do those useful things with text, how does the text you type become something its mathematics can work with?
+
+By the end, you will be able to explain why text needs a numeric form and why creating that form is not yet learning. We will build the answer with three letters, three numbers, and a tiny Python file you can run yourself.
+
+First, we need a smaller question: how can a number identify something without containing its meaning?
 
 ## 00:45 Analogy
 
@@ -42,13 +48,24 @@ For the simple English letters in `Cat`, the code-point values and the UTF-8 byt
 
 Now we can define the other half of our question. A **model** is a mathematical prediction system with adjustable numbers called **parameters**. It receives numeric input and produces a prediction. During training, we measure how wrong a prediction is and use that measured error to adjust the parameters. At this stage, that parameter change is what we mean by **learning**.
 
-Keep the categories separate:
+Now that we understand both actions, we can give the distinction a stable name. **Text representation** changes the form of the input by following fixed agreements. **Learning** changes the model's adjustable parameters using examples and measured error.
 
-> Representation follows fixed agreements. Learning changes adjustable model parameters using examples and measured error.
+We can now use this representation–learning distinction as a building block:
+
+> Text representation follows fixed agreements. Learning changes adjustable model parameters using examples and measured error.
 
 ## 04:00 Tiny Example
 
-Suppose the training examples include:
+Let's use that building block immediately. Start with the representation side and predict the three code points for `Cat`. Then compare your answer with this trace:
+
+```text
+Human-readable text: C    a    t
+Agreed numbers:      67   97   116
+```
+
+Those numbers let a program count values, compare sequences, or select a value by position. But the arithmetic distance between `67` and `97` is not the difference in meaning between `C` and `a`. The numbers represent the characters under an agreement; they do not carry the human meaning of the word.
+
+Now keep that representation fixed and move to the learning side. Suppose the training examples include:
 
 ```text
 cat sat
@@ -57,15 +74,6 @@ cat slept
 ```
 
 What repeats? Each line begins with `cat`, followed by a space and then an action word. No label says “animal” or “action.” The examples only supply repeated relationships that can affect later predictions.
-
-Before we discuss improvement, let us check the input we can already explain. Predict the three code points for `Cat`, then compare your answer with this trace:
-
-```text
-Human-readable text: C    a    t
-Agreed numbers:      67   97   116
-```
-
-Those numbers let a program count values, compare sequences, or select a value by position. But the arithmetic distance between `67` and `97` is not the difference in meaning between `C` and `a`. The numbers represent the characters under an agreement; they do not carry the human meaning of the word.
 
 Now imagine a model makes ten predictions and gets seven wrong. Training uses those mistakes to adjust its parameters. On comparable later examples, it gets five wrong. Seven mistakes becoming five gives us a small intuition for improvement: predictions changed after measured error changed the adjustable numbers.
 
@@ -184,7 +192,9 @@ Check the model in your own head:
 
 For the exercise, run the mini-lab with `A`, record the output, and complete this sentence: “The number 65 is assigned to ___, but it does not encode ___.” Then return the file to `Cat`.
 
-Keep this distinction as the building block for the next lesson: representation gives the model numbers it can work with. Learning changes the model's adjustable numbers—its parameters—so later predictions can improve.
+The representation–learning distinction is now one of our building blocks, not just a sentence to memorize. Text representation gives the model numbers it can work with. Learning changes the model's adjustable numbers—its parameters—so later predictions can improve.
+
+In the next lesson, we will use the representation side of that building block to ask a more precise question: how does a computer assign stable numbers to written characters? Because we already know this is representation rather than learning, we can focus on how those agreed numbers are assigned.
 
 ### Vocabulary Deferred to Later Videos
 

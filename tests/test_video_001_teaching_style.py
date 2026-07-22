@@ -27,6 +27,19 @@ def test_video_one_builds_intuition_before_technical_vocabulary():
         assert term in technical
 
 
+def test_video_one_hook_uses_familiar_ai_outcomes_without_assuming_prediction_knowledge():
+    hook = section(read_script(), "## 00:00 Hook")
+    lowered = hook.lower()
+
+    for familiar_outcome in ["rewrite an essay", "improve an email", "write code"]:
+        assert familiar_outcome in lowered
+    for untaught_mechanism in ["predictions", "better guesses", "parameters", "measured error"]:
+        assert untaught_mechanism not in lowered
+    assert "text you type" in lowered
+    assert "numbers" in lowered
+    assert "?" in hook
+
+
 def test_video_one_uses_prediction_and_changed_case_as_evidence():
     script = read_script()
     lab = section(script, "## 09:00 Live Mini-Lab")
@@ -54,6 +67,19 @@ def test_video_one_ends_with_a_spoken_transferable_distinction():
     assert "learning" in recap.lower()
     assert "parameters" in recap.lower()
     assert "prediction" in recap.lower() or "guesses" in recap.lower()
+
+
+def test_video_one_names_the_understood_mechanism_and_uses_it_as_a_building_block():
+    script = read_script()
+    technical = section(script, "## 02:00 Technical Meaning")
+    recap = section(script, "## 13:00 Recap And Exercise")
+
+    assert "stable name" in technical.lower()
+    assert "**text representation**" in technical.lower()
+    assert "**learning**" in technical.lower()
+    assert "building block" in recap.lower()
+    assert "representation side" in recap.lower()
+    assert "next lesson" in recap.lower()
 
 
 def test_video_one_preserves_source_and_observation_labels():
