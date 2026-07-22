@@ -43,3 +43,29 @@ All limit tests inject small byte ceilings. Tests cover manifest accounting, raw
 ## Scope
 
 The vendor media type, JSON schema, content hash contract, Figma serializer, importer format, and dependency set do not change.
+
+## Re-review remediation
+
+### Measured bottleneck and chunk contract
+
+The first implementation awaits `peek()` and `read()` for every encoded asset byte. On the review machine, the existing 49,157-byte boundary test spends about 256 ms in parse/fingerprint work, and code inspection shows two promise continuations per base64 byte. That control-flow cost scales beyond the 120-second request deadline at production sizes.
+
+The asset-string path will instead request the reader's current contiguous buffer, find the closing quote synchronously, validate/copy bytes into a 64 KiB quartet-aligned decoder buffer, and await only for reader refill, bounded file write, and cancellation checkpoint. Base64 quartet carry, padding position, pad-bit validation, raw manifest accounting, partial-write loops, and 1–3 byte reader-boundary behavior remain exact. Regression tests use checkpoint and promise-creation budgets rather than a fragile wall-clock threshold; the report records comparable before/after elapsed time as supporting evidence.
+
+### Cancellation and commit boundary
+
+A shared `BridgeWorkContext` carries the request deadline signal, shutdown signal, an optional asynchronous checkpoint observer, and an idempotent cancellation callback. Parsing checks it on bounded reader/decoder chunks, fingerprinting on each decoded-file chunk, and verified queue adoption/copy on each source or existing-asset chunk and immediately before publication. Shutdown takes precedence if both signals are aborted. Deadline cancellation maps to `408 REQUEST_TIMEOUT`; shutdown destroys the request without a response.
+
+The server's cancellation callback releases the single-flight slot as soon as cancellation is observed. Identity-checked cleanup then continues outside that slot, so cleanup cannot prevent the bounded waiter from advancing. Owner-stamped files remain recoverable if cleanup itself encounters an operational failure. Once the queue manifest has been durably published, the operation is committed and returns `202`; a deadline observed during post-commit source cleanup may release the slot but does not misreport an accepted package as timed out.
+
+### Object-key and nesting parity
+
+Parsed JSON objects use null prototypes, so keys such as `__proto__` and `constructor` remain enumerable own data properties and reach the existing exact-key validator. Top-level, nested-node, and asset regressions compare streaming rejection with `JSON.parse` plus `validatePackage`.
+
+`LIMITS.maxJsonContainerDepth` is the single abuse-prevention limit for both paths. The root object is container depth 1; only arrays and objects increment depth, while scalar values do not. In-memory validation performs an iterative ancestor-aware preflight that rejects cycles but permits repeated non-cyclic references. The streaming parser applies the same count when entering each object or array. Valid nested groups just below the limit and the next group above it prove parity.
+
+### Alternatives considered
+
+- A worker thread would isolate CPU but retain promise-per-byte work and complicate owner/file cancellation; it does not address the root cause.
+- A third-party SAX parser could improve tokenization but violates the dependency-free constraint and would still require custom asset-string and canonical-base64 handling.
+- Removing the streaming-only depth check would restore parity but discard a useful abuse bound. A shared explicit limit is smaller, testable, and applies equally to resident and streamed packages.
