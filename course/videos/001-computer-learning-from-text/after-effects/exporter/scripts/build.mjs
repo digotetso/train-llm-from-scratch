@@ -244,6 +244,68 @@ function assertBrowserBundle(value, label) {
   if (value.includes(DOCUMENTED_EXAMPLE_ID)) throw new Error(`${label} contains the documented fake plugin ID`);
 }
 
+function assertExtendScriptBundle(value, label) {
+  const prohibitedPatterns = [
+    ["let declarations", /\blet\s+[$A-Za-z_]/],
+    ["const declarations", /\bconst\s+[$A-Za-z_]/],
+    ["arrow functions", /=>/],
+    ["classes", /\bclass\s+[$A-Za-z_]/],
+    ["template literals", /`/],
+    ["optional chaining", /\?\./],
+    ["nullish coalescing", /\?\?/],
+    ["Node globals", /\b(?:require|module|exports|process|Buffer|global)\b/],
+    ["Array prototype additions", /Array\.prototype\./]
+  ];
+  for (const [description, pattern] of prohibitedPatterns) {
+    if (pattern.test(value)) throw new Error(`${label} contains forbidden ${description}`);
+  }
+  for (const destructive of ["app.project.close", "app.project.save", "app.quit"]) {
+    if (value.includes(destructive)) throw new Error(`${label} contains prohibited project mutation ${destructive}`);
+  }
+}
+
+export async function buildBridge({ projectRoot } = {}) {
+  const root = resolve(projectRoot ?? rootFromScript);
+  const destination = join(root, "dist", "bridge");
+  const result = await esbuild({
+    entryPoints: [join(root, "src", "bridge", "cli.ts")],
+    bundle: true,
+    charset: "utf8",
+    format: "esm",
+    legalComments: "none",
+    minify: false,
+    outfile: "video001-bridge.mjs",
+    platform: "node",
+    sourcemap: false,
+    target: ["node20"],
+    treeShaking: true,
+    write: false
+  });
+  const bridgeJavaScript = singleOutput(result, "bridge");
+  await mkdir(destination, { recursive: true });
+  await writeFile(join(destination, "video001-bridge.mjs"), bridgeJavaScript, { encoding: "utf8", mode: 0o600 });
+  return { destination };
+}
+
+export async function buildAfterEffects({ projectRoot } = {}) {
+  const root = resolve(projectRoot ?? rootFromScript);
+  const sourceDirectory = join(root, "src", "ae");
+  const destination = join(root, "dist", "ae");
+  const sourceNames = ["import-core.jsxinc", "importer.jsxinc", "panel.jsx"];
+  const sourceParts = [];
+  for (const sourceName of sourceNames) {
+    sourceParts.push(await readFile(join(sourceDirectory, sourceName), "utf8"));
+  }
+  const panel = `${sourceParts.join("\n\n")}\n`;
+  const audit = await readFile(join(sourceDirectory, "audit-export.jsx"), "utf8");
+  assertExtendScriptBundle(panel, "After Effects panel");
+  assertExtendScriptBundle(audit, "After Effects audit");
+  await mkdir(destination, { recursive: true });
+  await writeFile(join(destination, "Video001-Figma-AE-Exporter.jsx"), panel, { encoding: "utf8", mode: 0o600 });
+  await writeFile(join(destination, "audit-export.jsx"), audit, { encoding: "utf8", mode: 0o600 });
+  return { destination };
+}
+
 export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environment = process.env } = {}) {
   if (esbuildVersion !== REQUIRED_ESBUILD_VERSION) {
     throw new Error(`Expected esbuild ${REQUIRED_ESBUILD_VERSION}, found ${esbuildVersion}`);
@@ -343,6 +405,13 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   return { destination, scenesPath };
 }
 
+export async function buildExporter(options = {}) {
+  const plugin = await buildPlugin(options);
+  const bridge = await buildBridge(options);
+  const afterEffects = await buildAfterEffects(options);
+  return { plugin, bridge, afterEffects };
+}
+
 function parseArguments(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -361,7 +430,7 @@ function parseArguments(argv) {
 const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMain) {
   try {
-    await buildPlugin(parseArguments(process.argv.slice(2)));
+    await buildExporter(parseArguments(process.argv.slice(2)));
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

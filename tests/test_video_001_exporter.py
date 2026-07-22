@@ -8,6 +8,8 @@ EXPORTER_DIR = (
 )
 AE_SOURCE_DIR = EXPORTER_DIR / "src/ae"
 CORE_PATH = AE_SOURCE_DIR / "import-core.jsxinc"
+IMPORTER_PATH = AE_SOURCE_DIR / "importer.jsxinc"
+PANEL_PATH = AE_SOURCE_DIR / "panel.jsx"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -70,3 +72,43 @@ def test_after_effects_sources_retain_clean_apache_provenance():
         assert "Apache License, Version 2.0" in source
         assert re.search(r"\bmodified\b", source, re.IGNORECASE)
         assert "DISKO" not in source.upper()
+
+
+def test_bundled_panel_contains_native_import_and_utf8_report_primitives():
+    bundled_panel = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [CORE_PATH, IMPORTER_PATH, PANEL_PATH]
+    )
+
+    for required in [
+        'app.beginUndoGroup("Import Video 001 Figma Frame")',
+        'app.project.items.addFolder("01_Exporter_Imports")',
+        "comp.layers.addBoxText([textBox.width, textBox.height]",
+        'property("ADBE Text Document")',
+        'contents.addProperty("ADBE Vector Shape - Rect")',
+        'contents.addProperty("ADBE Vector Shape - Ellipse")',
+        'File.encoding = "UTF-8"',
+        "Video001Export sha256:",
+    ]:
+        assert required in bundled_panel
+
+
+def test_import_rollback_removes_only_current_transaction_items_in_reverse_order():
+    importer = IMPORTER_PATH.read_text(encoding="utf-8")
+
+    assert "transactionItems[transactionItems.length] =" in importer
+    assert re.search(
+        r"for\s*\(\s*transactionIndex\s*=\s*transactionItems\.length\s*-\s*1\s*;"
+        r"\s*transactionIndex\s*>=\s*0\s*;\s*transactionIndex\s*-=\s*1\s*\)",
+        importer,
+    )
+    assert "transactionItems[transactionIndex].remove()" in importer
+    assert re.search(r"app\.project\.items\s*\[[^\]]+\]\s*\.remove\s*\(", importer) is None
+
+
+def test_manual_raster_assets_are_verified_before_content_addressed_import():
+    importer = IMPORTER_PATH.read_text(encoding="utf-8")
+
+    assert "asset.dataBase64" in importer
+    assert 'system.callSystem("/usr/bin/shasum -a 256 "' in importer
+    assert 'asset.hash + ".png"' in importer
