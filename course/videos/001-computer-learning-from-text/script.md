@@ -4,27 +4,31 @@
 
 [On screen: `cat`]
 
-When you read `cat`, you probably do more than notice three letters. You may picture an animal, remember a pet, or hear the word in your head. Your experience supplies meaning almost instantly.
+When you read `cat`, you may picture an animal or remember a pet. That meaning comes from your experience.
 
-Now think about what you may have seen an AI system do. It can rewrite an essay, improve an email, or write code. You type in text, and useful text comes back.
+You may have seen AI rewrite an essay, improve an email, or write code.
 
-But what does the computer receive when you type? It does not receive your memories or your idea of a cat. Underneath the familiar text box, its mathematical operations work with numbers.
+On your computer, the text box shows words. The model underneath works by calculating with numbers.
 
-So here is our question: before an AI system can do those useful things with text, how does the text you type become something its mathematics can work with?
+So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
 
-By the end, you will be able to explain why text needs a numeric form and why creating that form is not yet learning. We will build the answer with three letters, three numbers, and a tiny Python file you can run yourself.
+By the end, you will be able to explain the difference using three letters, three numbers, and a tiny Python file.
 
-First, we need a smaller question: how can a number identify something without containing its meaning?
+First: how can a number identify something without containing its meaning?
 
 ## 00:45 Analogy
 
-**Teaching analogy:** Imagine that a library gives every book an identifier. The identifier helps the library distinguish and locate the book. It does not contain the book's story, and it does not recreate what a reader feels while reading it.
+**Teaching analogy:** Imagine that a library gives every book a number.
 
-Written characters also need agreed identifiers so software can store and process them consistently. An identifier answers, “Which item is this?” It does not answer, “What does this mean here?”
+That number helps the librarian find the right book. The story stays inside the book.
 
-Here is the analogy's **limit**: a library identifier may refer to a whole physical book, while text systems represent individual written items and their stored forms. The analogy also does not explain learning. It only gives us a bridge from an item to an agreed identifier.
+That number is an **identifier**: it tells us which book, not what the story means.
 
-Now return to the actual system. Which agreed number will Python report for the letter `A`, and why will that answer stay the same every time?
+Text systems do something similar with written characters. Agreed numbers help software tell characters apart.
+
+Here is the analogy's **limit**: a library number may point to a whole physical book. Text systems represent individual characters and their stored forms. This bridge explains identification, not learning.
+
+Before we look at Python, make a prediction: does Python invent a new number for `A` every time, or follow a fixed agreement? Hold your answer. Let's find out.
 
 ## 02:00 Technical Meaning
 

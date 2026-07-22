@@ -40,6 +40,21 @@ def test_video_one_hook_uses_familiar_ai_outcomes_without_assuming_prediction_kn
     assert "?" in hook
 
 
+def test_video_one_hook_and_analogy_fit_spoken_pacing_and_invite_a_prediction():
+    script = read_script()
+    hook = section(script, "## 00:00 Hook")
+    analogy = section(script, "## 00:45 Analogy")
+    lowered_analogy = analogy.lower()
+
+    assert len(hook.split()) <= 120
+    assert "mathematical operations" not in hook.lower()
+    assert len(analogy.split()) <= 120
+    assert lowered_analogy.count("identifier") <= 3
+    assert "predict" in lowered_analogy
+    assert "new number" in lowered_analogy
+    assert "fixed agreement" in lowered_analogy
+
+
 def test_video_one_uses_prediction_and_changed_case_as_evidence():
     script = read_script()
     lab = section(script, "## 09:00 Live Mini-Lab")
