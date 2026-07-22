@@ -75,6 +75,13 @@ function nonEmptyString(value: unknown, path: string): string {
   return value;
 }
 
+function generation(value: unknown, path: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    invalidMessage(path, "expected a positive safe integer");
+  }
+  return value as number;
+}
+
 function frameSummary(value: unknown, path: string): FrameSummary {
   const record = plainRecord(value, path);
   exactKeys(record, ["nodeId", "name", "duration"], path);
@@ -103,13 +110,21 @@ export function validateControllerToUi(value: unknown): ControllerToUi {
   if (typeof record.type !== "string") invalidMessage("$.type", "expected a message type");
   switch (record.type) {
     case "selection": {
-      exactKeys(record, ["type", "frames"], "$");
+      exactKeys(record, ["type", "generation", "frames"], "$");
       if (!Array.isArray(record.frames)) invalidMessage("$.frames", "expected an array");
-      return { type: "selection", frames: record.frames.map((frame, index) => frameSummary(frame, `$.frames[${index}]`)) };
+      return {
+        type: "selection",
+        generation: generation(record.generation, "$.generation"),
+        frames: record.frames.map((frame, index) => frameSummary(frame, `$.frames[${index}]`))
+      };
     }
     case "package-unhashed":
-      exactKeys(record, ["type", "value"], "$");
-      return { type: "package-unhashed", value: validateUnhashedPackage(record.value) };
+      exactKeys(record, ["type", "generation", "value"], "$");
+      return {
+        type: "package-unhashed",
+        generation: generation(record.generation, "$.generation"),
+        value: validateUnhashedPackage(record.value)
+      };
     case "bridge-result":
       exactKeys(record, ["type", "status", "code", "message"], "$");
       if (typeof record.status !== "number" || !Number.isSafeInteger(record.status) || record.status < 0 || record.status > 599) {
@@ -173,6 +188,7 @@ export function downloadPackage(
 
 export function createUiController(dependencies: UiDependencies): UiController {
   let retainedPackage: ExporterPackage | undefined;
+  let packageGeneration = 0;
   let state: UiViewModel = {
     frames: [],
     nativeCount: 0,
@@ -208,6 +224,8 @@ export function createUiController(dependencies: UiDependencies): UiController {
 
     switch (message.type) {
       case "selection":
+        if (message.generation < packageGeneration) return;
+        packageGeneration = message.generation;
         retainedPackage = undefined;
         update({
           frames: message.frames,
@@ -224,6 +242,8 @@ export function createUiController(dependencies: UiDependencies): UiController {
         });
         break;
       case "package-unhashed": {
+        if (message.generation !== packageGeneration) return;
+        const generationAtStart = message.generation;
         update({ busy: true, error: "", status: "Hashing package…" });
         try {
           const input = new TextEncoder().encode(contentFingerprintInput(message.value));
@@ -235,6 +255,7 @@ export function createUiController(dependencies: UiDependencies): UiController {
             ...message.value,
             contentHash: bytesToHex(new Uint8Array(digest))
           });
+          if (generationAtStart !== packageGeneration) return;
           retainedPackage = finalValue;
           const counts = finalValue.frames.reduce(
             (total, frame) => {
@@ -254,8 +275,9 @@ export function createUiController(dependencies: UiDependencies): UiController {
             downloadDisabled: false,
             busy: false
           });
-          dependencies.postMessage({ type: "package-ready", value: finalValue });
+          dependencies.postMessage({ type: "package-ready", generation: generationAtStart, value: finalValue });
         } catch (error) {
+          if (generationAtStart !== packageGeneration) return;
           retainedPackage = undefined;
           update({
             error: error instanceof Error ? error.message : "Package hashing failed.",
@@ -304,11 +326,28 @@ export function createUiController(dependencies: UiDependencies): UiController {
   };
 
   dependencies.render(state);
+  const invalidateForRequest = (status: string): void => {
+    retainedPackage = undefined;
+    update({
+      nativeCount: 0,
+      rasterCount: 0,
+      warnings: [],
+      status,
+      error: "",
+      packageReady: false,
+      sendDisabled: true,
+      downloadDisabled: true,
+      busy: true
+    });
+  };
   return {
     handleMessage,
-    refresh: () => dependencies.postMessage({ type: "refresh-selection" }),
+    refresh: () => {
+      invalidateForRequest("Refreshing selection…");
+      dependencies.postMessage({ type: "refresh-selection" });
+    },
     build: () => {
-      update({ busy: true, status: "Building package…", error: "" });
+      invalidateForRequest("Building package…");
       dependencies.postMessage({ type: "build-package" });
     },
     pair: (code) => dependencies.postMessage({ type: "pair", code }),

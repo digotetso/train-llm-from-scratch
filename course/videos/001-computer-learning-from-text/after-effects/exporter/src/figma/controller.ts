@@ -30,15 +30,15 @@ export interface FrameSummary {
 }
 
 export type ControllerToUi =
-  | { type: "selection"; frames: FrameSummary[] }
-  | { type: "package-unhashed"; value: ExporterPackage }
+  | { type: "selection"; generation: number; frames: FrameSummary[] }
+  | { type: "package-unhashed"; generation: number; value: ExporterPackage }
   | { type: "bridge-result"; status: number; code: string; message: string }
   | { type: "failure"; code: string; message: string };
 
 export type UiToController =
   | { type: "refresh-selection" }
   | { type: "build-package" }
-  | { type: "package-ready"; value: ExporterPackage }
+  | { type: "package-ready"; generation: number; value: ExporterPackage }
   | { type: "pair"; code: string }
   | { type: "send-live" }
   | { type: "close" };
@@ -150,8 +150,15 @@ export function validateUiToController(value: unknown): UiToController {
       }
       return { type: "pair", code: record.code };
     case "package-ready":
-      exactKeys(record, ["type", "value"], "$");
-      return { type: "package-ready", value: validatePackage(record.value) };
+      exactKeys(record, ["type", "generation", "value"], "$");
+      if (!Number.isSafeInteger(record.generation) || (record.generation as number) < 1) {
+        invalidMessage("$.generation", "expected a positive safe integer");
+      }
+      return {
+        type: "package-ready",
+        generation: record.generation as number,
+        value: validatePackage(record.value)
+      };
     default:
       invalidMessage("$.type", `unsupported message type ${JSON.stringify(record.type)}`);
   }
@@ -404,8 +411,16 @@ function isCanonicalBridgeToken(value: unknown): value is string {
 
 export function createController(host: ControllerHost, config: EmbeddedVideo001Config): Controller {
   const timings = validateConfig(config);
-  let pendingPackage: ExporterPackage | undefined;
-  let readyPackage: ExporterPackage | undefined;
+  let packageGeneration = 0;
+  let pendingPackage: { generation: number; value: ExporterPackage } | undefined;
+  let readyPackage: { generation: number; value: ExporterPackage } | undefined;
+
+  const beginPackageGeneration = (): number => {
+    packageGeneration += 1;
+    pendingPackage = undefined;
+    readyPackage = undefined;
+    return packageGeneration;
+  };
 
   const postFailure = (error: unknown): void => {
     const failure = failureFrom(error);
@@ -413,26 +428,37 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
   };
 
   const refreshSelection = async (): Promise<void> => {
+    const generation = beginPackageGeneration();
     try {
       const frames = selectedFrames(host, config, timings).map(({ timing }) => ({
         nodeId: timing.nodeId,
         name: timing.name,
         duration: timing.duration
       }));
-      host.postMessage({ type: "selection", frames });
+      host.postMessage({ type: "selection", generation, frames });
     } catch (error) {
       postFailure(error);
     }
   };
 
   const buildPackage = async (): Promise<void> => {
+    const generation = beginPackageGeneration();
     const selected = selectedFrames(host, config, timings);
+    host.postMessage({
+      type: "selection",
+      generation,
+      frames: selected.map(({ timing }) => ({
+        nodeId: timing.nodeId,
+        name: timing.name,
+        duration: timing.duration
+      }))
+    });
     const assets = new Map<string, Uint8Array>();
     const frames = [];
     for (const { node, timing } of selected) {
       const nodesById = new Map<string, FigmaNodeLike>();
       const snapshot = normalizeFigmaNode(node, host.mixed, nodesById);
-      frames.push(await serializeFrame(snapshot, { duration: timing.duration }, {
+      const frame = await serializeFrame(snapshot, { duration: timing.duration }, {
         rasterScale: 1,
         exportRaster: async (rasterSnapshot, request) => {
           if (request.format !== "PNG" || request.scale !== 1 || request.appearance !== "BAKED") {
@@ -459,7 +485,9 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
           }
           return { hash, bytes };
         }
-      }));
+      });
+      if (generation !== packageGeneration) return;
+      frames.push(frame);
     }
 
     const descriptors: AssetDescriptor[] = Array.from(assets, ([hash, bytes]) => ({
@@ -480,20 +508,22 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       assets: descriptors
     };
     contentFingerprintInput(value);
-    pendingPackage = value;
-    readyPackage = undefined;
-    host.postMessage({ type: "package-unhashed", value });
+    if (generation !== packageGeneration) return;
+    pendingPackage = { generation, value };
+    host.postMessage({ type: "package-unhashed", generation, value });
   };
 
-  const acceptPackage = (value: ExporterPackage): void => {
+  const acceptPackage = (generation: number, value: ExporterPackage): void => {
+    if (generation !== packageGeneration) return;
     if (pendingPackage === undefined) {
       throw controllerFailure("PACKAGE_NOT_PENDING", "Build a package before returning its content hash.");
     }
+    if (pendingPackage.generation !== generation) return;
     const validated = validatePackage(value);
-    if (contentFingerprintInput(validated) !== contentFingerprintInput(pendingPackage)) {
+    if (contentFingerprintInput(validated) !== contentFingerprintInput(pendingPackage.value)) {
       throw controllerFailure("PACKAGE_CONTENT_CHANGED", "The UI returned a package whose content changed during hashing.");
     }
-    readyPackage = validated;
+    readyPackage = { generation, value: validated };
   };
 
   const pair = async (code: string): Promise<void> => {
@@ -536,7 +566,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     if (readyPackage === undefined) {
       throw controllerFailure("PACKAGE_NOT_READY", "Build and hash a package before sending it.");
     }
-    const packageToSend = readyPackage;
+    const packageToSend = readyPackage.value;
     const token = await host.clientStorage.getAsync(BRIDGE_TOKEN_KEY);
     if (!isCanonicalBridgeToken(token)) {
       if (token !== undefined) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
@@ -604,7 +634,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
           await buildPackage();
           break;
         case "package-ready":
-          acceptPackage(message.value);
+          acceptPackage(message.generation, message.value);
           break;
         case "pair":
           await pair(message.code);

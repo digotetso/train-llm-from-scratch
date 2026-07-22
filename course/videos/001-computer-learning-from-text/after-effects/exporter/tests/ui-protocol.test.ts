@@ -146,6 +146,17 @@ function lastFailure(messages: unknown[]): { type: string; code: string; message
   return value as { type: string; code: string; message: string };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 test("selection refresh reports empty, non-frame, nested, unknown, and over-limit selections safely", async () => {
   const harness = hostHarness();
   const controller = createController(harness.host, config);
@@ -179,6 +190,7 @@ test("Shot 32 maps node 95:44 to the exact frame name and 28-frame duration", as
   await controller.handleMessage({ type: "refresh-selection" });
   assert.deepEqual(harness.messages.at(-1), {
     type: "selection",
+    generation: 1,
     frames: [{ nodeId: "95:44", name: "S001_SH32_Repo_PreparationNotLearning", duration: 28 }]
   });
 
@@ -298,6 +310,66 @@ test("raster export is serializer-classified, SCALE=1, sequential, byte-exact, a
   assert.equal(message.value.frames[0]?.children[0]?.opacity, 1, "BAKED raster appearance must not be reapplied");
 });
 
+test("a visible stroke with figma.mixed weight is rasterized instead of reaching native serialization", async () => {
+  const harness = hostHarness();
+  let rasterExports = 0;
+  const stroked = sceneNode({
+    id: "mixed-stroke",
+    name: "DATA_MixedStroke",
+    type: "RECTANGLE",
+    width: 100,
+    height: 100,
+    fills: [solidPaint()],
+    strokes: [solidPaint()],
+    strokeWeight: harness.host.mixed,
+    children: undefined,
+    exportAsync: async () => {
+      rasterExports += 1;
+      return new Uint8Array([137, 80, 78, 71]);
+    }
+  });
+  harness.setSelection([sceneNode({ children: [stroked] })]);
+  const controller = createController(harness.host, config);
+
+  await controller.handleMessage({ type: "build-package" });
+
+  const message = harness.messages.at(-1) as { type: string; value: ExporterPackage };
+  assert.equal(message.type, "package-unhashed");
+  assert.equal(rasterExports, 1);
+  assert.equal(message.value.frames[0]?.children[0]?.kind, "raster");
+  assert.equal(message.value.frames[0]?.warnings[0]?.property, "strokeWeight");
+});
+
+test("controller discards a stale raster build after a newer build generation completes", async () => {
+  const firstRaster = deferred<Uint8Array>();
+  let exportCount = 0;
+  const node = sceneNode({
+    opacity: 0.5,
+    exportAsync: async () => {
+      exportCount += 1;
+      if (exportCount === 1) return firstRaster.promise;
+      return new Uint8Array([2]);
+    }
+  });
+  const harness = hostHarness();
+  harness.setSelection([node]);
+  const controller = createController(harness.host, config);
+
+  const staleBuild = controller.handleMessage({ type: "build-package" });
+  await Promise.resolve();
+  const currentBuild = controller.handleMessage({ type: "build-package" });
+  await currentBuild;
+  firstRaster.resolve(new Uint8Array([1]));
+  await staleBuild;
+
+  const packages = harness.messages.filter((message): message is { type: "package-unhashed"; generation: number; value: ExporterPackage } =>
+    typeof message === "object" && message !== null && "type" in message && message.type === "package-unhashed"
+  );
+  assert.equal(packages.length, 1);
+  assert.equal(packages[0]?.generation, 2);
+  assert.equal(packages[0]?.value.assets[0]?.dataBase64, "Ag==");
+});
+
 test("both protocol boundaries reject unknown keys, invalid types, and exotic prototypes", () => {
   assert.throws(() => validateUiToController({ type: "send-live", token: "secret" }), /unknown field/i);
   assert.throws(() => validateUiToController({ type: "pair", code: "12345" }), /pairing code/i);
@@ -329,9 +401,15 @@ test("UI hashes with Web Crypto parity, returns only package-ready, exposes coun
   });
   const unhashed = makeValidPackage();
   unhashed.contentHash = "";
-  await ui.handleMessage({ type: "package-unhashed", value: unhashed });
-  const ready = posted.at(-1) as { type: string; value: ExporterPackage };
+  await ui.handleMessage({
+    type: "selection",
+    generation: 1,
+    frames: [{ nodeId: "95:44", name: unhashed.frames[0]!.name, duration: 28 }]
+  });
+  await ui.handleMessage({ type: "package-unhashed", generation: 1, value: unhashed });
+  const ready = posted.at(-1) as { type: string; generation: number; value: ExporterPackage };
   assert.equal(ready.type, "package-ready");
+  assert.equal(ready.generation, 1);
   const nodeHash = createHash("sha256").update(contentFingerprintInput(unhashed), "utf8").digest("hex");
   assert.equal(ready.value.contentHash, nodeHash);
   assert.deepEqual(validatePackage(ready.value), ready.value);
@@ -344,6 +422,52 @@ test("UI hashes with Web Crypto parity, returns only package-ready, exposes coun
   assert.equal(downloads[0]?.mimeType, EXPORT_MEDIA_TYPE);
   assert.equal(downloads[0]?.filename, `S001_SH32_Repo_PreparationNotLearning-${nodeHash.slice(0, 12)}.video001-ae.json`);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(downloads[0]?.bytes)), ready.value);
+});
+
+test("UI discards a stale digest after a newer selection and package generation", async () => {
+  const firstDigest = deferred<ArrayBuffer>();
+  let digestCount = 0;
+  const posted: unknown[] = [];
+  const views: UiViewModel[] = [];
+  const ui = createUiController({
+    postMessage: (message) => posted.push(structuredClone(message)),
+    render: (view) => views.push(structuredClone(view)),
+    digest: async (algorithm, bytes) => {
+      digestCount += 1;
+      if (digestCount === 1) return firstDigest.promise;
+      return crypto.subtle.digest(algorithm, bytes);
+    },
+    download: () => undefined
+  });
+  const stale = makeValidPackage();
+  stale.contentHash = "";
+  const current = makeValidPackage();
+  current.contentHash = "";
+  current.exportedAt = "2026-07-22T00:00:01.000Z";
+
+  await ui.handleMessage({
+    type: "selection",
+    generation: 1,
+    frames: [{ nodeId: "95:44", name: stale.frames[0]!.name, duration: 28 }]
+  });
+  const staleHash = ui.handleMessage({ type: "package-unhashed", generation: 1, value: stale });
+  await Promise.resolve();
+  await ui.handleMessage({
+    type: "selection",
+    generation: 2,
+    frames: [{ nodeId: "95:44", name: current.frames[0]!.name, duration: 28 }]
+  });
+  await ui.handleMessage({ type: "package-unhashed", generation: 2, value: current });
+  firstDigest.resolve(new Uint8Array(32).buffer);
+  await staleHash;
+
+  const readyMessages = posted.filter((message): message is { type: "package-ready"; generation: number; value: ExporterPackage } =>
+    typeof message === "object" && message !== null && "type" in message && message.type === "package-ready"
+  );
+  assert.equal(readyMessages.length, 1);
+  assert.equal(readyMessages[0]?.generation, 2);
+  assert.equal(readyMessages[0]?.value.exportedAt, current.exportedAt);
+  assert.equal(views.at(-1)?.packageReady, true);
 });
 
 test("downloadPackage uses a UTF-8 vendor Blob and deterministic safe filename", async () => {
@@ -367,15 +491,17 @@ test("controller validates package-ready state, pairs and sends exact requests, 
   harness.setSelection([sceneNode()]);
   const controller = createController(harness.host, config);
 
-  await controller.handleMessage({ type: "package-ready", value: await hashedPackage() });
+  await controller.handleMessage({ type: "refresh-selection" });
+  await controller.handleMessage({ type: "package-ready", generation: 1, value: await hashedPackage() });
   assert.equal(lastFailure(harness.messages).code, "PACKAGE_NOT_PENDING");
 
   await controller.handleMessage({ type: "build-package" });
-  const pending = (harness.messages.at(-1) as { value: ExporterPackage }).value;
+  const pendingMessage = harness.messages.at(-1) as { generation: number; value: ExporterPackage };
+  const pending = pendingMessage.value;
   const finalValue = structuredClone(pending);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(contentFingerprintInput(finalValue)));
   finalValue.contentHash = Buffer.from(digest).toString("hex");
-  await controller.handleMessage({ type: "package-ready", value: finalValue });
+  await controller.handleMessage({ type: "package-ready", generation: pendingMessage.generation, value: finalValue });
 
   await controller.handleMessage({ type: "pair", code: "123456" });
   assert.equal(harness.requests[0]?.input, `${BRIDGE_BASE_URL}/v1/pair`);
@@ -431,13 +557,24 @@ async function makeControllerReady(harness: HostHarness): Promise<ReturnType<typ
   harness.setSelection([sceneNode()]);
   const controller = createController(harness.host, config);
   await controller.handleMessage({ type: "build-package" });
-  const pending = (harness.messages.at(-1) as { value: ExporterPackage }).value;
+  const pendingMessage = harness.messages.at(-1) as { generation: number; value: ExporterPackage };
+  const pending = pendingMessage.value;
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(contentFingerprintInput(pending)));
   const ready = { ...pending, contentHash: Buffer.from(digest).toString("hex") };
-  await controller.handleMessage({ type: "package-ready", value: ready });
+  await controller.handleMessage({ type: "package-ready", generation: pendingMessage.generation, value: ready });
   harness.storage.set(BRIDGE_TOKEN_KEY, "A".repeat(43));
   return controller;
 }
+
+test("a selection refresh invalidates the controller's previously ready package", async () => {
+  const harness = hostHarness();
+  const controller = await makeControllerReady(harness);
+
+  await controller.handleMessage({ type: "refresh-selection" });
+  await controller.handleMessage({ type: "send-live" });
+
+  assert.equal(lastFailure(harness.messages).code, "PACKAGE_NOT_READY");
+});
 
 test("live send accepts only the bridge's exact 202 envelope for the retained content hash", async () => {
   const wrongStatus = hostHarness([
@@ -482,7 +619,12 @@ test("bridge outage reports a structured result and leaves UI manual download en
   });
   const value = makeValidPackage();
   value.contentHash = "";
-  await ui.handleMessage({ type: "package-unhashed", value });
+  await ui.handleMessage({
+    type: "selection",
+    generation: 1,
+    frames: [{ nodeId: "95:44", name: value.frames[0]!.name, duration: 28 }]
+  });
+  await ui.handleMessage({ type: "package-unhashed", generation: 1, value });
   await ui.handleMessage(harness.messages.at(-1));
   assert.equal(views.at(-1)?.downloadDisabled, false);
   assert.equal(views.at(-1)?.bridgeCode, "BRIDGE_UNAVAILABLE");

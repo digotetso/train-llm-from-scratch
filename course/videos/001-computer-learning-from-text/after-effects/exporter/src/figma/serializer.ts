@@ -314,6 +314,10 @@ function directRasterReason(node: FigmaNodeSnapshot): string | null {
     if (node.fills?.length !== 1 || !isOpaqueSolid(node.fills[0])) return "fills";
     const strokes = node.strokes ?? [];
     if (strokes.length > 1 || (strokes.length === 1 && !isOpaqueSolid(strokes[0]))) return "strokes";
+    if (
+      strokes.length === 1 &&
+      (typeof node.strokeWeight !== "number" || !Number.isFinite(node.strokeWeight) || node.strokeWeight < 0)
+    ) return "strokeWeight";
     if (node.type === "RECTANGLE" && node.cornerRadius === "MIXED") return "cornerRadius";
     return null;
   }
