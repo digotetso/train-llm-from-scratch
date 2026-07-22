@@ -66,20 +66,18 @@ var Video001ExporterPanel = (function (thisObject, importer) {
         reportText.active = true;
     }
 
-    function readJson(file) {
-        return JSON.parse(importer.readUtf8(file));
-    }
-
     function isPositiveInteger(value) {
         return typeof value === "number" && isFinite(value) && value > 0 && Math.floor(value) === value;
     }
 
-    function readBridgeState() {
+    function readBridgeStateSnapshot() {
+        var raw;
         var state;
         if (!stateFile.exists) {
             return null;
         }
-        state = readJson(stateFile);
+        raw = importer.readUtf8(stateFile);
+        state = JSON.parse(raw);
         if (
             state === null ||
             typeof state !== "object" ||
@@ -92,7 +90,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
         ) {
             throw new Error("Bridge state is invalid");
         }
-        return state;
+        return { raw: raw, state: state };
     }
 
     function findNodeExecutable() {
@@ -111,7 +109,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     function startBridge() {
         var nodeExecutable;
         var command;
-        if (readBridgeState() !== null) {
+        if (readLiveBridgeState() !== null) {
             setStatus("Bridge is already running");
             return;
         }
@@ -141,8 +139,42 @@ var Video001ExporterPanel = (function (thisObject, importer) {
         return secondCommand.indexOf(bridgeCli.fsName) >= 0;
     }
 
+    function removeStaleBridgeState(snapshot) {
+        if (!stateFile.exists) {
+            return true;
+        }
+        if (importer.readUtf8(stateFile) !== snapshot.raw) {
+            return false;
+        }
+        if (commandPathContainsBridge(snapshot.state.pid)) {
+            return false;
+        }
+        if (!stateFile.remove()) {
+            throw new Error("Stale exporter bridge state could not be removed");
+        }
+        return true;
+    }
+
+    function readLiveBridgeState() {
+        var snapshot;
+        var attempt;
+        for (attempt = 0; attempt < 2; attempt += 1) {
+            snapshot = readBridgeStateSnapshot();
+            if (snapshot === null) {
+                return null;
+            }
+            if (commandPathContainsBridge(snapshot.state.pid)) {
+                return snapshot.state;
+            }
+            if (removeStaleBridgeState(snapshot)) {
+                return null;
+            }
+        }
+        throw new Error("Exporter bridge state changed while liveness was being verified");
+    }
+
     function stopBridge(silent) {
-        var state = readBridgeState();
+        var state = readLiveBridgeState();
         if (state === null) {
             if (!silent) {
                 setStatus("Bridge is stopped");
@@ -159,7 +191,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     }
 
     function completeResetPairing() {
-        if (stateFile.exists) {
+        if (readLiveBridgeState() !== null) {
             return false;
         }
         if (authFile.exists && !authFile.remove()) {
@@ -173,7 +205,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     }
 
     function resetPairing() {
-        if (readBridgeState() === null) {
+        if (readLiveBridgeState() === null) {
             completeResetPairing();
             return;
         }
@@ -302,7 +334,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
             if (resetPending && completeResetPairing()) {
                 return;
             }
-            state = readBridgeState();
+            state = readLiveBridgeState();
             files = queuedFiles();
             if (state === null) {
                 pairingCodeText.text = "------";

@@ -15,6 +15,8 @@
     var contentHash;
     var importReport;
     var report;
+    var fallback;
+    var fallbackIndex;
 
     File.encoding = "UTF-8";
 
@@ -231,7 +233,14 @@
     importReport = loadImportReport(contentHash, report.warnings);
     if (importReport !== null) {
         report.missingFonts = importReport.missingFonts || [];
-        report.rasterFallbacks = importReport.fallbacks || [];
+        if (importReport.fallbacks && importReport.fallbacks.length) {
+            for (fallbackIndex = 0; fallbackIndex < importReport.fallbacks.length; fallbackIndex += 1) {
+                fallback = importReport.fallbacks[fallbackIndex];
+                if (fallback && fallback.type === "raster-fallback") {
+                    report.rasterFallbacks[report.rasterFallbacks.length] = fallback;
+                }
+            }
+        }
         if (importReport.warnings && importReport.warnings.length) {
             report.warnings = report.warnings.concat(importReport.warnings);
         }

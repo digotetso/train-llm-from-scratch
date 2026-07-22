@@ -107,6 +107,81 @@ var Video001ExporterImporter = (function (core) {
         return "'" + String(value).replace(/'/g, "'\\''") + "'";
     }
 
+    function canonicalJson(value) {
+        var keys = [];
+        var parts = [];
+        var key;
+        var index;
+        var serialized;
+        if (value === null || typeof value !== "object") {
+            serialized = JSON.stringify(value);
+            if (serialized === undefined) {
+                throw new Error("Cannot canonicalize a non-JSON package value");
+            }
+            return serialized;
+        }
+        if (value instanceof Array) {
+            for (index = 0; index < value.length; index += 1) {
+                parts[parts.length] = canonicalJson(value[index]);
+            }
+            return "[" + parts.join(",") + "]";
+        }
+        for (key in value) {
+            if (Object.prototype.hasOwnProperty.call(value, key)) {
+                keys[keys.length] = key;
+            }
+        }
+        keys.sort();
+        for (index = 0; index < keys.length; index += 1) {
+            key = keys[index];
+            parts[parts.length] = JSON.stringify(key) + ":" + canonicalJson(value[key]);
+        }
+        return "{" + parts.join(",") + "}";
+    }
+
+    function verifyManualContentFingerprint(packageValue) {
+        var packageObject = requireObject(packageValue, "Exporter package");
+        var assets = requireArray(packageObject.assets, "Exporter package assets");
+        var fingerprintValue = {};
+        var temporary;
+        var expectedHash = requireHash(packageObject.contentHash, "Exporter package contentHash");
+        var actualHash;
+        var key;
+        var index;
+        for (index = 0; index < assets.length; index += 1) {
+            requireObject(assets[index], "Exporter package asset " + index);
+            if (
+                typeof assets[index].dataBase64 !== "string" ||
+                (typeof assets[index].path === "string" && assets[index].path.length > 0)
+            ) {
+                throw new Error("Manual imports must contain inline raster data so the declared content fingerprint can be verified");
+            }
+        }
+        for (key in packageObject) {
+            if (Object.prototype.hasOwnProperty.call(packageObject, key)) {
+                fingerprintValue[key] = packageObject[key];
+            }
+        }
+        fingerprintValue.exportedAt = "";
+        fingerprintValue.contentHash = "";
+        temporary = new File(
+            Folder.temp.fsName + "/video001-package-fingerprint-" +
+            String(new Date().getTime()) + "-" + String(Math.floor(Math.random() * 1000000000)) + ".json"
+        );
+        try {
+            writeUtf8(temporary, canonicalJson(fingerprintValue));
+            system.callSystem("/bin/chmod 600 " + quoteShellArgument(temporary.fsName));
+            actualHash = sha256File(temporary);
+        } finally {
+            if (temporary.exists && !temporary.remove()) {
+                throw new Error("Cannot remove temporary manual package fingerprint input");
+            }
+        }
+        if (actualHash !== expectedHash) {
+            throw new Error("Manual package content fingerprint does not match its declared content hash");
+        }
+    }
+
     function decodeCanonicalBase64(value) {
         var source = String(value);
         var parts = [];
@@ -464,16 +539,18 @@ var Video001ExporterImporter = (function (core) {
 
         for (index = 0; index < assets.length; index += 1) {
             asset = assets[index];
-            if (referencedAssets[asset.hash]) {
-                validateAssetPath(asset, expectedAssetRoot);
-            }
+            validateAssetPath(asset, expectedAssetRoot);
         }
         packageObject.assetByHash = assetByHash;
         return packageObject;
     }
 
     function rememberItem(transactionItems, item) {
-        if (!(item instanceof Item)) {
+        if (
+            !(item instanceof FolderItem) &&
+            !(item instanceof CompItem) &&
+            !(item instanceof FootageItem)
+        ) {
             throw new Error("Importer transaction may record only After Effects Item references");
         }
         transactionItems[transactionItems.length] = item;
@@ -592,6 +669,7 @@ var Video001ExporterImporter = (function (core) {
         if (replacement !== requested) {
             appendUnique(state.missingFonts, requested);
             appendFallback(state, {
+                type: "font-substitution",
                 nodeId: node.id,
                 nodeName: node.name,
                 property: "font",
@@ -638,19 +716,23 @@ var Video001ExporterImporter = (function (core) {
         var animator = animators.addProperty("ADBE Text Animator");
         var animatorProperties = animator.property("ADBE Text Animator Properties");
         var selector = animator.property("ADBE Text Selectors").addProperty("ADBE Text Selector");
+        var advanced = selector.property("ADBE Text Range Advanced");
         var property;
         animator.name = "Video001 mixed run " + run.start + "-" + run.end;
-        property = selector.property("ADBE Text Range Units");
+        if (advanced === null) {
+            throw new Error("After Effects text range advanced settings are unavailable");
+        }
+        property = advanced.property("ADBE Text Range Units");
         if (property === null) {
             throw new Error("After Effects text range units are unavailable");
         }
         property.setValue(2);
-        property = selector.property("ADBE Text Percent Start");
+        property = selector.property("ADBE Text Index Start");
         if (property === null) {
             throw new Error("After Effects text range start is unavailable");
         }
         property.setValue(run.start);
-        property = selector.property("ADBE Text Percent End");
+        property = selector.property("ADBE Text Index End");
         if (property === null) {
             throw new Error("After Effects text range end is unavailable");
         }
@@ -663,12 +745,29 @@ var Video001ExporterImporter = (function (core) {
         }
     }
 
-    function setLayerGeometry(layer, rect, rotation, opacity) {
+    function setLayerGeometry(layer, rect, rotation, opacity, boxTextPos) {
         var radians = rotation * Math.PI / 180;
         var centerX = rect.x + Math.cos(radians) * rect.width / 2 - Math.sin(radians) * rect.height / 2;
         var centerY = rect.y + Math.sin(radians) * rect.width / 2 + Math.cos(radians) * rect.height / 2;
+        var anchorX = 0;
+        var anchorY = 0;
         var transform = layer.property("ADBE Transform Group");
-        transform.property("ADBE Anchor Point").setValue([0, 0]);
+        if (boxTextPos !== undefined) {
+            if (
+                boxTextPos === null ||
+                boxTextPos.length === undefined ||
+                boxTextPos.length < 2 ||
+                typeof boxTextPos[0] !== "number" ||
+                typeof boxTextPos[1] !== "number" ||
+                !isFinite(boxTextPos[0]) ||
+                !isFinite(boxTextPos[1])
+            ) {
+                throw new Error("After Effects paragraph box position is unavailable");
+            }
+            anchorX = boxTextPos[0] + rect.width / 2;
+            anchorY = boxTextPos[1] + rect.height / 2;
+        }
+        transform.property("ADBE Anchor Point").setValue([anchorX, anchorY]);
         transform.property("ADBE Position").setValue([centerX, centerY]);
         transform.property("ADBE Rotate Z").setValue(rotation);
         transform.property("ADBE Opacity").setValue(clamp(Math.round(opacity * 100), 0, 100));
@@ -676,13 +775,12 @@ var Video001ExporterImporter = (function (core) {
 
     function addText(comp, node, context) {
         var textBox = core.scaleRect(
-            { x: 0, y: 0, width: node.textBox.width, height: node.textBox.height },
+            { x: node.x, y: node.y, width: node.textBox.width, height: node.textBox.height },
             context.frame.width,
             context.frame.height,
             context.target.width,
             context.target.height
         );
-        var rect = core.scaleRect(node, context.frame.width, context.frame.height, context.target.width, context.target.height);
         var scaleY = context.target.height / context.frame.height;
         var runs = node.runs;
         var syntheticRun;
@@ -752,7 +850,8 @@ var Video001ExporterImporter = (function (core) {
             source.setValue(documentValue);
         }
 
-        setLayerGeometry(layer, rect, node.rotation, node.opacity);
+        documentValue = source.value;
+        setLayerGeometry(layer, textBox, node.rotation, node.opacity, documentValue.boxTextPos);
         context.state.layerCount += 1;
         context.state.nativeCount += 1;
         return layer;
@@ -914,6 +1013,7 @@ var Video001ExporterImporter = (function (core) {
         for (index = 0; index < frame.warnings.length; index += 1) {
             warning = frame.warnings[index];
             appendFallback(state, {
+                type: "raster-fallback",
                 nodeId: warning.nodeId,
                 nodeName: warning.nodeName,
                 property: warning.property,
@@ -932,7 +1032,7 @@ var Video001ExporterImporter = (function (core) {
         return new File(reportFolder.fsName + "/import-report-" + contentHash + ".json");
     }
 
-    function importPackage(packageValue, options) {
+    function importValidatedPackage(packageValue, options) {
         var startedAt = new Date().getTime();
         var transactionItems = [];
         var timing = loadTiming(options.timingFile);
@@ -1009,6 +1109,11 @@ var Video001ExporterImporter = (function (core) {
         };
     }
 
+    function importPackage(packageValue, options) {
+        verifyManualContentFingerprint(packageValue);
+        return importValidatedPackage(packageValue, options);
+    }
+
     function isQueuedPackageFile(packageFile, queueRoot, contentHash) {
         return (
             packageFile.parent.fsName === queueRoot.fsName + "/incoming" &&
@@ -1016,9 +1121,23 @@ var Video001ExporterImporter = (function (core) {
         );
     }
 
+    function verifyPackageFileIdentity(packageFile, options, packageValue) {
+        var packageObject = requireObject(packageValue, "Exporter package");
+        var contentHash = requireHash(packageObject.contentHash, "Exporter package contentHash");
+        var queued = isQueuedPackageFile(packageFile, options.queueRoot, contentHash);
+        if (options.removeAfterReport && !queued) {
+            throw new Error("Queue package identity must be a direct incoming/<contentHash>.video001-ae.json child");
+        }
+        if (!queued) {
+            verifyManualContentFingerprint(packageObject);
+        }
+        return queued;
+    }
+
     function importPackageFile(packageFile, options) {
         var packageValue = JSON.parse(readUtf8(packageFile));
-        var result = importPackage(packageValue, options);
+        verifyPackageFileIdentity(packageFile, options, packageValue);
+        var result = importValidatedPackage(packageValue, options);
         if (
             result.status === "IMPORTED" &&
             options.removeAfterReport &&
