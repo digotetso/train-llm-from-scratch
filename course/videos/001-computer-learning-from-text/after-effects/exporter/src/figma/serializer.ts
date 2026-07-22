@@ -268,7 +268,7 @@ function rootAppearanceReason(node: FigmaNodeSnapshot): string | null {
   if (node.isMask === true) return "isMask";
   if (!hasRepresentableBlendMode(node)) return "blendMode";
   if (visibleEffects(node).length > 0) return "effects";
-  if ((node.fills ?? []).some((paint) => paint.visible !== false)) return "fills";
+  if ((node.fills ?? []).some((paint) => paint.visible !== false) && rootSolidFill(node) === undefined) return "fills";
   if ((node.strokes ?? []).some((paint) => paint.visible !== false)) return "strokes";
   if (node.opacity !== undefined && node.opacity !== 1) return "opacity";
   return null;
@@ -279,6 +279,11 @@ function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
   if (paint.opacity !== undefined && paint.opacity !== 1) return false;
   const { r, g, b } = paint.color;
   return [r, g, b].every((channel) => typeof channel === "number" && Number.isFinite(channel) && channel >= 0 && channel <= 1);
+}
+
+function rootSolidFill(node: FigmaNodeSnapshot): FigmaPaintSnapshot | undefined {
+  const fills = node.fills ?? [];
+  return fills.length === 1 && isOpaqueSolid(fills[0]) ? fills[0] : undefined;
 }
 
 function segmentPaint(segment: StyledTextSegmentSnapshot): FigmaPaintSnapshot | undefined {
@@ -385,6 +390,18 @@ function validateNodeIdentity(node: FigmaNodeSnapshot, path: string, ids: Set<st
     const opacity = finiteNumber(node.opacity, `${path}.opacity`);
     if (opacity < 0 || opacity > 1) invalid(`${path}.opacity`, "expected a number between 0 and 1");
   }
+}
+
+function reserveSyntheticNodeId(frameId: string, suffix: string, ids: Set<string>): string {
+  const base = nonEmptyString(`${frameId}::${suffix}`, "$.synthetic.id");
+  let candidate = base;
+  let collision = 2;
+  while (ids.has(candidate)) {
+    candidate = `${base}:${collision}`;
+    collision += 1;
+  }
+  ids.add(candidate);
+  return candidate;
 }
 
 function preflightNode(
@@ -707,6 +724,24 @@ export async function serializeFrame(
   }
 
   const children: ExportNode[] = [];
+  const solidRootFill = rootSolidFill(node);
+  if (solidRootFill !== undefined) {
+    children.push({
+      id: reserveSyntheticNodeId(frameId, "root-solid-background", ids),
+      name: safeName(`${frameName}__ROOT_SOLID_BACKGROUND`, "$.synthetic.name"),
+      kind: "rect",
+      x: 0,
+      y: 0,
+      width,
+      height,
+      rotation: 0,
+      opacity: 1,
+      fill: colorHex(solidRootFill, "$.fills[0]"),
+      stroke: null,
+      strokeWidth: 0,
+      radius: 0
+    });
+  }
   for (let index = 0; index < node.children.length; index += 1) {
     children.push(await serializeNode(node.children[index]!, `$.children[${index}]`, context));
   }

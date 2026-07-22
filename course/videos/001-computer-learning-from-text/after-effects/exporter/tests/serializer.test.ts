@@ -348,6 +348,67 @@ test("rasterizes nonstandard container blends and PASS_THROUGH non-containers", 
   ]);
 });
 
+test("serializes one opaque root fill as an editable full-frame background behind children", async () => {
+  const rasterized: string[] = [];
+  const frame = await serializeFrame(
+    root([shape({ id: "foreground", name: "Foreground" })], {
+      fills: [solid()],
+      blendMode: "PASS_THROUGH"
+    }),
+    { duration: 28 },
+    {
+      rasterScale: 1,
+      exportRaster: async (node) => {
+        rasterized.push(node.id);
+        return rasterAsset(node.id);
+      }
+    }
+  );
+
+  assert.deepEqual(rasterized, []);
+  assert.deepEqual(frame.children.map((node) => node.name), [
+    "S001_SH32_TestFrame__ROOT_SOLID_BACKGROUND",
+    "Foreground"
+  ]);
+  assert.deepEqual(frame.children[0], {
+    id: "frame-root::root-solid-background",
+    name: "S001_SH32_TestFrame__ROOT_SOLID_BACKGROUND",
+    kind: "rect",
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    rotation: 0,
+    opacity: 1,
+    fill: "#4080BF",
+    stroke: null,
+    strokeWidth: 0,
+    radius: 0
+  });
+  assert.equal(frame.children[1]?.kind, "rect");
+  assert.deepEqual(frame.warnings, []);
+
+  const packageValue = makeValidPackage();
+  packageValue.frames = [frame];
+  assert.deepEqual(validatePackage(packageValue).frames[0], frame);
+});
+
+test("reserves a collision-safe synthetic root background identity", async () => {
+  const reservedId = "frame-root::root-solid-background";
+  const frame = await serializeFrame(root([
+    shape({ id: reservedId, name: "Existing_Reserved_Id" })
+  ], { fills: [solid()] }), { duration: 28 }, { rasterScale: 1 });
+
+  assert.equal(frame.children[0]?.id, `${reservedId}:2`);
+  assert.equal(frame.children[0]?.name, "S001_SH32_TestFrame__ROOT_SOLID_BACKGROUND");
+  assert.equal(frame.children[1]?.id, reservedId);
+  assert.equal(new Set([frame.nodeId, ...frame.children.map((node) => node.id)]).size, 3);
+
+  const packageValue = makeValidPackage();
+  packageValue.frames = [frame];
+  assert.deepEqual(validatePackage(packageValue).frames[0], frame);
+});
+
 test("injects pure raster export with deterministic PNG scale and verifies the returned hash", async () => {
   const gradient = shape({
     id: "96:5",
@@ -386,20 +447,23 @@ test("injects pure raster export with deterministic PNG scale and verifies the r
 
 test("rasterizes the selected frame once when its direct appearance cannot be represented", async () => {
   const baked = rasterAsset("full-selected-frame-baked-appearance");
-  const cases: Array<[string, Partial<FigmaNodeSnapshot>]> = [
-    ["fills", { fills: [solid()] }],
-    ["strokes", { strokes: [solid()], strokeWeight: 2 }],
-    ["effects", { effects: [{ type: "DROP_SHADOW", visible: true }] }],
-    ["isMask", { isMask: true }],
-    ["blendMode", { blendMode: "MULTIPLY" }],
-    ["opacity", { opacity: 0.4 }],
-    ["visible", { visible: false }]
+  const cases: Array<[string, string, Partial<FigmaNodeSnapshot>]> = [
+    ["gradient fill", "fills", { fills: [{ type: "GRADIENT_LINEAR" }] }],
+    ["image fill", "fills", { fills: [{ type: "IMAGE", imageHash: "root-image" }] }],
+    ["multiple fills", "fills", { fills: [solid(), solid(0.1, 0.2, 0.3)] }],
+    ["transparent fill", "fills", { fills: [{ ...solid(), opacity: 0.5 }] }],
+    ["strokes", "strokes", { strokes: [solid()], strokeWeight: 2 }],
+    ["effects", "effects", { effects: [{ type: "DROP_SHADOW", visible: true }] }],
+    ["isMask", "isMask", { isMask: true }],
+    ["blendMode", "blendMode", { blendMode: "MULTIPLY" }],
+    ["opacity", "opacity", { opacity: 0.4 }],
+    ["visible", "visible", { visible: false }]
   ];
 
-  for (const [property, appearance] of cases) {
+  for (const [label, property, appearance] of cases) {
     const source = root([
-      shape({ id: `${property}-child`, name: `${property}_Child` }),
-      shape({ id: `${property}-hidden`, name: `${property}_Hidden` })
+      shape({ id: `${label}-child`, name: `${label}_Child` }),
+      shape({ id: `${label}-hidden`, name: `${label}_Hidden` })
     ], appearance);
     const calls: Array<{ id: string; request: RasterExportRequest }> = [];
     const frame = await serializeFrame(source, { duration: 28 }, {
@@ -413,8 +477,8 @@ test("rasterizes the selected frame once when its direct appearance cannot be re
     assert.deepEqual(calls, [{
       id: "frame-root",
       request: { format: "PNG", scale: 2, appearance: "BAKED" }
-    }], property);
-    assert.equal(frame.children.length, 1, property);
+    }], label);
+    assert.equal(frame.children.length, 1, label);
     assert.deepEqual(frame.children[0], {
       id: "frame-root::root-raster-fallback",
       name: "S001_SH32_TestFrame__ROOT_RASTER_FALLBACK",
@@ -426,14 +490,14 @@ test("rasterizes the selected frame once when its direct appearance cannot be re
       rotation: 0,
       opacity: 1,
       assetHash: baked.hash
-    }, property);
+    }, label);
     assert.deepEqual(frame.warnings, [{
       nodeId: "frame-root",
       nodeName: "S001_SH32_TestFrame",
       property,
       fallback: "png"
-    }], property);
-    assert.throws(() => findNode(frame, `${property}_Child`), /missing exported node/, property);
+    }], label);
+    assert.throws(() => findNode(frame, `${label}_Child`), /missing exported node/, label);
   }
 });
 
@@ -463,7 +527,7 @@ test("does not collapse a neutral selected frame merely because one child needs 
 });
 
 test("fails root rasterization actionably when faithful baked appearance is unavailable", async () => {
-  const source = root([shape()], { fills: [solid()] });
+  const source = root([shape()], { fills: [{ type: "GRADIENT_LINEAR" }] });
   await assert.rejects(
     serializeFrame(source, { duration: 28 }, { rasterScale: 1 }),
     /\$.*frame-root.*root raster|raster fallback/i
