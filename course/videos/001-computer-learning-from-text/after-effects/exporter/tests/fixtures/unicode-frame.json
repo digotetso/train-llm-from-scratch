@@ -1,0 +1,219 @@
+{
+  "fixtureProvenance": {
+    "lesson": "Video 001 - What AI Models Actually Do",
+    "shot": 32,
+    "figmaNodeId": "95:44",
+    "purpose": "Shot 32 Unicode, paragraph geometry, alignment, mixed-style, viewport transform, and rotation regression coverage"
+  },
+  "id": "95:44",
+  "name": "S001_SH32_Repo_PreparationNotLearning",
+  "type": "FRAME",
+  "width": 1920,
+  "height": 1080,
+  "opacity": 1,
+  "absoluteTransform": [
+    [0.9743700647852352, -0.224951054343865, 2800],
+    [0.224951054343865, 0.9743700647852352, -450]
+  ],
+  "fills": [],
+  "strokes": [],
+  "effects": [],
+  "blendMode": "NORMAL",
+  "isMask": false,
+  "children": [
+    {
+      "id": "95:45",
+      "name": "TXT_Title",
+      "type": "TEXT",
+      "width": 860,
+      "height": 152,
+      "opacity": 0.92,
+      "absoluteTransform": [
+        [0.9743700647852352, -0.224951054343865, 2955.1410167703943],
+        [0.224951054343865, 0.9743700647852352, -321.8155043874331]
+      ],
+      "characters": "REPOSITORY PREPARATION\nIS NOT LEARNING",
+      "fills": [{ "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "LEFT",
+      "lineHeightPx": 76,
+      "letterSpacingPx": 0,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 22,
+          "fontFamily": "Sora",
+          "fontStyle": "Bold",
+          "fontSize": 64,
+          "fill": { "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }
+        },
+        {
+          "start": 22,
+          "end": 38,
+          "fontFamily": "Sora",
+          "fontStyle": "SemiBold",
+          "fontSize": 60,
+          "fill": { "type": "SOLID", "color": { "r": 0.2980392157, "g": 0.8352941176, "b": 0.968627451 } }
+        }
+      ]
+    },
+    {
+      "id": "95:46",
+      "name": "MODEL_Parameters",
+      "type": "TEXT",
+      "width": 104,
+      "height": 112,
+      "opacity": 1,
+      "absoluteTransform": [
+        [0.9743700647852352, -0.224951054343865, 2953.612094458763],
+        [0.224951054343865, 0.9743700647852352, -4.014210499939622]
+      ],
+      "characters": "θ",
+      "fills": [{ "type": "SOLID", "color": { "r": 0.1843137255, "g": 0.8352941176, "b": 0.5450980392 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "CENTER",
+      "lineHeightPx": 112,
+      "letterSpacingPx": 0,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 1,
+          "fontFamily": "Sora",
+          "fontStyle": "Bold",
+          "fontSize": 96,
+          "fill": { "type": "SOLID", "color": { "r": 0.1843137255, "g": 0.8352941176, "b": 0.5450980392 } }
+        }
+      ]
+    },
+    {
+      "id": "95:47",
+      "name": "TXT_MiddleDot",
+      "type": "TEXT",
+      "width": 52,
+      "height": 64,
+      "opacity": 1,
+      "absoluteTransform": [
+        [0.9743700647852352, -0.224951054343865, 3083.27537189838],
+        [0.224951054343865, 0.9743700647852352, 56.71003905175854]
+      ],
+      "characters": "·",
+      "fills": [{ "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "CENTER",
+      "lineHeightPx": 64,
+      "letterSpacingPx": 0,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 1,
+          "fontFamily": "Sora",
+          "fontStyle": "Regular",
+          "fontSize": 52,
+          "fill": { "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }
+        }
+      ]
+    },
+    {
+      "id": "95:48",
+      "name": "TXT_Arrow",
+      "type": "TEXT",
+      "width": 80,
+      "height": 64,
+      "opacity": 1,
+      "absoluteTransform": [
+        [0.9743700647852352, -0.224951054343865, 3170.968677729051],
+        [0.224951054343865, 0.9743700647852352, 76.95563394270641]
+      ],
+      "characters": "→",
+      "fills": [{ "type": "SOLID", "color": { "r": 0.2980392157, "g": 0.8352941176, "b": 0.968627451 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "CENTER",
+      "lineHeightPx": 64,
+      "letterSpacingPx": 0,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 1,
+          "fontFamily": "Sora",
+          "fontStyle": "Bold",
+          "fontSize": 52,
+          "fill": { "type": "SOLID", "color": { "r": 0.2980392157, "g": 0.8352941176, "b": 0.968627451 } }
+        }
+      ]
+    },
+    {
+      "id": "95:49",
+      "name": "TXT_RightAligned",
+      "type": "TEXT",
+      "width": 420,
+      "height": 120,
+      "opacity": 1,
+      "absoluteTransform": [
+        [0.9743700647852352, -0.224951054343865, 3895.7182829194685],
+        [0.224951054343865, 0.9743700647852352, 582.9576198838033]
+      ],
+      "characters": "PREPARATION\nNOT LEARNING",
+      "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 0.7803921569, "b": 0.2 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "RIGHT",
+      "lineHeightPx": 58,
+      "letterSpacingPx": 1.25,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 24,
+          "fontFamily": "IBM Plex Mono",
+          "fontStyle": "Medium",
+          "fontSize": 44,
+          "fill": { "type": "SOLID", "color": { "r": 1, "g": 0.7803921569, "b": 0.2 } }
+        }
+      ]
+    },
+    {
+      "id": "95:50",
+      "name": "TXT_Rotated",
+      "type": "TEXT",
+      "width": 320,
+      "height": 80,
+      "opacity": 0.75,
+      "absoluteTransform": [
+        [0.8660254037844387, -0.49999999999999994, 3837.306219516936],
+        [0.49999999999999994, 0.8660254037844387, 35.79399641358526]
+      ],
+      "characters": "ROTATED CHILD",
+      "fills": [{ "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "textAlignHorizontal": "LEFT",
+      "lineHeightPx": 64,
+      "letterSpacingPx": 0.5,
+      "styledTextSegments": [
+        {
+          "start": 0,
+          "end": 13,
+          "fontFamily": "Sora",
+          "fontStyle": "SemiBold",
+          "fontSize": 48,
+          "fill": { "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }
+        }
+      ]
+    }
+  ]
+}

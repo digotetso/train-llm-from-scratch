@@ -1,0 +1,286 @@
+{
+  "fixtureProvenance": {
+    "lesson": "Video 001 - What AI Models Actually Do",
+    "shot": 32,
+    "figmaNodeId": "95:44",
+    "purpose": "Shot 32 semantic group, native solid shapes, z-order, and gradient subtree fallback regression coverage"
+  },
+  "id": "95:44-nested",
+  "name": "S001_SH32_NestedAndFallbacks",
+  "type": "FRAME",
+  "width": 1920,
+  "height": 1080,
+  "opacity": 1,
+  "absoluteTransform": [[1, 0, 2400], [0, 1, 300]],
+  "fills": [],
+  "strokes": [],
+  "effects": [],
+  "blendMode": "NORMAL",
+  "isMask": false,
+  "children": [
+    {
+      "id": "96:1",
+      "name": "DATA_Backplate",
+      "type": "RECTANGLE",
+      "width": 860,
+      "height": 520,
+      "opacity": 0.8,
+      "absoluteTransform": [[1, 0, 2520], [0, 1, 460]],
+      "fills": [{ "type": "SOLID", "color": { "r": 0.0431372549, "g": 0.0705882353, "b": 0.1215686275 } }],
+      "strokes": [],
+      "strokeWeight": 0,
+      "cornerRadius": 24,
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false
+    },
+    {
+      "id": "96:2",
+      "name": "DATA_Node_01",
+      "type": "GROUP",
+      "width": 400,
+      "height": 240,
+      "opacity": 0.9,
+      "absoluteTransform": [[1, 0, 2680], [0, 1, 560]],
+      "fills": [],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "children": [
+        {
+          "id": "96:3",
+          "name": "DATA_SolidRect",
+          "type": "RECTANGLE",
+          "width": 280,
+          "height": 144,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 2740], [0, 1, 608]],
+          "fills": [{ "type": "SOLID", "color": { "r": 0.1176470588, "g": 0.5607843137, "b": 1 } }],
+          "strokes": [{ "type": "SOLID", "color": { "r": 0.9607843137, "g": 0.968627451, "b": 0.9843137255 } }],
+          "strokeWeight": 3,
+          "cornerRadius": 18,
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": false
+        },
+        {
+          "id": "96:4",
+          "name": "DATA_StatusDot",
+          "type": "ELLIPSE",
+          "width": 32,
+          "height": 32,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 2988], [0, 1, 624]],
+          "fills": [{ "type": "SOLID", "color": { "r": 0.1843137255, "g": 0.8352941176, "b": 0.5450980392 } }],
+          "strokes": [],
+          "strokeWeight": 0,
+          "cornerRadius": 0,
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": false
+        }
+      ]
+    },
+    {
+      "id": "96:5",
+      "name": "FX_GradientRect",
+      "type": "RECTANGLE",
+      "width": 360,
+      "height": 220,
+      "opacity": 0.65,
+      "absoluteTransform": [[1, 0, 3460], [0, 1, 580]],
+      "fills": [{ "type": "GRADIENT_LINEAR" }],
+      "strokes": [],
+      "strokeWeight": 0,
+      "cornerRadius": 28,
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "a143bf471aab76a17d1c7efd55f749473166b0c2fa6cf547b946d61ecd669a3c",
+        "bytesBase64": "Zml4dHVyZS1ncmFkaWVudA=="
+      }
+    },
+    {
+      "id": "96:6",
+      "name": "FX_ImageRect",
+      "type": "RECTANGLE",
+      "width": 300,
+      "height": 180,
+      "opacity": 1,
+      "absoluteTransform": [[1, 0, 2860], [0, 1, 880]],
+      "fills": [{ "type": "IMAGE", "imageHash": "lesson-shot-32-image" }],
+      "strokes": [],
+      "strokeWeight": 0,
+      "cornerRadius": 16,
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "1d69ea770eee27c1391a9f0dc1e696485f931abc63f5729b6b0ba40f728a694a",
+        "bytesBase64": "aW1hZ2UtcG5n"
+      }
+    },
+    {
+      "id": "96:7",
+      "name": "FX_EffectEllipse",
+      "type": "ELLIPSE",
+      "width": 160,
+      "height": 160,
+      "opacity": 0.7,
+      "absoluteTransform": [[1, 0, 3240], [0, 1, 880]],
+      "fills": [{ "type": "SOLID", "color": { "r": 0.1843137255, "g": 0.8352941176, "b": 0.5450980392 } }],
+      "strokes": [],
+      "strokeWeight": 0,
+      "cornerRadius": 0,
+      "effects": [{ "type": "DROP_SHADOW", "visible": true }],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "01909740365c68881e7a1f28f70737c953d1fc27f9052a90c5897e794025367b",
+        "bytesBase64": "ZWZmZWN0LXBuZw=="
+      }
+    },
+    {
+      "id": "96:8",
+      "name": "MASK_Subtree",
+      "type": "GROUP",
+      "width": 180,
+      "height": 120,
+      "opacity": 1,
+      "absoluteTransform": [[1, 0, 3460], [0, 1, 880]],
+      "fills": [],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "23daf6a3f3cff3631b6942663b8c32000c938183b48b8c78553fa3c9d8d47c13",
+        "bytesBase64": "bWFzay1zdWJ0cmVlLXBuZw=="
+      },
+      "children": [
+        {
+          "id": "96:8-mask",
+          "name": "Hidden_MaskVector",
+          "type": "VECTOR",
+          "width": 180,
+          "height": 120,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 3460], [0, 1, 880]],
+          "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1 } }],
+          "strokes": [],
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": true
+        },
+        {
+          "id": "96:8-content",
+          "name": "Hidden_MaskedContent",
+          "type": "RECTANGLE",
+          "width": 180,
+          "height": 120,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 3460], [0, 1, 880]],
+          "fills": [{ "type": "SOLID", "color": { "r": 0.2980392157, "g": 0.8352941176, "b": 0.968627451 } }],
+          "strokes": [],
+          "strokeWeight": 0,
+          "cornerRadius": 0,
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": false
+        }
+      ]
+    },
+    {
+      "id": "96:9",
+      "name": "FX_BlendRect",
+      "type": "RECTANGLE",
+      "width": 220,
+      "height": 140,
+      "opacity": 0.85,
+      "absoluteTransform": [[1, 0, 3700], [0, 1, 880]],
+      "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 0.7803921569, "b": 0.2 } }],
+      "strokes": [],
+      "strokeWeight": 0,
+      "cornerRadius": 12,
+      "effects": [],
+      "blendMode": "MULTIPLY",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "2ee097b8472869cd5698407030e1a19aeacc16a97f084fedee74d439dafc611c",
+        "bytesBase64": "YmxlbmQtcG5n"
+      }
+    },
+    {
+      "id": "96:10",
+      "name": "FX_Vector",
+      "type": "VECTOR",
+      "width": 200,
+      "height": 100,
+      "opacity": 1,
+      "absoluteTransform": [[1, 0, 3940], [0, 1, 880]],
+      "fills": [{ "type": "SOLID", "color": { "r": 0.2980392157, "g": 0.8352941176, "b": 0.968627451 } }],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "91b7dd04852a6066e94c10823e37d0f843cfa6e6699e4573733d8183f34fae1e",
+        "bytesBase64": "dmVjdG9yLXBuZw=="
+      }
+    },
+    {
+      "id": "96:11",
+      "name": "FX_UnsupportedSubtreeFixture",
+      "type": "GROUP",
+      "width": 280,
+      "height": 180,
+      "opacity": 1,
+      "absoluteTransform": [[1, 0, 2500], [0, 1, 860]],
+      "fills": [],
+      "strokes": [],
+      "effects": [],
+      "blendMode": "NORMAL",
+      "isMask": false,
+      "rasterAsset": {
+        "hash": "a26d9df85630ef10a061e6b009248cebd728445a1f8e29e2ff382716e154268c",
+        "bytesBase64": "dW5zdXBwb3J0ZWQtc3VidHJlZS1wbmc="
+      },
+      "children": [
+        {
+          "id": "96:12",
+          "name": "Hidden_NativeChild",
+          "type": "RECTANGLE",
+          "width": 120,
+          "height": 80,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 2540], [0, 1, 900]],
+          "fills": [{ "type": "SOLID", "color": { "r": 0.1176470588, "g": 0.5607843137, "b": 1 } }],
+          "strokes": [],
+          "strokeWeight": 0,
+          "cornerRadius": 8,
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": false
+        },
+        {
+          "id": "96:13",
+          "name": "Hidden_GradientChild",
+          "type": "RECTANGLE",
+          "width": 120,
+          "height": 80,
+          "opacity": 1,
+          "absoluteTransform": [[1, 0, 2640], [0, 1, 940]],
+          "fills": [{ "type": "GRADIENT_RADIAL" }],
+          "strokes": [],
+          "strokeWeight": 0,
+          "cornerRadius": 8,
+          "effects": [],
+          "blendMode": "NORMAL",
+          "isMask": false
+        }
+      ]
+    }
+  ]
+}
