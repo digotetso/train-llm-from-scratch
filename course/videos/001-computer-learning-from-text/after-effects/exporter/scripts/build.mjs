@@ -186,13 +186,15 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   const controllerResult = await esbuild({
     ...browserBuildOptions(join(root, "src", "figma", "controller.ts")),
     define: {
-      __FIGMA_UI_HTML__: JSON.stringify(uiHtml),
       __VIDEO001_CONFIG__: JSON.stringify(embeddedConfig)
     },
     outfile: "code.js"
   });
   const controllerJavaScript = singleOutput(controllerResult, "controller");
   assertBrowserBundle(controllerJavaScript, "Controller");
+  if (/TextEncoder|crypto\.subtle|globalThis\.crypto/.test(controllerJavaScript)) {
+    throw new Error("Controller bundle contains browser-only UTF-8 or Web Crypto APIs");
+  }
 
   const destinationParent = dirname(destination);
   await mkdir(destinationParent, { recursive: true });

@@ -5,13 +5,13 @@ import {
   type ExporterPackage
 } from "../shared/contract.ts";
 import {
-  classifyNode,
   serializeFrame,
   type FigmaNodeSnapshot,
   type FigmaPaintSnapshot,
   type StyledTextSegmentSnapshot,
   type TransformMatrix
 } from "./serializer.ts";
+import { sha256Hex } from "../shared/sha256.ts";
 
 export const BRIDGE_BASE_URL = "http://127.0.0.1:3456";
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
@@ -313,11 +313,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   return result;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", Uint8Array.from(bytes).buffer);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function controllerFailure(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
 }
@@ -440,9 +435,6 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       frames.push(await serializeFrame(snapshot, { duration: timing.duration }, {
         rasterScale: 1,
         exportRaster: async (rasterSnapshot, request) => {
-          if (classifyNode(rasterSnapshot) !== "raster") {
-            throw new Error(`Refusing raster export for serializer-native node ${rasterSnapshot.id}`);
-          }
           if (request.format !== "PNG" || request.scale !== 1 || request.appearance !== "BAKED") {
             throw new Error(`Unsupported raster request for node ${rasterSnapshot.id}`);
           }
@@ -455,7 +447,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
             constraint: { type: "SCALE", value: 1 }
           });
           if (!(bytes instanceof Uint8Array)) throw new TypeError(`Figma node ${source.id} returned invalid PNG bytes`);
-          const hash = await sha256Hex(bytes);
+          const hash = sha256Hex(bytes);
           const retained = assets.get(hash);
           if (retained === undefined) {
             assets.set(hash, bytes);
@@ -632,11 +624,11 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
   return { handleMessage, refreshSelection };
 }
 
-declare const __FIGMA_UI_HTML__: string;
+declare const __html__: string;
 declare const __VIDEO001_CONFIG__: EmbeddedVideo001Config;
 
 function startRuntime(): void {
-  figma.showUI(__FIGMA_UI_HTML__, {
+  figma.showUI(__html__, {
     width: 420,
     height: 640,
     themeColors: true,
@@ -661,6 +653,6 @@ function startRuntime(): void {
   void controller.refreshSelection();
 }
 
-if (typeof figma !== "undefined" && typeof __VIDEO001_CONFIG__ !== "undefined" && typeof __FIGMA_UI_HTML__ !== "undefined") {
+if (typeof figma !== "undefined" && typeof __VIDEO001_CONFIG__ !== "undefined" && typeof __html__ !== "undefined") {
   startRuntime();
 }

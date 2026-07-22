@@ -8,6 +8,8 @@ import type {
 } from "../shared/contract.ts";
 import { assertJsonContainerDepth, isSafeExporterName } from "../shared/contract.ts";
 import { LIMITS } from "../shared/limits.ts";
+import { sha256Hex } from "../shared/sha256.ts";
+import { utf8ByteLength } from "../shared/utf8.ts";
 
 export type TransformMatrix = readonly [
   readonly [number, number, number],
@@ -397,7 +399,7 @@ function validateSerializedFrame(frame: ExportFrame, maxManifestBytes: number): 
   // Match validatePackage's exact container count without fabricating the
   // unrelated package fields: package object -> frames array -> frame object.
   assertJsonContainerDepth({ frames: [frame] });
-  if (new TextEncoder().encode(JSON.stringify(frame)).byteLength > maxManifestBytes) {
+  if (utf8ByteLength(JSON.stringify(frame)) > maxManifestBytes) {
     invalid("$", "serialized frame exceeds the shared manifest-byte limit");
   }
   return frame;
@@ -508,11 +510,6 @@ function decodeCanonicalBase64(value: unknown, path: string): Uint8Array {
   return bytes;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", Uint8Array.from(bytes).buffer);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 async function rasterResult(
   node: FigmaNodeSnapshot,
   path: string,
@@ -556,7 +553,7 @@ async function rasterResult(
   if (bytes.byteLength > context.limits.maxAssetBytes) {
     invalid(`${path}.rasterAsset.bytes`, "raster asset exceeds the per-asset limit");
   }
-  const actualHash = await sha256Hex(bytes);
+  const actualHash = sha256Hex(bytes);
   if (actualHash !== result.hash) {
     invalid(`${path}.rasterAsset.hash`, "returned hash does not match the raster bytes");
   }

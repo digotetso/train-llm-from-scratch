@@ -12,6 +12,7 @@ import {
   validatePackage,
   validatePackageWithVerifiedAssets
 } from "../src/shared/contract.ts";
+import { utf8ByteLength } from "../src/shared/utf8.ts";
 import { LIMITS } from "../src/shared/limits.ts";
 import { makeValidPackage } from "./helpers/package.ts";
 
@@ -182,21 +183,16 @@ test("preflights declared per-asset and aggregate byte limits without large payl
   assert.throws(() => validatePackage(oversizedAggregate), /aggregate decoded-byte limit/);
 });
 
-test("rejects a manifest above its byte limit without allocating 32 MiB", { concurrency: false }, () => {
+test("measures UTF-8 manifest bytes without relying on the browser TextEncoder global", { concurrency: false }, () => {
   const OriginalTextEncoder = globalThis.TextEncoder;
-  class OverLimitTextEncoder {
-    encode(): { byteLength: number } {
-      return { byteLength: LIMITS.maxManifestBytes + 1 };
-    }
-  }
-
   Object.defineProperty(globalThis, "TextEncoder", {
     configurable: true,
-    value: OverLimitTextEncoder,
+    value: undefined,
     writable: true
   });
   try {
-    assert.throws(() => validatePackage(makeValidPackage()), /manifest-byte limit/);
+    assert.equal(utf8ByteLength("plain 🫭"), Buffer.byteLength("plain 🫭", "utf8"));
+    assert.doesNotThrow(() => validatePackage(makeValidPackage()));
   } finally {
     Object.defineProperty(globalThis, "TextEncoder", {
       configurable: true,

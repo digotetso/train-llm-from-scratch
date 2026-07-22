@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import {
   BRIDGE_BASE_URL,
   BRIDGE_TOKEN_KEY,
@@ -27,7 +29,19 @@ import { contentFingerprintInput, validatePackage, type ExporterPackage } from "
 import { makeValidPackage } from "./helpers/package.ts";
 
 const PROJECT_ROOT = new URL("../", import.meta.url);
-const TIMING_SOURCE = "/Users/digotetsomatema/AI-Projects-2026/train-llm-from-scratch/course/videos/001-computer-learning-from-text/after-effects/figma-scenes.json";
+
+function approvedTimingSource(): string {
+  const projectRoot = fileURLToPath(PROJECT_ROOT);
+  const commonGitDirectory = execFileSync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: projectRoot, encoding: "utf8" }
+  ).trim();
+  return join(
+    dirname(commonGitDirectory),
+    "course/videos/001-computer-learning-from-text/after-effects/figma-scenes.json"
+  );
+}
 
 const config: EmbeddedVideo001Config = {
   source: {
@@ -511,11 +525,13 @@ test("manifest generator rejects missing, malformed, and example IDs and emits e
   }
 });
 
-test("isolated build embeds exact timings, creates clean browser bundles, and contains no token, package logs, Node builtins, or remote assets", () => {
+test("isolated build embeds exact timings and separates browser-only APIs from the controller bundle", () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-build-"));
   try {
     const pluginIdFile = join(fixture, ".figma-plugin-id");
     const outDir = join(fixture, "dist/figma");
+    const timingFixture = join(fixture, "figma-scenes.json");
+    copyFileSync(approvedTimingSource(), timingFixture);
     writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
     const script = new URL("../scripts/build.mjs", import.meta.url);
     const result = spawnSync(process.execPath, [
@@ -525,7 +541,7 @@ test("isolated build embeds exact timings, creates clean browser bundles, and co
     ], {
       cwd: PROJECT_ROOT,
       encoding: "utf8",
-      env: { ...process.env, VIDEO001_FIGMA_SCENES: TIMING_SOURCE }
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
     });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     const code = readFileSync(join(outDir, "code.js"), "utf8");
@@ -544,7 +560,94 @@ test("isolated build embeds exact timings, creates clean browser bundles, and co
     assert.doesNotMatch(html, /clientStorage|Authorization|Bearer\s/);
     assert.doesNotMatch(`${code}\n${html}`, /console\.(?:log|debug|info)\s*\(/);
     assert.doesNotMatch(`${code}\n${html}`, /1661000000000000000/);
+    assert.doesNotMatch(code, /TextEncoder|crypto\.subtle|globalThis\.crypto/);
     assert.match(manifest, /987654321012345678/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("controller bundle builds a root-opacity raster package with only documented Figma main globals", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "video001-controller-smoke-"));
+  try {
+    const pluginIdFile = join(fixture, ".figma-plugin-id");
+    const outDir = join(fixture, "dist/figma");
+    const timingFixture = join(fixture, "figma-scenes.json");
+    copyFileSync(approvedTimingSource(), timingFixture);
+    writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
+    const script = new URL("../scripts/build.mjs", import.meta.url);
+    const result = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile,
+      "--out-dir", outDir
+    ], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const code = readFileSync(join(outDir, "code.js"), "utf8");
+    const messages: unknown[] = [];
+    const currentPage = { id: "90:2", selection: [] as unknown[] };
+    const sandbox = {
+      __html__: "<!doctype html><title>fixture</title>",
+      crypto: undefined,
+      TextEncoder: undefined,
+      fetch: async () => { throw new Error("network not expected"); },
+      setTimeout,
+      clearTimeout,
+      figma: {
+        fileKey: "fFTux3sx2AzVQtoya67f95",
+        currentPage,
+        mixed: Symbol("figma.mixed"),
+        showUI: () => undefined,
+        closePlugin: () => undefined,
+        on: () => undefined,
+        ui: {
+          onmessage: undefined as ((message: unknown) => void) | undefined,
+          postMessage: (message: unknown) => messages.push(structuredClone(message))
+        },
+        clientStorage: {
+          getAsync: async () => undefined,
+          setAsync: async () => undefined,
+          deleteAsync: async () => undefined
+        }
+      }
+    };
+    runInNewContext(code, sandbox);
+    runInNewContext(`
+      const frame = {
+        id: "95:44",
+        name: "S001_SH32_Repo_PreparationNotLearning",
+        type: "FRAME",
+        width: 1920,
+        height: 1080,
+        opacity: 0.4,
+        visible: true,
+        absoluteTransform: [[1, 0, 0], [0, 1, 0]],
+        fills: [], strokes: [], effects: [], blendMode: "NORMAL", isMask: false,
+        children: [{
+          id: "shape-1", name: "BG_Base", type: "RECTANGLE",
+          width: 1920, height: 1080, opacity: 1, visible: true,
+          absoluteTransform: [[1, 0, 0], [0, 1, 0]],
+          fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1, visible: true }],
+          strokes: [], strokeWeight: 0, cornerRadius: 0, effects: [], blendMode: "NORMAL", isMask: false
+        }],
+        exportAsync: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+      };
+      frame.parent = figma.currentPage;
+      figma.currentPage.selection = [frame];
+      figma.ui.onmessage({ type: "build-package" });
+    `, sandbox);
+    for (let attempt = 0; attempt < 20 && !messages.some((message) =>
+      typeof message === "object" && message !== null && "type" in message && message.type === "package-unhashed"
+    ); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const packageMessage = messages.find((message) =>
+      typeof message === "object" && message !== null && "type" in message && message.type === "package-unhashed"
+    );
+    assert.ok(packageMessage, JSON.stringify(messages));
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

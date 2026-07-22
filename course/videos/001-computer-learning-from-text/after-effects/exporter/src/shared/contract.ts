@@ -1,5 +1,6 @@
 import { canonicalJson } from "./canonical-json.ts";
 import { LIMITS } from "./limits.ts";
+import { utf8ByteLength } from "./utf8.ts";
 
 export interface BaseNode {
   id: string;
@@ -415,10 +416,6 @@ function isoTimestampAt(value: unknown, path: string): string {
     invalid(path, "expected an ISO 8601 UTC timestamp");
   }
   return timestamp;
-}
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
 }
 
 export function assertJsonContainerDepth(value: unknown): void {
