@@ -55,7 +55,7 @@ UTF-8 bytes: 67   97   116
 
 They do match in this case. `C`, `a`, and `t` are in the ASCII range, and UTF-8 stores each of them as one byte with the same value as its code point. That convenient match is not a general rule. Other characters can require more than one UTF-8 byte, so a code point and a byte sequence remain different ideas even when these two short lists look identical.
 
-We can now name the building block we've constructed. The building block is **text representation**: changing text into a numerical form that software can store and process. Our `Cat` trace demonstrates an early representation layer; later lessons will continue the path toward the precise numerical input used by the model.
+We can now give this process a name we'll reuse: **text representation**—changing text into a numerical form that software can store and process. Our `Cat` trace demonstrates an early representation layer; later lessons will continue the path toward the precise numerical input used by the model.
 
 Now use this building block to ask a sharper question. When we represented `Cat` with numbers, what changed—and did anything learn?
 
@@ -85,7 +85,7 @@ We have built that distinction from observable steps. Now it can do some work fo
 
 [On screen: `matgpt/data/normalize.py`, followed by `matgpt/data/prepare.py`.]
 
-Before we trace the code, predict the category. Does `normalize_text` change the text data, change model parameters, or do both? Keep the representation–learning distinction in mind while we follow the value.
+Before we trace the code, predict the category. Does `normalize_text` change the text data, change model parameters, or does it do both? Keep the representation–learning distinction in mind while we follow the value.
 
 Here is the current function:
 
@@ -104,7 +104,7 @@ The value enters as `text`. `str(text)` first asks Python for its string form, a
 
 The annotations `text: str` and `-> str` communicate the intended input and output to readers and tools. Python does not enforce those annotations at runtime; that is why `str(text)` still performs a real operation.
 
-NFKC deserves one boundary before we continue. It is a deliberate, non-lossless cleaning policy. For example, `①` can become `1`. That can be useful when the project wants those forms treated alike, but it collapses a distinction from the source. Character count can change too, so the original input cannot always be reconstructed exactly.
+One caution belongs here. NFKC is a deliberate, non-lossless cleaning policy. For example, `①` can become `1`. That can be useful when the project wants those forms treated alike, but it collapses a distinction from the source. Character count can change too, so the original input cannot always be reconstructed exactly.
 
 The returned value then reaches `prepare.py`:
 
@@ -117,7 +117,7 @@ return {
 }
 ```
 
-The record stores the normalized text and its Python string length. We can now answer our prediction. The data changed, but no prediction error adjusted a model parameter. This is preparation on the text-representation side of our distinction. The repository's mini-lab lets us inspect an even smaller part of that representation directly.
+The record stores the normalized text and its Python string length. We can now answer our prediction. The data changed, but no measured error adjusted a model parameter. This is preparation, so it belongs on the text representation side of our distinction. The repository's mini-lab lets us inspect an even smaller part of that representation directly.
 
 ## 09:00 Predict, Run, Explain
 
