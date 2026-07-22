@@ -26,7 +26,7 @@ Python returns `65`. It will return `65` again because the program is following 
 
 Now we can give the pieces their useful names. `A` is a character: one written item. Unicode is the shared agreement that gives defined characters agreed numbers. The number assigned to a character in that agreement is its code point. Python's `ord` reports that code point for one character, so `ord("A")` is `65`.
 
-Here is the question a careful learner should ask immediately: does `65` contain what `A` means? No. In one context `A` can be a grade, in another a musical note, and in another part of a name. The code point stays fixed while people supply meaning from context. It is an identifier under an agreement, not a container for human meaning.
+Here is the question a careful learner should ask immediately: does `65` contain what `A` means? Take a moment to separate the identifier from the meaning before you decide. It does not. In one context `A` can be a grade, in another a musical note, and in another part of a name. The code point stays fixed while people supply meaning from context. It is an identifier under an agreement, not a container for human meaning.
 
 Keep that completed mechanism as a stable building block: a character can have a fixed numeric identifier. If one character can do that, what happens when the text is three characters long?
 
@@ -49,11 +49,13 @@ We can now compress the mechanism into a name we will reuse: **numeric text repr
 
 ## 04:00 What Representation Still Cannot Do
 
-What changed when `Cat` became `67, 97, 116`? The form changed. What did not change? No system made a better prediction, and no adjustable value was updated. Numeric text representation is necessary for a mathematical model to receive text as numbers, but it cannot by itself make the model improve.
+What changed when `Cat` became `67, 97, 116`? Trace both sides before we continue: point to the values that changed, then ask whether any prediction or adjustable value changed.
+
+Only the form changed. No system made a better prediction, and no adjustable value was updated. Numeric text representation is necessary for a mathematical model to receive text as numbers, but it cannot by itself make the model improve.
 
 So imagine a small prediction system. We show it examples. It produces a prediction. We compare that prediction with what actually happened and obtain a measured error. Then some adjustable internal numbers are changed. On a later example, the system makes another prediction. That is the smallest causal chain we need: examples lead to prediction, prediction leads to measured error, and measured error can lead to a change in adjustable values before a later prediction.
 
-For intuition, imagine ten comparable predictions. Before an update, seven are mistakes. After an update, five are mistakes. Seven becoming five is a picture of fewer mistakes, not the repository's actual training calculation and not proof that the system will work on unseen examples. A real check needs a numeric error measure and separate examples as well.
+For intuition, imagine ten comparable predictions. Before an update, seven are mistakes. After an update, five are mistakes. Seven becoming five is a picture of fewer mistakes, not the repository's actual training calculation, and it does not prove that the system will work on unseen examples. A real check needs a numeric error measure and separate examples as well.
 
 Notice what this example lets you distinguish. Rewriting `Cat` as three numbers can be repeated perfectly without ever consulting an outcome. The later change from seven mistakes to five depends on comparing predictions with outcomes and changing something adjustable in response. The numbers in the input and the numbers inside the model have different jobs. One supplies a form the calculation can receive; the other are candidates for change when the prediction is wrong.
 
@@ -63,13 +65,15 @@ Close the two mechanisms into one distinction we can use. **Representation chang
 
 ## 06:00 Repository Walkthrough
 
-[On screen: `normalize.py` flowing into `prepare.py`.]
+[On screen: `matgpt/data/normalize.py` flowing into `matgpt/data/prepare.py`.]
 
-Use the distinction we just built as a question: when this code runs, is it changing data, or is it changing model parameters? In `matgpt/data/normalize.py`, `normalize_text` begins by applying NFKC, a chosen Unicode normalization form. It then replaces Windows-style and older newline styles with `\n`, removes selected control characters, removes whitespace at the right edge of each line, strips whitespace from the outer edges, reduces long blank-line runs, and returns the cleaned text.
+Use the distinction we just built as a question: when this code runs, is it changing data, or is it changing model parameters? In `normalize.py`, `normalize_text` begins by applying NFKC, a chosen Unicode normalization form. It then replaces Windows-style and older newline styles with `\n`, removes selected control characters, removes whitespace at the right edge of each line, strips whitespace from the outer edges, reduces long blank-line runs, and returns the cleaned text.
 
 The trace matters. Source text enters the function. NFKC changes it according to the chosen form. Newline replacement makes line endings consistent. The line cleanup and outer stripping remove selected whitespace. The function returns the resulting text; it does not make a prediction or adjust a parameter.
 
-The annotations `text: str` and `-> str` communicate the intended input and output types to readers and tools. Python does not enforce those annotations at runtime. In `matgpt/data/prepare.py`, `make_document_record` calls `normalize_text(text)`, stores the returned value under `text`, and records `num_chars` with `len(normalized)`.
+The annotations `text: str` and `-> str` communicate the intended input and output types to readers and tools. Python does not enforce those annotations at runtime.
+
+In `prepare.py`, `make_document_record` takes the returned data into the next step. It calls `normalize_text(text)`, stores the returned value under `text`, and records `num_chars` with `len(normalized)`.
 
 There is an important boundary beside this convenience. NFKC is a **deliberate cleaning policy**, not a neutral copy. It is **not lossless**: `①` can become `1`, collapsing a source distinction. Some inputs can also **change character count**, so the source cannot always be reconstructed exactly. That is a data-policy choice, not a learning step.
 
@@ -77,9 +81,11 @@ The verdict follows our trace. The data changed, was stored, and was counted; no
 
 ## 09:00 Live Mini-Lab
 
-[On screen: terminal beside `lab.py`.]
+[On screen: terminal beside `course/videos/001-computer-learning-from-text/lab.py`.]
 
-Open `course/videos/001-computer-learning-from-text/lab.py`. Before you run anything, predict both lists. For `Cat`, what will the character-number list be? What will the UTF-8 byte list be? We have enough evidence to predict `[67, 97, 116]` for each list, specifically because these are ASCII-range characters.
+Open the lab for this lesson. Before you run anything, predict both lists. For `Cat`, what will the character-number list be? What will the UTF-8 byte list be? Say both predictions aloud before you continue.
+
+We have enough evidence to predict `[67, 97, 116]` for each list, specifically because these are ASCII-range characters.
 
 The lab is exactly this:
 
@@ -111,15 +117,23 @@ Learning begins after text is represented as numbers.
 
 Read the evidence line by line. `Human text` shows the string as we read it. The `ord` list visits each character and reports its code point. `encode("utf-8")` produces the UTF-8 bytes, and `list` displays those bytes as integers. The final two lines state the boundary: the raw Python string is not the mathematical model's numeric input, and this conversion is before learning.
 
-Now change only `Cat` to `A`. Predict both lists before rerunning: each should be `[65]`. The result follows the same fixed agreement. It did not practice, measure an error, or improve because repeated conversion is fixed behavior. Restore `text = "Cat"` afterward so the checked lab and its documented output remain intact.
+Now change only `Cat` to `A`. Before rerunning, say both predictions aloud.
+
+Each list should be `[65]`. The result follows the same fixed agreement. Repeated conversion is fixed behavior; learning would require a prediction, measured error, and an adjustable value that changes in response. Restore `text = "Cat"` afterward so the checked lab and its documented output remain intact.
 
 ## 12:00 Test the Distinction
 
-Let's test whether the building blocks are doing real work. Suppose a different context uses `A` as a grade instead of as part of a word. Did Unicode need to change `65`? No. Context changed the human interpretation; the fixed identifier did not. That is how you can distinguish identifier from meaning.
+Let's test whether the building blocks are doing real work. Suppose a different context uses `A` as a grade instead of as part of a word. Did Unicode need to change `65`? Decide before you continue.
 
-Now ask a second diagnostic question. Suppose we run `ord("A")` a thousand times. Which adjustable value changed because of a measured error? None. The answer does not depend on how often you run it. If a process only follows the representation agreement, it is not learning.
+No. Context changed the human interpretation; the fixed identifier did not. That is how you can distinguish identifier from meaning.
 
-Turn the question around. If a model receives numeric examples, makes predictions, measures error, and then one of its parameters changes, which side of our distinction is that? Learning. The representation made numerical input possible; the parameter update supplied the missing capability. These are connected steps, but they are not the same action.
+Now ask a second diagnostic question. Suppose we run `ord("A")` a thousand times. Which adjustable value changed because of a measured error? Hold your answer for a moment.
+
+None. The answer does not depend on how often you run it. If a process only follows the representation agreement, it is not learning.
+
+Turn the question around. If a model receives numeric examples, makes predictions, measures error, and then one of its parameters changes, which side of our distinction is that? Choose a side before you continue.
+
+Learning. The representation made numerical input possible; the parameter update supplied the missing capability. These are connected steps, but they are not the same action.
 
 ## 13:00 Rebuild the Complete Chain
 
