@@ -10,6 +10,16 @@ const EXPECTED_FILE_KEY = "fFTux3sx2AzVQtoya67f95";
 const EXPECTED_PAGE_ID = "90:2";
 const EXPECTED_PAGE_NAME = "02 Video 001 - AE Assets";
 const EXPECTED_SHOT_COUNT = 48;
+const EXPECTED_SECTIONS = [
+  { firstShot: 1, lastShot: 4, timingName: "Hook", sectionId: "90:5", sectionName: "02 Shots 01-04 — Hook" },
+  { firstShot: 5, lastShot: 9, timingName: "Direct Explanation", sectionId: "90:6", sectionName: "03 Shots 05-09 — Direct Explanation" },
+  { firstShot: 10, lastShot: 17, timingName: "Technical Meaning", sectionId: "90:7", sectionName: "04 Shots 10-17 — Technical Meaning" },
+  { firstShot: 18, lastShot: 25, timingName: "Tiny Example", sectionId: "90:8", sectionName: "05 Shots 18-25 — Tiny Example" },
+  { firstShot: 26, lastShot: 32, timingName: "Repository Walkthrough", sectionId: "90:9", sectionName: "06 Shots 26-32 — Repository Walkthrough" },
+  { firstShot: 33, lastShot: 39, timingName: "Live Mini-Lab", sectionId: "90:10", sectionName: "07 Shots 33-39 — Live Mini-Lab" },
+  { firstShot: 40, lastShot: 43, timingName: "Common Mistake", sectionId: "90:11", sectionName: "08 Shots 40-43 — Common Mistake" },
+  { firstShot: 44, lastShot: 48, timingName: "Recap and Exercise", sectionId: "90:12", sectionName: "09 Shots 44-48 — Recap & Exercise" }
+];
 const DOCUMENTED_EXAMPLE_ID = "1661000000000000000";
 const SCRIPT_MARKER = "<!-- FIGMA_PLUGIN_SCRIPT -->";
 export const BUILD_OWNERSHIP_MARKER = ".video001-figma-build-owned";
@@ -105,6 +115,23 @@ export function validateVideo001Scenes(value) {
     throw new TypeError("Timing source target must be exactly 1920×1080 at 30 fps");
   }
   if (canvas.duration !== 840) throw new TypeError("Timing source canvas duration must be exactly 840 frames");
+  if (!Array.isArray(root.sections) || root.sections.length !== EXPECTED_SECTIONS.length) {
+    throw new TypeError(`Timing source must contain exactly ${EXPECTED_SECTIONS.length} approved sections`);
+  }
+  const sections = root.sections.map((rawSection, index) => {
+    const section = record(rawSection, `$timing.sections[${index}]`);
+    const expected = EXPECTED_SECTIONS[index];
+    if (
+      section.name !== expected.timingName ||
+      section.firstShot !== expected.firstShot ||
+      section.lastShot !== expected.lastShot
+    ) {
+      throw new TypeError(
+        `$timing.sections[${index}] must be ${expected.timingName} for Shots ${expected.firstShot}-${expected.lastShot}`
+      );
+    }
+    return expected;
+  });
   if (!Array.isArray(root.shots) || root.shots.length !== EXPECTED_SHOT_COUNT) {
     throw new TypeError(`Timing source must contain exactly ${EXPECTED_SHOT_COUNT} shots`);
   }
@@ -133,8 +160,17 @@ export function validateVideo001Scenes(value) {
     if (shot.start !== expectedStart) {
       throw new TypeError(`$timing.shots[${position}].start must preserve continuous deterministic timing`);
     }
+    const section = sections.find(({ firstShot, lastShot }) => index >= firstShot && index <= lastShot);
+    if (section === undefined) throw new TypeError(`Shot ${index} has no approved section mapping`);
     expectedStart += duration;
-    return { index, nodeId, name, duration };
+    return {
+      index,
+      nodeId,
+      name,
+      duration,
+      sectionId: section.sectionId,
+      sectionName: section.sectionName
+    };
   });
   if (expectedStart !== 840) throw new TypeError("Shot durations must fill the exact 840-frame canvas");
   const shot32 = shots[31];

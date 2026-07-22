@@ -28,3 +28,16 @@ The installed official `@figma/plugin-typings` package is pinned to `1.131.0`. T
 The development manifest and controller share the documented `http://localhost:3456` origin. The bridge server remains bound to the numeric IPv4 loopback address `127.0.0.1`; changing the client URL does not broaden the server bind interface.
 
 This private, project-local exporter sets the manifest's `enablePrivatePluginApi` to `true` so the documented `figma.fileKey` property is available during local development. The controller continues to fail closed unless both the exact configured file key and page ID match; the private-API flag does not weaken source validation.
+
+Official Figma `get_metadata` evidence for page `90:2`, accessed 2026-07-22, established the prepared-shot SECTION ancestry embedded by the build:
+
+- Shots 1-4: `90:5`, `02 Shots 01-04 — Hook`
+- Shots 5-9: `90:6`, `03 Shots 05-09 — Direct Explanation`
+- Shots 10-17: `90:7`, `04 Shots 10-17 — Technical Meaning`
+- Shots 18-25: `90:8`, `05 Shots 18-25 — Tiny Example`
+- Shots 26-32: `90:9`, `06 Shots 26-32 — Repository Walkthrough`
+- Shots 33-39: `90:10`, `07 Shots 33-39 — Live Mini-Lab`
+- Shots 40-43: `90:11`, `08 Shots 40-43 — Common Mistake`
+- Shots 44-48: `90:12`, `09 Shots 44-48 — Recap & Exercise`
+
+The build validates the timing source's corresponding eight section names and shot ranges before attaching the exact Figma section ID and display name to every embedded shot. Runtime selection accepts only a direct child of that exact SECTION whose direct parent is the configured PAGE by ID; it does not rely on Figma proxy object identity.

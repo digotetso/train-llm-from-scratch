@@ -32,6 +32,17 @@ import { makeValidPackage } from "./helpers/package.ts";
 
 const PROJECT_ROOT = new URL("../", import.meta.url);
 
+const APPROVED_SECTIONS = [
+  { firstShot: 1, lastShot: 4, timingName: "Hook", sectionId: "90:5", sectionName: "02 Shots 01-04 — Hook" },
+  { firstShot: 5, lastShot: 9, timingName: "Direct Explanation", sectionId: "90:6", sectionName: "03 Shots 05-09 — Direct Explanation" },
+  { firstShot: 10, lastShot: 17, timingName: "Technical Meaning", sectionId: "90:7", sectionName: "04 Shots 10-17 — Technical Meaning" },
+  { firstShot: 18, lastShot: 25, timingName: "Tiny Example", sectionId: "90:8", sectionName: "05 Shots 18-25 — Tiny Example" },
+  { firstShot: 26, lastShot: 32, timingName: "Repository Walkthrough", sectionId: "90:9", sectionName: "06 Shots 26-32 — Repository Walkthrough" },
+  { firstShot: 33, lastShot: 39, timingName: "Live Mini-Lab", sectionId: "90:10", sectionName: "07 Shots 33-39 — Live Mini-Lab" },
+  { firstShot: 40, lastShot: 43, timingName: "Common Mistake", sectionId: "90:11", sectionName: "08 Shots 40-43 — Common Mistake" },
+  { firstShot: 44, lastShot: 48, timingName: "Recap and Exercise", sectionId: "90:12", sectionName: "09 Shots 44-48 — Recap & Exercise" }
+] as const;
+
 function approvedTimingSource(): string {
   const projectRoot = fileURLToPath(PROJECT_ROOT);
   const commonGitDirectory = execFileSync(
@@ -52,8 +63,30 @@ const config: EmbeddedVideo001Config = {
   },
   target: { width: 1920, height: 1080, fps: 30 },
   shots: [
-    { index: 1, nodeId: "94:2", name: "S001_SH01_Hook_CatWord", duration: 8 },
-    { index: 32, nodeId: "95:44", name: "S001_SH32_Repo_PreparationNotLearning", duration: 28 }
+    {
+      index: 1,
+      nodeId: "94:2",
+      name: "S001_SH01_Hook_CatWord",
+      duration: 8,
+      sectionId: "90:5",
+      sectionName: "02 Shots 01-04 — Hook"
+    },
+    {
+      index: 31,
+      nodeId: "95:41",
+      name: "S001_SH31_Repo_PrepareRecord",
+      duration: 27,
+      sectionId: "90:9",
+      sectionName: "06 Shots 26-32 — Repository Walkthrough"
+    },
+    {
+      index: 32,
+      nodeId: "95:44",
+      name: "S001_SH32_Repo_PreparationNotLearning",
+      duration: 28,
+      sectionId: "90:9",
+      sectionName: "06 Shots 26-32 — Repository Walkthrough"
+    }
   ]
 };
 
@@ -135,7 +168,15 @@ function hostHarness(fetchResponses: ControllerFetchResponse[] = []): HostHarnes
     storage,
     setSelection(nodes): void {
       page.selection = nodes;
-      for (const node of nodes) node.parent = page;
+      for (const node of nodes) {
+        const timing = config.shots.find((shot) => shot.nodeId === node.id) ?? config.shots.at(-1)!;
+        node.parent = {
+          id: timing.sectionId,
+          name: timing.sectionName,
+          type: "SECTION",
+          parent: { id: page.id, name: "02 Video 001 - AE Assets", type: "PAGE" }
+        };
+      }
     },
     host: {
       fileKey: "fFTux3sx2AzVQtoya67f95",
@@ -176,7 +217,7 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-test("selection refresh reports empty, non-frame, nested, unknown, and over-limit selections safely", async () => {
+test("selection refresh reports empty, non-frame, unknown, and over-limit selections safely", async () => {
   const harness = hostHarness();
   const controller = createController(harness.host, config);
 
@@ -187,12 +228,6 @@ test("selection refresh reports empty, non-frame, nested, unknown, and over-limi
   await controller.handleMessage({ type: "refresh-selection" });
   assert.equal(lastFailure(harness.messages).code, "SELECTION_NOT_FRAME");
 
-  const nested = sceneNode();
-  nested.parent = { id: "nested-parent", selection: [] };
-  harness.host.getCurrentPage().selection = [nested];
-  await controller.handleMessage({ type: "refresh-selection" });
-  assert.equal(lastFailure(harness.messages).code, "SELECTION_NOT_TOP_LEVEL");
-
   harness.setSelection([sceneNode({ id: "999:999" })]);
   await controller.handleMessage({ type: "refresh-selection" });
   assert.equal(lastFailure(harness.messages).code, "SHOT_TIMING_NOT_FOUND");
@@ -200,6 +235,57 @@ test("selection refresh reports empty, non-frame, nested, unknown, and over-limi
   harness.setSelection(Array.from({ length: 49 }, (_, index) => sceneNode({ id: index === 0 ? "94:2" : `94:${index + 2}` })));
   await controller.handleMessage({ type: "refresh-selection" });
   assert.equal(lastFailure(harness.messages).code, "TOO_MANY_FRAMES");
+});
+
+test("selection accepts only exact approved section ancestry by identifier", async () => {
+  const harness = hostHarness();
+  const shot31 = sceneNode({ id: "95:41", name: "S001_SH31_Repo_PrepareRecord" });
+  harness.setSelection([shot31]);
+  const controller = createController(harness.host, config);
+
+  await controller.handleMessage({ type: "refresh-selection" });
+  assert.deepEqual(harness.messages.at(-1), {
+    type: "selection",
+    generation: 1,
+    frames: [{ nodeId: "95:41", name: "S001_SH31_Repo_PrepareRecord", duration: 27 }]
+  });
+
+  const rejectParent = async (parent: unknown): Promise<void> => {
+    const node = sceneNode({ id: "95:41", name: "S001_SH31_Repo_PrepareRecord", parent });
+    harness.host.getCurrentPage().selection = [node];
+    await controller.handleMessage({ type: "refresh-selection" });
+    const failure = lastFailure(harness.messages);
+    assert.equal(failure.code, "SELECTION_NOT_IN_APPROVED_SECTION");
+    assert.match(failure.message, /direct child/i);
+    assert.match(failure.message, /90:9/);
+    assert.match(failure.message, /06 Shots 26-32 — Repository Walkthrough/);
+  };
+
+  await rejectParent(harness.host.getCurrentPage());
+  await rejectParent({
+    id: "90:9",
+    name: "06 Shots 26-32 — Repository Walkthrough",
+    type: "GROUP",
+    parent: { id: "90:2", type: "PAGE" }
+  });
+  await rejectParent({
+    id: "90:8",
+    name: "06 Shots 26-32 — Repository Walkthrough",
+    type: "SECTION",
+    parent: { id: "90:2", type: "PAGE" }
+  });
+  await rejectParent({
+    id: "90:9",
+    name: "Wrong section name",
+    type: "SECTION",
+    parent: { id: "90:2", type: "PAGE" }
+  });
+  await rejectParent({
+    id: "90:9",
+    name: "06 Shots 26-32 — Repository Walkthrough",
+    type: "SECTION",
+    parent: { id: "nested-group", type: "GROUP", parent: { id: "90:2", type: "PAGE" } }
+  });
 });
 
 test("Shot 32 maps node 95:44 to the exact frame name and 28-frame duration", async () => {
@@ -835,6 +921,41 @@ test("bridge outage reports a structured result and leaves UI manual download en
   assert.equal(views.at(-1)?.bridgeCode, "BRIDGE_UNAVAILABLE");
 });
 
+test("timing build validates approved section ranges and embeds exact section identity per shot", async () => {
+  const buildModule = await import(new URL("../scripts/build.mjs", import.meta.url).href) as unknown as {
+    validateVideo001Scenes(value: unknown): {
+      shots: Array<{ index: number; sectionId: string; sectionName: string }>;
+    };
+  };
+  const timing = JSON.parse(readFileSync(approvedTimingSource(), "utf8")) as {
+    sections: Array<{ name: string; firstShot: number; lastShot: number }>;
+  };
+  const embedded = buildModule.validateVideo001Scenes(timing);
+
+  for (const shot of embedded.shots) {
+    const expected = APPROVED_SECTIONS.find(({ firstShot, lastShot }) =>
+      shot.index >= firstShot && shot.index <= lastShot
+    );
+    assert.ok(expected, `missing approved section for Shot ${shot.index}`);
+    assert.equal(shot.sectionId, expected.sectionId);
+    assert.equal(shot.sectionName, expected.sectionName);
+  }
+
+  for (const [index, expected] of APPROVED_SECTIONS.entries()) {
+    const wrongName = structuredClone(timing);
+    wrongName.sections[index]!.name = `${expected.timingName} changed`;
+    assert.throws(() => buildModule.validateVideo001Scenes(wrongName), /section/i);
+
+    const wrongStart = structuredClone(timing);
+    wrongStart.sections[index]!.firstShot = expected.firstShot + 1;
+    assert.throws(() => buildModule.validateVideo001Scenes(wrongStart), /section/i);
+
+    const wrongEnd = structuredClone(timing);
+    wrongEnd.sections[index]!.lastShot = expected.lastShot - 1;
+    assert.throws(() => buildModule.validateVideo001Scenes(wrongEnd), /section/i);
+  }
+});
+
 test("manifest generator rejects missing, malformed, and example IDs and emits exact current fields for a real-looking fixture ID", () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-manifest-"));
   try {
@@ -910,6 +1031,10 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.match(code, /95:44/);
     assert.match(code, /S001_SH32_Repo_PreparationNotLearning/);
     assert.match(code, /duration:28|"duration":28/);
+    for (const section of APPROVED_SECTIONS) {
+      assert.equal(code.includes(section.sectionId), true, `controller bundle omitted section ${section.sectionId}`);
+      assert.equal(code.includes(section.sectionName), true, `controller bundle omitted ${section.sectionName}`);
+    }
     assert.match(html, /Send to After Effects/);
     assert.match(html, /Download package/);
     assert.doesNotMatch(
@@ -1238,7 +1363,12 @@ test("controller bundle builds a root-opacity raster package with only documente
         }],
         exportAsync: async () => new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
       };
-      frame.parent = figma.currentPage;
+      frame.parent = {
+        id: "90:9",
+        name: "06 Shots 26-32 — Repository Walkthrough",
+        type: "SECTION",
+        parent: { id: figma.currentPage.id, type: "PAGE" }
+      };
       figma.currentPage.selection = [frame];
       figma.ui.onmessage({ type: "build-package" });
     `, sandbox);

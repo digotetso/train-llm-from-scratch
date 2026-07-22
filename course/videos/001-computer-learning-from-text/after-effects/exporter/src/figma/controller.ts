@@ -50,7 +50,14 @@ export type UiToController =
 export interface EmbeddedVideo001Config {
   source: { fileKey: string; pageId: string };
   target: { width: number; height: number; fps: number };
-  shots: Array<{ index: number; nodeId: string; name: string; duration: number }>;
+  shots: Array<{
+    index: number;
+    nodeId: string;
+    name: string;
+    duration: number;
+    sectionId: string;
+    sectionName: string;
+  }>;
 }
 
 export interface FigmaNodeLike {
@@ -388,6 +395,29 @@ function validateConfig(config: EmbeddedVideo001Config): Map<string, EmbeddedVid
   return timings;
 }
 
+function recordOrUndefined(value: unknown): UnknownRecord | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as UnknownRecord;
+}
+
+function hasApprovedSectionAncestry(
+  node: FigmaNodeLike,
+  timing: EmbeddedVideo001Config["shots"][number],
+  pageId: string
+): boolean {
+  const section = recordOrUndefined(node.parent);
+  if (
+    section === undefined ||
+    section.type !== "SECTION" ||
+    section.id !== timing.sectionId ||
+    section.name !== timing.sectionName
+  ) {
+    return false;
+  }
+  const sectionParent = recordOrUndefined(section.parent);
+  return sectionParent?.type === "PAGE" && sectionParent.id === pageId;
+}
+
 function selectedFrames(
   host: ControllerHost,
   config: EmbeddedVideo001Config,
@@ -406,9 +436,6 @@ function selectedFrames(
     if (!FRAME_LIKE_TYPES.has(node.type)) {
       throw controllerFailure("SELECTION_NOT_FRAME", `Selected node ${node.id} is not a frame-like node.`);
     }
-    if (node.parent !== page) {
-      throw controllerFailure("SELECTION_NOT_TOP_LEVEL", `Selected frame ${node.id} must be top-level on the current page.`);
-    }
     const timing = timings.get(node.id);
     if (timing === undefined) {
       throw controllerFailure("SHOT_TIMING_NOT_FOUND", `No Video 001 timing exists for selected frame ${node.id}.`);
@@ -417,6 +444,12 @@ function selectedFrames(
       throw controllerFailure(
         "SHOT_NAME_MISMATCH",
         `Selected frame ${node.id} must be named ${timing.name} before export.`
+      );
+    }
+    if (!hasApprovedSectionAncestry(node, timing, config.source.pageId)) {
+      throw controllerFailure(
+        "SELECTION_NOT_IN_APPROVED_SECTION",
+        `Selected frame ${node.id} must be a direct child of approved section ${timing.sectionName} (${timing.sectionId}) on the configured Video 001 page.`
       );
     }
     return { node, timing };
