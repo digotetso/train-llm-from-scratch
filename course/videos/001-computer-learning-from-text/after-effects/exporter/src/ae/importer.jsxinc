@@ -1114,7 +1114,12 @@ var Video001ExporterImporter = (function (core) {
         return importValidatedPackage(packageValue, options);
     }
 
-    function isQueuedPackageFile(packageFile, queueRoot, contentHash) {
+    function trustedQueueRoot() {
+        return new Folder(Folder.userData.fsName + "/Video001FigmaAEExporter");
+    }
+
+    function isQueuedPackageFile(packageFile, contentHash) {
+        var queueRoot = trustedQueueRoot();
         return (
             packageFile.parent.fsName === queueRoot.fsName + "/incoming" &&
             packageFile.name === contentHash + PACKAGE_SUFFIX
@@ -1124,9 +1129,9 @@ var Video001ExporterImporter = (function (core) {
     function verifyPackageFileIdentity(packageFile, options, packageValue) {
         var packageObject = requireObject(packageValue, "Exporter package");
         var contentHash = requireHash(packageObject.contentHash, "Exporter package contentHash");
-        var queued = isQueuedPackageFile(packageFile, options.queueRoot, contentHash);
+        var queued = isQueuedPackageFile(packageFile, contentHash);
         if (options.removeAfterReport && !queued) {
-            throw new Error("Queue package identity must be a direct incoming/<contentHash>.video001-ae.json child");
+            throw new Error("Queue package must use the trusted queue root as a direct incoming/<contentHash>.video001-ae.json child");
         }
         if (!queued) {
             verifyManualContentFingerprint(packageObject);
@@ -1141,7 +1146,7 @@ var Video001ExporterImporter = (function (core) {
         if (
             result.status === "IMPORTED" &&
             options.removeAfterReport &&
-            isQueuedPackageFile(packageFile, options.queueRoot, result.report.contentHash)
+            isQueuedPackageFile(packageFile, result.report.contentHash)
         ) {
             if (!packageFile.remove()) {
                 result.report.warnings[result.report.warnings.length] = "Imported queue package could not be removed after report publication";

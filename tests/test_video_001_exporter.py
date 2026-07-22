@@ -148,6 +148,18 @@ def test_package_identity_and_every_asset_are_preflighted_before_project_mutatio
     assert "verifyManualContentFingerprint" in importer
 
 
+def test_public_file_import_derives_queue_identity_from_the_exporter_user_data_root():
+    importer = IMPORTER_PATH.read_text(encoding="utf-8")
+    identity_body = importer[
+        importer.index("function isQueuedPackageFile"):
+        importer.index("function importPackageFile")
+    ]
+
+    assert 'Folder.userData.fsName + "/Video001FigmaAEExporter"' in importer
+    assert "isQueuedPackageFile(packageFile, options.queueRoot" not in importer
+    assert "var queueRoot = trustedQueueRoot()" in identity_body
+
+
 def test_panel_recovers_stale_bridge_state_without_process_wide_signals():
     panel = PANEL_PATH.read_text(encoding="utf-8")
 
@@ -166,6 +178,7 @@ def test_ae_host_runtime_harness_and_read_only_audit_guards_are_present():
 
     for behavior in [
         "rolls back only new identities in reverse",
+        "public file importer automatically rolls back only its new items in reverse",
         "Advanced index units",
         "box origin for unrotated text",
         "box origin through rotation",
@@ -173,8 +186,11 @@ def test_ae_host_runtime_harness_and_read_only_audit_guards_are_present():
         "declared asset is verified",
         "stale state for a nonexistent PID",
         "unrelated reused PID",
+        "replacement state file that appears during stale-state revalidation",
+        "PID is reused by the bridge during stale-state revalidation",
         "cancels its task when closed",
-        "font substitutions and raster fallbacks disjoint",
+        "read-only audit deeply preserves project, comp, layer, and property state",
+        "custom queue roots cannot bypass public package fingerprint verification",
     ]:
         assert behavior in harness
     for prohibited in [

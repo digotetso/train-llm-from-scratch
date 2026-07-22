@@ -26,6 +26,19 @@ class FolderItemMock {
 class CompItemMock extends FolderItemMock {}
 class FootageItemMock extends FolderItemMock {}
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  const record = value as Record<string, unknown>;
+  return "{" + Object.keys(record).sort().map((key) => JSON.stringify(key) + ":" + canonicalJson(record[key])).join(",") + "}";
+}
+
+function stampCanonicalContentHash<T extends { exportedAt: string; contentHash: string }>(value: T): T {
+  const fingerprintValue = { ...value, exportedAt: "", contentHash: "" };
+  value.contentHash = createHash("sha256").update(canonicalJson(fingerprintValue), "utf8").digest("hex");
+  return value;
+}
+
 function instrumentImporter(source: string): string {
   const marker = "    return {\n        importPackage: importPackage,";
   const index = source.indexOf(marker);
@@ -152,6 +165,9 @@ function makeImporterHarness(forcedSystemHash?: string) {
   }
 
   const rootFolder = new FolderItemMock("Root", removalLog);
+  const preexisting = new FolderItemMock("preexisting", removalLog);
+  preexisting.parentFolder = rootFolder;
+  projectItems.push(preexisting);
   const project = {
     rootFolder,
     get numItems(): number {
@@ -260,9 +276,9 @@ function makeImporterHarness(forcedSystemHash?: string) {
     source: { figmaFileKey: "file-key", figmaPageNodeId: "page-id" },
     shots: [{ figmaNodeId: "1:1", name: "Shot", duration: 30 }]
   });
-  const queueRoot = new FolderMock("/queue");
-  const assetRoot = new FolderMock("/queue/assets");
-  const reportFolder = new FolderMock("/queue");
+  const trustedQueuePath = "/user-data/Video001FigmaAEExporter";
+  const assetRoot = new FolderMock(trustedQueuePath + "/assets");
+  const reportFolder = new FolderMock(trustedQueuePath);
 
   function validPackage() {
     return {
@@ -299,11 +315,11 @@ function makeImporterHarness(forcedSystemHash?: string) {
     };
   }
 
-  function options(removeAfterReport: boolean) {
+  function options(removeAfterReport: boolean, queueRootPath = trustedQueuePath) {
     return {
       allowDuplicate: false,
       removeAfterReport,
-      queueRoot,
+      queueRoot: new FolderMock(queueRootPath),
       assetRoot,
       reportFolder,
       timingFile
@@ -318,6 +334,9 @@ function makeImporterHarness(forcedSystemHash?: string) {
     records,
     removalLog,
     systemCommands,
+    preexisting,
+    projectItems,
+    trustedQueuePath,
     get beginUndoCount() {
       return beginUndoCount;
     }
@@ -365,6 +384,27 @@ test("transaction tracking accepts concrete AE items and rolls back only new ide
   assert.equal(preexisting.removed, false);
   assert.deepEqual(harness.removalLog, ["footage", "comp", "folder"]);
   assert.ok(created.every((item) => item.removed));
+});
+
+test("public file importer automatically rolls back only its new items in reverse after a post-creation failure", () => {
+  const harness = makeImporterHarness();
+  const packageFile = harness.put(
+    "/manual/rollback.video001-ae.json",
+    stampCanonicalContentHash(harness.validPackage())
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /layers|addShape/
+  );
+
+  assert.equal(harness.beginUndoCount, 1);
+  assert.deepEqual(harness.removalLog, ["Shot_v001", "v001", "Shot", "01_Exporter_Imports"]);
+  assert.equal(harness.preexisting.removed, false);
+  assert.deepEqual(
+    harness.projectItems.filter((item) => !item.removed).map((item) => item.name),
+    ["preexisting"]
+  );
 });
 
 test("mixed text runs use Advanced index units and exact index bounds", () => {
@@ -441,8 +481,8 @@ test("paragraph geometry preserves the box origin through rotation", () => {
 
 test("queue filename and direct-parent identity fail before AE mutation", () => {
   for (const path of [
-    "/queue/incoming/" + "b".repeat(64) + ".video001-ae.json",
-    "/queue/incoming/nested/" + "a".repeat(64) + ".video001-ae.json"
+    "/user-data/Video001FigmaAEExporter/incoming/" + "b".repeat(64) + ".video001-ae.json",
+    "/user-data/Video001FigmaAEExporter/incoming/nested/" + "a".repeat(64) + ".video001-ae.json"
   ]) {
     const harness = makeImporterHarness();
     const packageFile = harness.put(path, harness.validPackage());
@@ -464,7 +504,7 @@ test("every declared asset is verified before AE mutation even when unreferenced
     path: "/outside/unverified.png"
   } as never);
   const packageFile = harness.put(
-    "/queue/incoming/" + value.contentHash + ".video001-ae.json",
+    harness.trustedQueuePath + "/incoming/" + value.contentHash + ".video001-ae.json",
     value
   );
   assert.throws(
@@ -485,6 +525,26 @@ test("manual packages with an unverifiable content fingerprint fail before AE mu
   assert.equal(harness.beginUndoCount, 0);
 });
 
+test("custom queue roots cannot bypass public package fingerprint verification", () => {
+  const incorrectHash = "a".repeat(64);
+  const harness = makeImporterHarness("c".repeat(64));
+  const value = harness.validPackage();
+  value.contentHash = incorrectHash;
+  const packageFile = harness.put(
+    "/tmp/custom/incoming/" + incorrectHash + ".video001-ae.json",
+    value
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(
+      packageFile,
+      harness.options(true, "/tmp/custom")
+    ),
+    /trusted queue root|content fingerprint|content hash/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+});
+
 test("the public package API cannot bypass manual fingerprint verification", () => {
   const harness = makeImporterHarness("c".repeat(64));
   const packageValue = harness.importer.__test.parseJson(JSON.stringify(harness.validPackage()));
@@ -497,15 +557,7 @@ test("the public package API cannot bypass manual fingerprint verification", () 
 
 test("manual packages use the shared canonical content fingerprint before import", () => {
   const harness = makeImporterHarness();
-  const value = harness.validPackage();
-  const fingerprintValue = { ...value, exportedAt: "", contentHash: "" };
-  const canonical = (input: unknown): string => {
-    if (input === null || typeof input !== "object") return JSON.stringify(input);
-    if (Array.isArray(input)) return "[" + input.map(canonical).join(",") + "]";
-    const record = input as Record<string, unknown>;
-    return "{" + Object.keys(record).sort().map((key) => JSON.stringify(key) + ":" + canonical(record[key])).join(",") + "}";
-  };
-  value.contentHash = createHash("sha256").update(canonical(fingerprintValue), "utf8").digest("hex");
+  const value = stampCanonicalContentHash(harness.validPackage());
   const packageFile = harness.put("/manual/package.video001-ae.json", value);
   let error: unknown;
   try {
@@ -519,7 +571,19 @@ test("manual packages use the shared canonical content fingerprint before import
   assert.ok(harness.systemCommands.some((command) => command.startsWith("/bin/chmod 600 ")));
 });
 
-type PanelHarnessOptions = { stateCommand: string; stateExists?: boolean };
+type BridgeState = {
+  pid: number;
+  port: number;
+  pairingCode: string;
+  pairingExpiresAt: number;
+};
+
+type PanelHarnessOptions = {
+  stateCommand?: string;
+  stateExists?: boolean;
+  stateSequence?: BridgeState[];
+  psByPid?: Record<number, string[]>;
+};
 
 function instrumentPanel(source: string): string {
   const marker = "    palette = buildPalette();";
@@ -536,7 +600,12 @@ function instrumentPanel(source: string): string {
 }(this, Video001ExporterImporter));\n`;
 }
 
-function makePanelHarness({ stateCommand, stateExists = true }: PanelHarnessOptions) {
+function makePanelHarness({
+  stateCommand = "",
+  stateExists = true,
+  stateSequence,
+  psByPid
+}: PanelHarnessOptions) {
   const sourceUrl = new URL("../src/ae/panel.jsx", import.meta.url);
   const source = instrumentPanel(readFileSync(sourceUrl, "utf8"));
   const statePath = "/user-data/Video001FigmaAEExporter/state.json";
@@ -544,6 +613,15 @@ function makePanelHarness({ stateCommand, stateExists = true }: PanelHarnessOpti
   const existing = new Set<string>([bridgePath, "/usr/local/bin/node"]);
   if (stateExists) existing.add(statePath);
   const commands: string[] = [];
+  const defaultState: BridgeState = {
+    pid: 4242,
+    port: 3456,
+    pairingCode: "123456",
+    pairingExpiresAt: 2_000_000_000_000
+  };
+  const stateValues = stateSequence ?? [defaultState];
+  let stateReadIndex = 0;
+  const psIndexes: Record<number, number> = {};
 
   function parentPath(path: string): string {
     const slash = path.lastIndexOf("/");
@@ -579,19 +657,23 @@ function makePanelHarness({ stateCommand, stateExists = true }: PanelHarnessOpti
     Video001ExporterImporter: {
       readUtf8(file: InstanceType<typeof FileMock>) {
         assert.equal(file.fsName, statePath);
-        return JSON.stringify({
-          pid: 4242,
-          port: 3456,
-          pairingCode: "123456",
-          pairingExpiresAt: 2_000_000_000_000
-        });
+        const value = stateValues[Math.min(stateReadIndex, stateValues.length - 1)]!;
+        stateReadIndex += 1;
+        return JSON.stringify(value);
       }
     },
     system: {
       callSystem(command: string) {
         commands.push(command);
         if (command === "/usr/bin/which node") return "/usr/local/bin/node\n";
-        if (command.startsWith("/bin/ps -p 4242")) return stateCommand;
+        const psMatch = /^\/bin\/ps -p ([0-9]+) -o command=$/.exec(command);
+        if (psMatch) {
+          const pid = Number(psMatch[1]);
+          const sequence = psByPid?.[pid] ?? [stateCommand];
+          const index = psIndexes[pid] ?? 0;
+          psIndexes[pid] = index + 1;
+          return sequence[Math.min(index, sequence.length - 1)] ?? "";
+        }
         return "";
       }
     },
@@ -621,6 +703,69 @@ test("Stop recovers an unrelated reused PID without signaling it", () => {
   const harness = makePanelHarness({ stateCommand: "/usr/bin/python unrelated.py\n" });
   harness.panel.stopBridge(false);
   assert.equal(harness.existing.has(harness.statePath), false);
+  assert.ok(harness.commands.every((command) => !command.startsWith("/bin/kill")));
+});
+
+test("Start preserves a replacement state file that appears during stale-state revalidation", () => {
+  const bridgeCommand = "/usr/local/bin/node /bundle/bridge/video001-bridge.mjs --root /user-data/Video001FigmaAEExporter\n";
+  const firstState: BridgeState = {
+    pid: 4242,
+    port: 3456,
+    pairingCode: "123456",
+    pairingExpiresAt: 2_000_000_000_000
+  };
+  const replacementState: BridgeState = {
+    pid: 5252,
+    port: 3456,
+    pairingCode: "654321",
+    pairingExpiresAt: 2_000_000_100_000
+  };
+  const harness = makePanelHarness({
+    stateSequence: [firstState, replacementState, replacementState],
+    psByPid: {
+      4242: ["/usr/bin/python unrelated.py\n", "/usr/bin/python unrelated.py\n"],
+      5252: [bridgeCommand, bridgeCommand]
+    }
+  });
+
+  harness.panel.startBridge();
+
+  assert.equal(harness.existing.has(harness.statePath), true);
+  assert.ok(harness.commands.every((command) => !command.includes(" --root ") || command.startsWith("/bin/ps")));
+  assert.ok(harness.commands.every((command) => !command.startsWith("/bin/kill")));
+});
+
+test("Start preserves state when a PID is reused by the bridge during stale-state revalidation", () => {
+  const bridgeCommand = "/usr/local/bin/node /bundle/bridge/video001-bridge.mjs --root /user-data/Video001FigmaAEExporter\n";
+  const harness = makePanelHarness({
+    psByPid: {
+      4242: [
+        "/usr/bin/python unrelated.py\n",
+        bridgeCommand,
+        bridgeCommand,
+        bridgeCommand,
+        bridgeCommand
+      ]
+    }
+  });
+
+  harness.panel.startBridge();
+
+  assert.equal(harness.existing.has(harness.statePath), true);
+  assert.ok(harness.commands.every((command) => !command.includes(" --root ") || command.startsWith("/bin/ps")));
+  assert.ok(harness.commands.every((command) => !command.startsWith("/bin/kill")));
+});
+
+test("Stop refuses a PID that is reused after live-state verification", () => {
+  const bridgeCommand = "/usr/local/bin/node /bundle/bridge/video001-bridge.mjs --root /user-data/Video001FigmaAEExporter\n";
+  const harness = makePanelHarness({
+    psByPid: {
+      4242: [bridgeCommand, bridgeCommand, "/usr/bin/python unrelated.py\n"]
+    }
+  });
+
+  assert.throws(() => harness.panel.stopBridge(false), /Refusing to stop PID 4242/);
+  assert.equal(harness.existing.has(harness.statePath), true);
   assert.ok(harness.commands.every((command) => !command.startsWith("/bin/kill")));
 });
 
@@ -694,7 +839,32 @@ test("panel polls exactly once per second and cancels its task when closed", () 
   assert.deepEqual(cancelled, [73]);
 });
 
-test("read-only audit keeps font substitutions and raster fallbacks disjoint", () => {
+function mutationRejectingProxy<T extends object>(target: T, label: string, cache = new WeakMap<object, object>()): T {
+  const cached = cache.get(target);
+  if (cached) return cached as T;
+  const proxy = new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver) as unknown;
+      if (value !== null && typeof value === "object") {
+        return mutationRejectingProxy(value, label + "." + String(property), cache);
+      }
+      return value;
+    },
+    set(_object, property) {
+      throw new Error("audit mutated " + label + "." + String(property));
+    },
+    defineProperty(_object, property) {
+      throw new Error("audit mutated " + label + "." + String(property));
+    },
+    deleteProperty(_object, property) {
+      throw new Error("audit mutated " + label + "." + String(property));
+    }
+  });
+  cache.set(target, proxy);
+  return proxy;
+}
+
+test("read-only audit deeply preserves project, comp, layer, and property state while separating fallback categories", () => {
   const sourceUrl = new URL("../src/ae/audit-export.jsx", import.meta.url);
   const source = readFileSync(sourceUrl, "utf8");
   const hash = "a".repeat(64);
@@ -727,30 +897,96 @@ test("read-only audit keeps font substitutions and raster fallbacks disjoint", (
     write(value: string): boolean { output = value; return true; }
     close(): void {}
   }
+  class TextLayerMockLocal {
+    name = "TXT_Title";
+    comment = "source text";
+    readonly sourceProperty: object;
+
+    constructor(sourceProperty: object) {
+      this.sourceProperty = sourceProperty;
+    }
+
+    property(name: string): object {
+      assert.equal(name, "ADBE Text Properties");
+      return {
+        property: (propertyName: string) => {
+          assert.equal(propertyName, "ADBE Text Document");
+          return this.sourceProperty;
+        }
+      };
+    }
+  }
   class CompItemMockLocal {
     name = "Shot_v001";
     width = 1920;
     height = 1080;
     frameRate = 30;
     duration = 1;
-    numLayers = 0;
+    numLayers = 1;
     comment = "Video001Export sha256:" + hash;
-    layer(): never { throw new Error("no layers"); }
+    readonly textLayer: object;
+
+    constructor(textLayer: object) {
+      this.textLayer = textLayer;
+    }
+
+    layer(index: number): object {
+      assert.equal(index, 1);
+      return this.textLayer;
+    }
   }
   class EmptyClass {}
-  const comp = new CompItemMockLocal();
-  const project = {
+  const fontObject = mutationRejectingProxy({ postScriptName: "Inter-Regular" }, "fontObject");
+  const documentValue = mutationRejectingProxy({
+    text: "How a computer learns from text",
+    font: "Inter",
+    fontSize: 64,
+    fontObject,
+    boxTextSize: [1200, 180]
+  }, "textDocument");
+  const sourceProperty = mutationRejectingProxy({ value: documentValue }, "sourceProperty");
+  const textLayer = mutationRejectingProxy(new TextLayerMockLocal(sourceProperty), "textLayer");
+  const comp = mutationRejectingProxy(new CompItemMockLocal(textLayer), "comp");
+  const project = mutationRejectingProxy({
     activeItem: comp,
     file: null,
     numItems: 1,
     items: { addComp(): never { throw new Error("audit mutated project"); } }
-  };
+  }, "project");
+  const snapshot = () => ({
+    project: { activeItem: project.activeItem, file: project.file, numItems: project.numItems },
+    comp: {
+      name: comp.name,
+      width: comp.width,
+      height: comp.height,
+      frameRate: comp.frameRate,
+      duration: comp.duration,
+      numLayers: comp.numLayers,
+      comment: comp.comment,
+      textLayer: comp.textLayer
+    },
+    layer: {
+      name: textLayer.name,
+      comment: textLayer.comment,
+      sourceProperty: textLayer.sourceProperty
+    },
+    property: { value: sourceProperty.value },
+    textDocument: {
+      text: documentValue.text,
+      font: documentValue.font,
+      fontSize: documentValue.fontSize,
+      fontObject: documentValue.fontObject,
+      boxTextSize: Array.from(documentValue.boxTextSize)
+    },
+    fontObject: { postScriptName: fontObject.postScriptName }
+  });
+  const before = snapshot();
   const context = {
     $: { fileName: "/bundle/ae/audit-export.jsx" },
     File: FileMock,
     Folder: FolderMock,
     CompItem: CompItemMockLocal,
-    TextLayer: EmptyClass,
+    TextLayer: TextLayerMockLocal,
     ShapeLayer: EmptyClass,
     CameraLayer: EmptyClass,
     LightLayer: EmptyClass,
@@ -758,11 +994,24 @@ test("read-only audit keeps font substitutions and raster fallbacks disjoint", (
     app: { project }
   };
   vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
-  assert.equal(project.numItems, 1);
+  assert.deepEqual(snapshot(), before);
   const audit = JSON.parse(output) as {
     missingFonts: string[];
     rasterFallbacks: Array<{ type: string; property: string }>;
+    layers: Array<{ name: string; text: string; font: string; boxDimensions: number[] }>;
   };
   assert.deepEqual(audit.missingFonts, ["Missing-Regular"]);
   assert.deepEqual(audit.rasterFallbacks, [{ type: "raster-fallback", property: "gradient", replacement: "PNG" }]);
+  assert.deepEqual(audit.layers, [{
+    comp: "Shot_v001",
+    name: "TXT_Title",
+    type: "text",
+    comment: "source text",
+    text: "How a computer learns from text",
+    font: "Inter-Regular",
+    fontSize: 64,
+    boxDimensions: [1200, 180],
+    shapeMatchNames: [],
+    sourceComp: null
+  }]);
 });
