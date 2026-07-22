@@ -136,7 +136,7 @@ VIDEO_HEADINGS = {
     "script.md": [
         "# Video 1: What Does It Mean for a Computer to Learn From Text?",
         "## 00:00 Hook",
-        "## 00:45 Direct Explanation",
+        "## 00:45 Analogy",
         *TEMPLATE_HEADINGS["script.md"][3:],
     ],
     "lesson.md": [
