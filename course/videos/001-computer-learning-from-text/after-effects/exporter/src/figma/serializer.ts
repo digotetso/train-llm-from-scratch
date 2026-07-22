@@ -6,6 +6,7 @@ import type {
   TextNode,
   TextRun
 } from "../shared/contract.ts";
+import { assertJsonContainerDepth, isSafeExporterName } from "../shared/contract.ts";
 import { LIMITS } from "../shared/limits.ts";
 
 export type TransformMatrix = readonly [
@@ -75,6 +76,8 @@ export interface FigmaNodeSnapshot {
 export interface RasterExportRequest {
   format: "PNG";
   scale: number;
+  /** The returned PNG must include the node's rendered opacity and effects. */
+  appearance: "BAKED";
 }
 
 export interface RasterExportResult {
@@ -88,6 +91,15 @@ export interface SerializeFrameOptions {
     node: FigmaNodeSnapshot,
     request: RasterExportRequest
   ) => Promise<RasterExportResult>;
+  /** Test/host seams may lower, but never raise, shared package ceilings. */
+  limits?: Partial<SerializerLimits>;
+}
+
+export interface SerializerLimits {
+  maxAssets: number;
+  maxAssetBytes: number;
+  maxAggregateAssetBytes: number;
+  maxManifestBytes: number;
 }
 
 export interface FrameTiming {
@@ -103,19 +115,15 @@ interface SerializationContext {
   warnings: ExportFrame["warnings"];
   rasterBytes: number;
   assetHashes: Set<string>;
+  limits: SerializerLimits;
 }
 
 const GROUP_TYPES = new Set(["FRAME", "GROUP", "COMPONENT", "INSTANCE"]);
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const UNSAFE_NAME_PATTERN = /[\u0000-\u001f\u007f/\\]/;
 const MATRIX_TOLERANCE = 1e-8;
 const ROUNDING_FACTOR = 1e9;
-// The package adds root/frames/frame/children containers and native text may
-// add a textBox object. Twenty-nine nested groups keep that deepest object at
-// the shared 64-container limit.
-const MAX_NATIVE_GROUP_DEPTH = Math.floor((LIMITS.maxJsonContainerDepth - 6) / 2);
 
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid normalized Figma snapshot at ${path}: ${message}`);
@@ -145,7 +153,7 @@ function nonEmptyString(value: unknown, path: string): string {
 
 function safeName(value: unknown, path: string): string {
   const name = nonEmptyString(value, path);
-  if (UNSAFE_NAME_PATTERN.test(name)) invalid(path, "unsafe name; control characters and path separators are forbidden");
+  if (!isSafeExporterName(name)) invalid(path, "unsafe name");
   return name;
 }
 
@@ -153,6 +161,15 @@ function exactInteger(value: unknown, path: string): number {
   const number = finiteNumber(value, path);
   if (!Number.isSafeInteger(number)) invalid(path, "expected a safe integer");
   return number;
+}
+
+function effectiveLimit(value: unknown, ceiling: number, path: string): number {
+  if (value === undefined) return ceiling;
+  const limit = exactInteger(value, path);
+  if (limit < 0 || limit > ceiling) {
+    invalid(path, `expected a non-negative integer no greater than shared ceiling ${ceiling}`);
+  }
+  return limit;
 }
 
 function rounded(value: number): number {
@@ -236,6 +253,17 @@ function relativeGeometry(
 
 function visibleEffects(node: FigmaNodeSnapshot): readonly { type: string; visible?: boolean }[] {
   return (node.effects ?? []).filter((effect) => effect.visible !== false);
+}
+
+function rootAppearanceReason(node: FigmaNodeSnapshot): string | null {
+  if (node.visible === false) return "visible";
+  if (node.isMask === true) return "isMask";
+  if (node.blendMode !== undefined && node.blendMode !== "NORMAL") return "blendMode";
+  if (visibleEffects(node).length > 0) return "effects";
+  if ((node.fills ?? []).some((paint) => paint.visible !== false)) return "fills";
+  if ((node.strokes ?? []).some((paint) => paint.visible !== false)) return "strokes";
+  if (node.opacity !== undefined && node.opacity !== 1) return "opacity";
+  return null;
 }
 
 function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
@@ -350,31 +378,29 @@ function validateNodeIdentity(node: FigmaNodeSnapshot, path: string, ids: Set<st
 function preflightNode(
   node: FigmaNodeSnapshot,
   path: string,
-  groupDepth: number,
   ids: Set<string>,
-  rasterCount: { value: number },
   rootInverse: MutableMatrix
 ): void {
   validateNodeIdentity(node, path, ids);
   relativeGeometry(node, path, rootInverse);
   const reason = rasterReason(node, path, new Set());
-  if (reason !== null) {
-    rasterCount.value += 1;
-    if (rasterCount.value > LIMITS.maxAssets) {
-      invalid(path, `raster fallbacks exceed the ${LIMITS.maxAssets.toLocaleString("en-US")}-asset limit`);
-    }
-    return;
-  }
+  if (reason !== null) return;
 
   if (!GROUP_TYPES.has(node.type)) return;
-  const nextDepth = groupDepth + 1;
-  if (nextDepth > MAX_NATIVE_GROUP_DEPTH) {
-    invalid(path, `native group nesting exceeds the shared ${LIMITS.maxJsonContainerDepth}-level limit`);
-  }
   const children = node.children ?? [];
   for (let index = 0; index < children.length; index += 1) {
-    preflightNode(children[index]!, `${path}.children[${index}]`, nextDepth, ids, rasterCount, rootInverse);
+    preflightNode(children[index]!, `${path}.children[${index}]`, ids, rootInverse);
   }
+}
+
+function validateSerializedFrame(frame: ExportFrame, maxManifestBytes: number): ExportFrame {
+  // Match validatePackage's exact container count without fabricating the
+  // unrelated package fields: package object -> frames array -> frame object.
+  assertJsonContainerDepth({ frames: [frame] });
+  if (new TextEncoder().encode(JSON.stringify(frame)).byteLength > maxManifestBytes) {
+    invalid("$", "serialized frame exceeds the shared manifest-byte limit");
+  }
+  return frame;
 }
 
 function baseNode(
@@ -497,7 +523,8 @@ async function rasterResult(
     try {
       result = await context.options.exportRaster(node, {
         format: "PNG",
-        scale: context.options.rasterScale
+        scale: context.options.rasterScale,
+        appearance: "BAKED"
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -512,7 +539,10 @@ async function rasterResult(
       bytes: decodeCanonicalBase64(node.rasterAsset.bytesBase64, `${path}.rasterAsset.bytesBase64`)
     };
   } else {
-    invalid(path, "raster fallback requires exportRaster or a verified embedded rasterAsset");
+    invalid(
+      path,
+      `raster fallback for node ${JSON.stringify(node.id)} (${JSON.stringify(node.name)}) requires exportRaster or a verified embedded rasterAsset`
+    );
   }
 
   if (result === null || typeof result !== "object") invalid(path, "raster export returned no asset evidence");
@@ -523,7 +553,7 @@ async function rasterResult(
     invalid(`${path}.rasterAsset.bytes`, "expected Uint8Array raster bytes");
   }
   const bytes = Uint8Array.from(result.bytes);
-  if (bytes.byteLength > LIMITS.maxAssetBytes) {
+  if (bytes.byteLength > context.limits.maxAssetBytes) {
     invalid(`${path}.rasterAsset.bytes`, "raster asset exceeds the per-asset limit");
   }
   const actualHash = await sha256Hex(bytes);
@@ -531,9 +561,15 @@ async function rasterResult(
     invalid(`${path}.rasterAsset.hash`, "returned hash does not match the raster bytes");
   }
   if (!context.assetHashes.has(result.hash)) {
+    if (context.assetHashes.size >= context.limits.maxAssets) {
+      invalid(
+        `${path}.rasterAsset.hash`,
+        `unique raster assets exceed the ${context.limits.maxAssets}-asset limit`
+      );
+    }
     context.assetHashes.add(result.hash);
     context.rasterBytes += bytes.byteLength;
-    if (context.rasterBytes > LIMITS.maxAggregateAssetBytes) {
+    if (context.rasterBytes > context.limits.maxAggregateAssetBytes) {
       invalid(`${path}.rasterAsset.bytes`, "raster assets exceed the aggregate decoded-byte limit");
     }
   }
@@ -557,6 +593,9 @@ async function serializeNode(
     return {
       ...baseNode(node, path, context.rootInverse),
       kind: "raster",
+      // The raster callback contract bakes the node's appearance, including
+      // opacity and effects, so AE must not apply source opacity a second time.
+      opacity: 1,
       assetHash: asset.hash
     };
   }
@@ -587,29 +626,79 @@ export async function serializeFrame(
   const normalizedOptions: SerializeFrameOptions = options.exportRaster === undefined
     ? { rasterScale }
     : { rasterScale, exportRaster: options.exportRaster };
+  const serializerLimits: SerializerLimits = {
+    maxAssets: effectiveLimit(options.limits?.maxAssets, LIMITS.maxAssets, "$.options.limits.maxAssets"),
+    maxAssetBytes: effectiveLimit(
+      options.limits?.maxAssetBytes,
+      LIMITS.maxAssetBytes,
+      "$.options.limits.maxAssetBytes"
+    ),
+    maxAggregateAssetBytes: effectiveLimit(
+      options.limits?.maxAggregateAssetBytes,
+      LIMITS.maxAggregateAssetBytes,
+      "$.options.limits.maxAggregateAssetBytes"
+    ),
+    maxManifestBytes: effectiveLimit(
+      options.limits?.maxManifestBytes,
+      LIMITS.maxManifestBytes,
+      "$.options.limits.maxManifestBytes"
+    )
+  };
   const rootMatrix = validateMatrix(node.absoluteTransform, "$.absoluteTransform");
   const rootInverse = invertMatrix(rootMatrix, "$.absoluteTransform");
   const frameId = nonEmptyString(node.id, "$.id");
   const frameName = safeName(node.name, "$.name");
   const width = positiveNumber(node.width, "$.width");
   const height = positiveNumber(node.height, "$.height");
-  if (!Array.isArray(node.children) || node.children.length === 0) {
-    invalid("$.children", "empty frames are not supported by the shared contract");
-  }
-
-  const ids = new Set<string>([frameId]);
-  const rasterCount = { value: 0 };
-  for (let index = 0; index < node.children.length; index += 1) {
-    preflightNode(node.children[index]!, `$.children[${index}]`, 0, ids, rasterCount, rootInverse);
-  }
+  const rootOpacity = node.opacity === undefined ? 1 : finiteNumber(node.opacity, "$.opacity");
+  if (rootOpacity < 0 || rootOpacity > 1) invalid("$.opacity", "expected a number between 0 and 1");
+  const rootReason = rootAppearanceReason(node);
 
   const context: SerializationContext = {
     rootInverse,
     options: normalizedOptions,
     warnings: [],
     rasterBytes: 0,
-    assetHashes: new Set()
+    assetHashes: new Set(),
+    limits: serializerLimits
   };
+  if (rootReason !== null) {
+    const asset = await rasterResult(node, "$", context);
+    return validateSerializedFrame({
+      nodeId: frameId,
+      name: frameName,
+      width,
+      height,
+      duration,
+      children: [{
+        id: `${frameId}::root-raster-fallback`,
+        name: `${frameName}__ROOT_RASTER_FALLBACK`,
+        kind: "raster",
+        x: 0,
+        y: 0,
+        width,
+        height,
+        rotation: 0,
+        opacity: 1,
+        assetHash: asset.hash
+      }],
+      warnings: [{
+        nodeId: frameId,
+        nodeName: frameName,
+        property: rootReason,
+        fallback: "png"
+      }]
+    }, serializerLimits.maxManifestBytes);
+  }
+  if (!Array.isArray(node.children) || node.children.length === 0) {
+    invalid("$.children", "empty frames are not supported by the shared contract");
+  }
+
+  const ids = new Set<string>([frameId]);
+  for (let index = 0; index < node.children.length; index += 1) {
+    preflightNode(node.children[index]!, `$.children[${index}]`, ids, rootInverse);
+  }
+
   const children: ExportNode[] = [];
   for (let index = 0; index < node.children.length; index += 1) {
     children.push(await serializeNode(node.children[index]!, `$.children[${index}]`, context));
@@ -623,8 +712,5 @@ export async function serializeFrame(
     children,
     warnings: context.warnings
   };
-  if (new TextEncoder().encode(JSON.stringify(frame)).byteLength > LIMITS.maxManifestBytes) {
-    invalid("$", "serialized frame exceeds the shared manifest-byte limit");
-  }
-  return frame;
+  return validateSerializedFrame(frame, serializerLimits.maxManifestBytes);
 }

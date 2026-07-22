@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { ExportFrame, ExportNode } from "../src/shared/contract.ts";
+import { validatePackage } from "../src/shared/contract.ts";
+import type { ExportFrame, ExportNode, GroupNode } from "../src/shared/contract.ts";
 import { LIMITS } from "../src/shared/limits.ts";
+import { makeValidPackage } from "./helpers/package.ts";
 import {
   classifyNode,
   serializeFrame,
@@ -67,7 +69,54 @@ function shape(overrides: Partial<FigmaNodeSnapshot> = {}): FigmaNodeSnapshot {
   };
 }
 
-function root(children: FigmaNodeSnapshot[]): FigmaNodeSnapshot {
+function textSnapshot(overrides: Partial<FigmaNodeSnapshot> = {}): FigmaNodeSnapshot {
+  return {
+    id: "text-leaf",
+    name: "Text_Leaf",
+    type: "TEXT",
+    width: 104,
+    height: 112,
+    opacity: 1,
+    absoluteTransform: matrix(0, 0),
+    fills: [solid()],
+    strokes: [],
+    effects: [],
+    blendMode: "NORMAL",
+    isMask: false,
+    characters: "θ",
+    textAlignHorizontal: "LEFT",
+    lineHeightPx: 112,
+    letterSpacingPx: 0,
+    styledTextSegments: [{
+      start: 0,
+      end: 1,
+      fontFamily: "Sora",
+      fontStyle: "Bold",
+      fontSize: 96,
+      fill: solid()
+    }],
+    ...overrides
+  };
+}
+
+function rootWithNestedText(groupCount: number): FigmaNodeSnapshot {
+  let nested = textSnapshot();
+  for (let depth = groupCount - 1; depth >= 0; depth -= 1) {
+    nested = shape({
+      id: `text-depth-group-${depth}`,
+      name: `Text_Depth_Group_${depth}`,
+      type: "GROUP",
+      fills: [],
+      children: [nested]
+    });
+  }
+  return root([nested]);
+}
+
+function root(
+  children: FigmaNodeSnapshot[],
+  overrides: Partial<FigmaNodeSnapshot> = {}
+): FigmaNodeSnapshot {
   return {
     id: "frame-root",
     name: "S001_SH32_TestFrame",
@@ -81,7 +130,8 @@ function root(children: FigmaNodeSnapshot[]): FigmaNodeSnapshot {
     effects: [],
     blendMode: "NORMAL",
     isMask: false,
-    children
+    children,
+    ...overrides
   };
 }
 
@@ -144,6 +194,21 @@ test("derives deterministic transforms relative to a translated and rotated sele
   assert.equal(rotated.opacity, 0.75);
 });
 
+test("rejects scale, reflection, and shear that the shared transform cannot express", async () => {
+  const cases: Array<[string, FigmaNodeSnapshot["absoluteTransform"]]> = [
+    ["scale", [[2, 0, 10], [0, 2, 20]]],
+    ["reflection", [[-1, 0, 10], [0, 1, 20]]],
+    ["shear", [[1, 0.25, 10], [0, 1, 20]]]
+  ];
+  for (const [label, absoluteTransform] of cases) {
+    await assert.rejects(
+      serializeFrame(root([shape({ absoluteTransform })]), { duration: 28 }, { rasterScale: 1 }),
+      /\$\.children\[0\]\.absoluteTransform.*scale, reflection, or shear/i,
+      label
+    );
+  }
+});
+
 test("keeps supported groups and solid shapes native while rasterizing a gradient", async () => {
   const source = fixture("nested-frame");
   const frame = await serializeFrame(source, { duration: 28 }, { rasterScale: 1 });
@@ -157,7 +222,9 @@ test("keeps supported groups and solid shapes native while rasterizing a gradien
   assert.equal(rectangle.strokeWidth, 3);
   assert.equal(rectangle.radius, 18);
   assert.equal(findNode(frame, "DATA_StatusDot").kind, "ellipse");
-  assert.equal(findNode(frame, "FX_GradientRect").kind, "raster");
+  const gradient = findNode(frame, "FX_GradientRect");
+  assert.equal(gradient.kind, "raster");
+  assert.equal(gradient.opacity, 1, "raster bytes bake node opacity and must not be dimmed twice");
   assert.equal(findNode(frame, "FX_ImageRect").kind, "raster");
   assert.equal(findNode(frame, "FX_EffectEllipse").kind, "raster");
   assert.equal(findNode(frame, "MASK_Subtree").kind, "raster");
@@ -215,7 +282,10 @@ test("injects pure raster export with deterministic PNG scale and verifies the r
   assert.equal(raster.kind, "raster");
   if (raster.kind !== "raster") throw new Error("expected raster");
   assert.equal(raster.assetHash, exported.hash);
-  assert.deepEqual(calls, [{ id: "96:5", request: { format: "PNG", scale: 2 } }]);
+  assert.deepEqual(calls, [{
+    id: "96:5",
+    request: { format: "PNG", scale: 2, appearance: "BAKED" }
+  }]);
 
   await assert.rejects(
     serializeFrame(source, { duration: 28 }, {
@@ -223,6 +293,101 @@ test("injects pure raster export with deterministic PNG scale and verifies the r
       exportRaster: async () => ({ ...exported, hash: "0".repeat(64) })
     }),
     /children\[0\].*hash.*bytes/i
+  );
+});
+
+test("rasterizes the selected frame once when its direct appearance cannot be represented", async () => {
+  const baked = rasterAsset("full-selected-frame-baked-appearance");
+  const cases: Array<[string, Partial<FigmaNodeSnapshot>]> = [
+    ["fills", { fills: [solid()] }],
+    ["strokes", { strokes: [solid()], strokeWeight: 2 }],
+    ["effects", { effects: [{ type: "DROP_SHADOW", visible: true }] }],
+    ["isMask", { isMask: true }],
+    ["blendMode", { blendMode: "MULTIPLY" }],
+    ["opacity", { opacity: 0.4 }],
+    ["visible", { visible: false }]
+  ];
+
+  for (const [property, appearance] of cases) {
+    const source = root([
+      shape({ id: `${property}-child`, name: `${property}_Child` }),
+      shape({ id: `${property}-hidden`, name: `${property}_Hidden` })
+    ], appearance);
+    const calls: Array<{ id: string; request: RasterExportRequest }> = [];
+    const frame = await serializeFrame(source, { duration: 28 }, {
+      rasterScale: 2,
+      exportRaster: async (node, request) => {
+        calls.push({ id: node.id, request });
+        return baked;
+      }
+    });
+
+    assert.deepEqual(calls, [{
+      id: "frame-root",
+      request: { format: "PNG", scale: 2, appearance: "BAKED" }
+    }], property);
+    assert.equal(frame.children.length, 1, property);
+    assert.deepEqual(frame.children[0], {
+      id: "frame-root::root-raster-fallback",
+      name: "S001_SH32_TestFrame__ROOT_RASTER_FALLBACK",
+      kind: "raster",
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1080,
+      rotation: 0,
+      opacity: 1,
+      assetHash: baked.hash
+    }, property);
+    assert.deepEqual(frame.warnings, [{
+      nodeId: "frame-root",
+      nodeName: "S001_SH32_TestFrame",
+      property,
+      fallback: "png"
+    }], property);
+    assert.throws(() => findNode(frame, `${property}_Child`), /missing exported node/, property);
+  }
+});
+
+test("does not collapse a neutral selected frame merely because one child needs fallback", async () => {
+  const gradient = shape({
+    id: "gradient-child",
+    name: "Gradient_Child",
+    fills: [{ type: "GRADIENT_LINEAR" }]
+  });
+  const native = shape({ id: "native-child", name: "Native_Child" });
+  const exported = rasterAsset("gradient-child-baked");
+  const calls: string[] = [];
+
+  const frame = await serializeFrame(root([native, gradient]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      calls.push(node.id);
+      return exported;
+    }
+  });
+
+  assert.deepEqual(calls, ["gradient-child"]);
+  assert.deepEqual(frame.children.map((node) => [node.name, node.kind]), [
+    ["Native_Child", "rect"],
+    ["Gradient_Child", "raster"]
+  ]);
+});
+
+test("fails root rasterization actionably when faithful baked appearance is unavailable", async () => {
+  const source = root([shape()], { fills: [solid()] });
+  await assert.rejects(
+    serializeFrame(source, { duration: 28 }, { rasterScale: 1 }),
+    /\$.*frame-root.*root raster|raster fallback/i
+  );
+  await assert.rejects(
+    serializeFrame(source, { duration: 28 }, {
+      rasterScale: 1,
+      exportRaster: async () => {
+        throw new Error("root renderer unavailable");
+      }
+    }),
+    /\$.*frame-root.*S001_SH32_TestFrame.*root renderer unavailable/i
   );
 });
 
@@ -311,8 +476,8 @@ test("rasterizes an unsupported group subtree once without serializing hidden ch
   }]);
 });
 
-test("fails actionably instead of emitting output outside shared asset and nesting limits", async () => {
-  const tooManyRasters = Array.from({ length: LIMITS.maxAssets + 1 }, (_, index) => shape({
+test("allows more raster nodes than the asset limit when they dedupe to one verified hash", async () => {
+  const deduplicatedRasters = Array.from({ length: LIMITS.maxAssets + 1 }, (_, index) => shape({
     id: `vector-${index}`,
     name: `Vector_${index}`,
     type: "VECTOR",
@@ -321,52 +486,124 @@ test("fails actionably instead of emitting output outside shared asset and nesti
       bytesBase64: "dmVjdG9yLXBuZw=="
     }
   }));
-  await assert.rejects(
-    serializeFrame(root(tooManyRasters), { duration: 28 }, { rasterScale: 1 }),
-    /children\[2048\].*2,048-asset limit/i
+  const frame = await serializeFrame(
+    root(deduplicatedRasters),
+    { duration: 28 },
+    { rasterScale: 1 }
   );
+  assert.equal(frame.children.length, LIMITS.maxAssets + 1);
+  assert.equal(frame.warnings.length, LIMITS.maxAssets + 1);
+  assert.equal(new Set(frame.children.map((node) => node.kind === "raster" ? node.assetHash : "")).size, 1);
+});
 
-  let nested = shape({ id: "leaf", name: "Leaf" });
-  for (let depth = 29; depth >= 0; depth -= 1) {
-    nested = shape({
-      id: `group-${depth}`,
-      name: `Group_${depth}`,
-      type: "GROUP",
-      fills: [],
-      children: [nested]
-    });
-  }
+test("rejects a new verified hash only when the configured unique-asset limit is exceeded", async () => {
+  const rasters = ["asset-a", "asset-b", "asset-c"].map((id) => shape({
+    id,
+    name: id.replace("-", "_"),
+    type: "VECTOR"
+  }));
   await assert.rejects(
-    serializeFrame(root([nested]), { duration: 28 }, { rasterScale: 1 }),
-    /children\[0\].*nesting.*64-level limit/i
+    serializeFrame(root(rasters), { duration: 28 }, {
+      rasterScale: 1,
+      limits: { maxAssets: 2 },
+      exportRaster: async (node) => rasterAsset(node.id)
+    }),
+    /children\[2\].*unique.*2-asset limit/i
   );
 });
 
-test("rejects a serialized frame above the shared manifest-byte limit", { concurrency: false }, async () => {
-  const OriginalTextEncoder = globalThis.TextEncoder;
-  class OverLimitTextEncoder {
-    encode(): { byteLength: number } {
-      return { byteLength: LIMITS.maxManifestBytes + 1 };
-    }
-  }
+test("enforces decoded per-asset and unique aggregate byte limits using real bytes", async () => {
+  const first = shape({ id: "asset-first", name: "Asset_First", type: "VECTOR" });
+  const second = shape({ id: "asset-second", name: "Asset_Second", type: "VECTOR" });
 
-  Object.defineProperty(globalThis, "TextEncoder", {
-    configurable: true,
-    value: OverLimitTextEncoder,
-    writable: true
+  await assert.rejects(
+    serializeFrame(root([first]), { duration: 28 }, {
+      rasterScale: 1,
+      limits: { maxAssetBytes: 3 },
+      exportRaster: async () => rasterAsset("four")
+    }),
+    /children\[0\].*per-asset limit/i
+  );
+  await assert.rejects(
+    serializeFrame(root([first, second]), { duration: 28 }, {
+      rasterScale: 1,
+      limits: { maxAssetBytes: 4, maxAggregateAssetBytes: 7 },
+      exportRaster: async (node) => rasterAsset(node.id === "asset-first" ? "aaaa" : "bbbb")
+    }),
+    /children\[1\].*aggregate decoded-byte limit/i
+  );
+
+  const deduped = await serializeFrame(root([first, second]), { duration: 28 }, {
+    rasterScale: 1,
+    limits: { maxAssetBytes: 4, maxAggregateAssetBytes: 4 },
+    exportRaster: async () => rasterAsset("same")
   });
-  try {
-    await assert.rejects(
-      serializeFrame(root([shape()]), { duration: 28 }, { rasterScale: 1 }),
-      /manifest-byte limit/i
-    );
-  } finally {
-    Object.defineProperty(globalThis, "TextEncoder", {
-      configurable: true,
-      value: OriginalTextEncoder,
-      writable: true
-    });
-  }
+  assert.equal(deduped.children.length, 2);
+});
+
+test("rejects noncanonical embedded raster base64 before accepting its hash", async () => {
+  const invalid = shape({
+    id: "bad-base64",
+    name: "Bad_Base64",
+    type: "VECTOR",
+    rasterAsset: {
+      hash: rasterAsset("f").hash,
+      bytesBase64: "Zh=="
+    }
+  });
+  await assert.rejects(
+    serializeFrame(root([invalid]), { duration: 28 }, { rasterScale: 1 }),
+    /children\[0\].*canonical base64/i
+  );
+});
+
+test("matches shared container-depth validation at the nested text-leaf boundary", async () => {
+  const accepted = await serializeFrame(
+    rootWithNestedText(28),
+    { duration: 28 },
+    { rasterScale: 1 }
+  );
+  const acceptedPackage = makeValidPackage();
+  acceptedPackage.frames = [accepted];
+  assert.doesNotThrow(() => validatePackage(acceptedPackage));
+
+  const extraGroup: GroupNode = {
+    id: "shared-depth-extra-group",
+    name: "Shared_Depth_Extra_Group",
+    kind: "group",
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 50,
+    rotation: 0,
+    opacity: 1,
+    children: accepted.children
+  };
+  const rejectedByShared = makeValidPackage();
+  rejectedByShared.frames = [{ ...accepted, children: [extraGroup] }];
+  assert.throws(() => validatePackage(rejectedByShared), /nesting.*64-level limit/i);
+
+  await assert.rejects(
+    serializeFrame(rootWithNestedText(29), { duration: 28 }, { rasterScale: 1 }),
+    /nesting.*64-level limit/i
+  );
+});
+
+test("rejects a real serialized frame above a lower non-raisable manifest seam", async () => {
+  await assert.rejects(
+    serializeFrame(root([shape()]), { duration: 28 }, {
+      rasterScale: 1,
+      limits: { maxManifestBytes: 1 }
+    }),
+    /manifest-byte limit/i
+  );
+  await assert.rejects(
+    serializeFrame(root([shape()]), { duration: 28 }, {
+      rasterScale: 1,
+      limits: { maxManifestBytes: LIMITS.maxManifestBytes + 1 }
+    }),
+    /maxManifestBytes.*shared ceiling/i
+  );
 });
 
 test("rejects invalid frame data with source paths rather than mutating or silently dropping it", async () => {
@@ -382,4 +619,19 @@ test("rejects invalid frame data with source paths rather than mutating or silen
     serializeFrame(root([shape({ id: "duplicate" }), shape({ id: "duplicate" })]), { duration: 28 }, { rasterScale: 1 }),
     /\$\.children\[1\]\.id.*duplicate/i
   );
+});
+
+test("rejects dot-segment frame and nested names exactly like the shared contract", async () => {
+  for (const name of [".", ".."]) {
+    await assert.rejects(
+      serializeFrame(root([shape()], { name }), { duration: 28 }, { rasterScale: 1 }),
+      /\$\.name.*unsafe/i,
+      `frame ${name}`
+    );
+    await assert.rejects(
+      serializeFrame(root([shape({ name })]), { duration: 28 }, { rasterScale: 1 }),
+      /\$\.children\[0\]\.name.*unsafe/i,
+      `nested ${name}`
+    );
+  }
 });

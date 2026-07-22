@@ -103,6 +103,10 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
 const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const UNSAFE_NAME_PATTERN = /[\u0000-\u001f\u007f/\\]/;
 
+export function isSafeExporterName(name: string): boolean {
+  return name.length > 0 && name !== "." && name !== ".." && !UNSAFE_NAME_PATTERN.test(name);
+}
+
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid exporter package at ${path}: ${message}`);
 }
@@ -162,7 +166,7 @@ function safeIntegerAt(value: unknown, path: string): number {
 
 function safeNameAt(value: unknown, path: string): string {
   const name = stringAt(value, path);
-  if (name === "." || name === ".." || UNSAFE_NAME_PATTERN.test(name)) invalid(path, "unsafe name");
+  if (!isSafeExporterName(name)) invalid(path, "unsafe name");
   return name;
 }
 
@@ -417,7 +421,7 @@ function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function assertJsonContainerDepth(value: unknown): void {
+export function assertJsonContainerDepth(value: unknown): void {
   type Entry = { depth: number; exit: boolean; value: unknown };
   const ancestors = new Set<object>();
   const stack: Entry[] = [{ depth: 1, exit: false, value }];
