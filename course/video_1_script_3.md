@@ -80,3 +80,103 @@ We can therefore keep one distinction and use it throughout the course:
 > Learning changes adjustable model parameters using examples and measured error.
 
 We have built that distinction from observable steps. Now it can do some work for us. When this repository normalizes and stores text, which side of the distinction are we looking at?
+
+## 06:00 Apply the Distinction to the Repository
+
+[On screen: `matgpt/data/normalize.py`, followed by `matgpt/data/prepare.py`.]
+
+Before we trace the code, predict the category. Does `normalize_text` change the text data, change model parameters, or do both? Keep the representation–learning distinction in mind while we follow the value.
+
+Here is the current function:
+
+```python
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", str(text))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _CONTROL_RE.sub("", text)
+    lines = [line.rstrip() for line in text.split("\n")]
+    text = "\n".join(lines).strip()
+    text = _BLANK_LINES_RE.sub("\n\n", text)
+    return text
+```
+
+The value enters as `text`. `str(text)` first asks Python for its string form, and NFKC applies the project's chosen Unicode normalization policy. The next line makes newline styles consistent. Then the function removes selected control characters, removes trailing whitespace from each line, strips whitespace from the outer edges, and limits long runs of blank lines. Finally, it returns the resulting string.
+
+The annotations `text: str` and `-> str` communicate the intended input and output to readers and tools. Python does not enforce those annotations at runtime; that is why `str(text)` still performs a real operation.
+
+NFKC deserves one boundary before we continue. It is a deliberate, non-lossless cleaning policy. For example, `①` can become `1`. That can be useful when the project wants those forms treated alike, but it collapses a distinction from the source. Character count can change too, so the original input cannot always be reconstructed exactly.
+
+The returned value then reaches `prepare.py`:
+
+```python
+normalized = normalize_text(text)
+
+return {
+    "text": normalized,
+    "num_chars": len(normalized),
+}
+```
+
+The record stores the normalized text and its Python string length. We can now answer our prediction. The data changed, but no prediction error adjusted a model parameter. This is preparation on the text-representation side of our distinction. The repository's mini-lab lets us inspect an even smaller part of that representation directly.
+
+## 09:00 Predict, Run, Explain
+
+[On screen: `course/videos/001-computer-learning-from-text/lab.py`.]
+
+Here is the complete lab:
+
+```python
+text = "Cat"
+
+print("Human text:", text)
+print("Character numbers:", [ord(character) for character in text])
+print("UTF-8 bytes:", list(text.encode("utf-8")))
+print("Can the mathematical model use this raw Python string as numeric input? No")
+print("Learning begins after text is represented as numbers.")
+```
+
+Use the rule we already built to predict both lists, then run:
+
+```bash
+python course/videos/001-computer-learning-from-text/lab.py
+```
+
+The observed output is:
+
+```text
+Human text: Cat
+Character numbers: [67, 97, 116]
+UTF-8 bytes: [67, 97, 116]
+Can the mathematical model use this raw Python string as numeric input? No
+Learning begins after text is represented as numbers.
+```
+
+The first line displays the string for us. The list comprehension visits one character at a time, and `ord` reports each code point. `encode("utf-8")` produces the UTF-8 bytes, while `list` displays their values as ordinary integers. The two lists match because this example uses ASCII-range characters, not because code points and bytes are always the same.
+
+The final two lines mark the boundary. Python can perform text operations on a string, but the mathematical model requires numerical input. Printing these representations does not update any parameter.
+
+Now change only `Cat` to `A`. Use the same rule to predict again: both lists should be `[65]`. When the output confirms that result, notice why it was predictable. Python followed the same stable standard; it did not learn from the earlier run. Restore `Cat` when you finish.
+
+## 12:00 Two Questions That Keep the Model Honest
+
+Our trace gives us two useful questions whenever an explanation starts to blur. First, is an identifier being mistaken for meaning? Put `A` in a report card and then in a piece of music. Its human interpretation changes with context, while its Unicode code point remains `65`. The identifier helps software distinguish the character; people supply the meaning.
+
+That answer leads naturally to the second question: did any adjustable value change because an error was measured? Run `ord("A")` a thousand times and the answer is still no. The fixed mapping is doing representation work. If examples produce answers, measured error, and parameter changes, then we have crossed into learning.
+
+These questions are useful because representation and learning are connected without being the same action. Representation makes numerical processing possible. Learning adds a system that can change in response to error.
+
+## 13:00 Rebuild the Complete Chain
+
+Let's return to the text box and rebuild what now sits underneath our original question. You enter text carrying meaning for you. Software identifies its characters through stable numerical standards. Unicode assigns code points, and UTF-8 represents those characters as bytes for storage or transmission. Further preparation can then produce the precise numerical input a model requires.
+
+Once numerical input exists, a model can produce an answer. Training compares that answer with an outcome, calculates a measured error, and uses that error to change parameters. A later answer is produced with those changed internal values and may improve. That is the complete distinction we needed today:
+
+> Representation changes the form of the data.
+>
+> Learning changes adjustable model parameters using examples and measured error.
+
+Try transferring the model rather than memorizing the sentence. For `A`, explain why `65` remains stable even when the human context changes. Then ask what evidence you would need before claiming that learning occurred. You should be able to point to an answer, measured error, and a changed parameter—not merely a new numeric form for the text.
+
+We can now use text representation as a building block in Video 2. Since written characters need stable numbers, how does a computer assign those numbers consistently? That question takes us deeper without confusing the assignment rule with training.
+
+**Deferred vocabulary boundary:** **token**, **tensor**, **logit**, **gradient**, **attention**, and **embedding** are future terms and are not used to explain this lesson.
