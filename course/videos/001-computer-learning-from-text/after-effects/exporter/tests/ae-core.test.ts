@@ -107,6 +107,37 @@ test("sanitizes only the final path segment and caps AE names at 120 characters"
   assert.equal(core.sanitizeAeName("x".repeat(121)), "x".repeat(120));
 });
 
+test("preserves visible Unicode while removing controls and unsafe ASCII punctuation", () => {
+  const core = loadCore();
+  assert.equal(core.sanitizeAeName("θ → layer"), "θ → layer");
+  assert.equal(core.sanitizeAeName("folder/θ:→\u0000 layer"), "θ_→ layer");
+});
+
+test("reserves the exact version suffix inside the 120-character AE name limit", () => {
+  const core = loadCore();
+  const sanitizedBase = core.sanitizeAeName("x".repeat(121));
+  const versionedName = core.nextVersionName([], sanitizedBase);
+
+  assert.equal(sanitizedBase.length, 120);
+  assert.equal(versionedName, "x".repeat(115) + "_v001");
+  assert.equal(versionedName.length, 120);
+});
+
+test("detects versions in the shared namespace of colliding truncated bases", () => {
+  const core = loadCore();
+  const firstBase = core.sanitizeAeName("x".repeat(119) + "A");
+  const collidingBase = core.sanitizeAeName("x".repeat(119) + "B");
+  const firstName = core.nextVersionName([], firstBase);
+
+  assert.equal(core.nextVersionName([firstName], collidingBase), "x".repeat(115) + "_v002");
+});
+
+test("never truncates a visible Unicode character into a lone surrogate", () => {
+  const core = loadCore();
+  assert.equal(core.sanitizeAeName("x".repeat(119) + "😀"), "x".repeat(119));
+  assert.equal(core.nextVersionName([], "x".repeat(114) + "😀tail"), "x".repeat(114) + "_v001");
+});
+
 test("detects only an exact exporter hash comment", () => {
   const core = loadCore();
   const hash = "a".repeat(64);
@@ -137,4 +168,26 @@ test("creates an isolated import report with the required audit fields", () => {
   assert.notStrictEqual(report.missingFonts, options.missingFonts);
   assert.notStrictEqual(report.fallbacks, options.fallbacks);
   assert.notStrictEqual(report.warnings, options.warnings);
+});
+
+test("copies fallback records so later mutations cannot rewrite the audit report", () => {
+  const core = loadCore();
+  const options: ImportReportOptions = {
+    contentHash: "b".repeat(64),
+    createdCompNames: [],
+    layerCount: 1,
+    nativeCount: 0,
+    rasterCount: 1,
+    missingFonts: [],
+    fallbacks: [{ nodeId: "95:44", property: "gradient" }],
+    warnings: [],
+    elapsedMs: 5
+  };
+  const report = core.makeImportReport(options);
+
+  options.fallbacks[0]!.property = "shadow";
+  assert.equal(report.fallbacks[0]!.property, "gradient");
+
+  report.fallbacks[0]!.nodeId = "changed";
+  assert.equal(options.fallbacks[0]!.nodeId, "95:44");
 });

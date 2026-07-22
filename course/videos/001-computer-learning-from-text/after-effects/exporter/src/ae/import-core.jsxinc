@@ -21,8 +21,21 @@ var Video001ExporterCore = (function () {
         return String(value);
     }
 
+    function truncateWithoutSplittingSurrogate(value, maxLength) {
+        var result = value.substring(0, maxLength);
+        var lastCode;
+        if (result.length > 0) {
+            lastCode = result.charCodeAt(result.length - 1);
+            if (lastCode >= 55296 && lastCode <= 56319) {
+                result = result.substring(0, result.length - 1);
+            }
+        }
+        return result;
+    }
+
     function nextVersionName(existingNames, baseName) {
-        var pattern = new RegExp("^" + escapeRegularExpression(baseName) + "_v([0-9]{3})$");
+        var versionBase = truncateWithoutSplittingSurrogate(baseName, 115);
+        var pattern = new RegExp("^" + escapeRegularExpression(versionBase) + "_v([0-9]{3})$");
         var highest = 0;
         var index;
         var match;
@@ -39,10 +52,10 @@ var Video001ExporterCore = (function () {
         }
 
         if (highest >= 999) {
-            throw new Error("Cannot create version beyond " + baseName + "_v999");
+            throw new Error("Cannot create version beyond " + versionBase + "_v999");
         }
 
-        return baseName + "_v" + padVersion(highest + 1);
+        return versionBase + "_v" + padVersion(highest + 1);
     }
 
     function scaleRect(rect, sourceWidth, sourceHeight, targetWidth, targetHeight) {
@@ -67,11 +80,12 @@ var Video001ExporterCore = (function () {
             }
         }
 
-        safeName = safeName.replace(/[^A-Za-z0-9 _.\-]/g, "_");
+        safeName = safeName.replace(/[\u0000-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u2028-\u202E\u2060\u2066-\u2069\uFEFF]/g, "");
+        safeName = safeName.replace(/[^A-Za-z0-9 _.\-\u00A0-\uFFFF]/g, "_");
         if (safeName === "" || safeName === "." || safeName === "..") {
             safeName = "Untitled";
         }
-        return safeName.substring(0, 120);
+        return truncateWithoutSplittingSurrogate(safeName, 120);
     }
 
     function isDuplicateHash(items, contentHash) {
@@ -94,6 +108,30 @@ var Video001ExporterCore = (function () {
         return result;
     }
 
+    function copyRecords(values) {
+        var result = [];
+        var index;
+        var propertyName;
+        var sourceRecord;
+        var copiedRecord;
+        for (index = 0; index < values.length; index += 1) {
+            sourceRecord = values[index];
+            copiedRecord = {};
+            for (propertyName in sourceRecord) {
+                if (
+                    Object.prototype.hasOwnProperty.call(sourceRecord, propertyName) &&
+                    propertyName !== "__proto__" &&
+                    propertyName !== "constructor" &&
+                    propertyName !== "prototype"
+                ) {
+                    copiedRecord[propertyName] = sourceRecord[propertyName];
+                }
+            }
+            result[result.length] = copiedRecord;
+        }
+        return result;
+    }
+
     function makeImportReport(options) {
         return {
             contentHash: options.contentHash,
@@ -102,7 +140,7 @@ var Video001ExporterCore = (function () {
             nativeCount: options.nativeCount,
             rasterCount: options.rasterCount,
             missingFonts: copyArray(options.missingFonts),
-            fallbacks: copyArray(options.fallbacks),
+            fallbacks: copyRecords(options.fallbacks),
             warnings: copyArray(options.warnings),
             elapsedMs: options.elapsedMs
         };
