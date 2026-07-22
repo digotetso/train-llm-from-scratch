@@ -19,6 +19,7 @@ import {
   type ExporterPackage,
   validatePackage
 } from "../shared/contract.ts";
+import { serializeBridgeOwner, type BridgeOwner } from "./ownership.ts";
 import { exporterPaths, type ExporterPaths } from "./paths.ts";
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
@@ -119,8 +120,9 @@ async function pathExists(path: string): Promise<boolean> {
 export class QueueStore {
   readonly paths: ExporterPaths;
   private readonly directoryIdentities: DirectoryIdentity[];
+  private readonly lockOwner: BridgeOwner | undefined;
 
-  constructor(root?: string) {
+  constructor(root?: string, lockOwner?: BridgeOwner) {
     this.paths = exporterPaths(root);
     const directories = [
       this.paths.root,
@@ -134,6 +136,7 @@ export class QueueStore {
       ensurePrivateDirectory(directory);
     }
     this.directoryIdentities = directories.map(captureDirectoryIdentity);
+    this.lockOwner = lockOwner;
     const rootIdentity = this.directoryIdentities[0];
     if (
       rootIdentity === undefined ||
@@ -150,7 +153,7 @@ export class QueueStore {
     const filename = `${validated.contentHash}${PACKAGE_SUFFIX}`;
     const destination = join(this.paths.incoming, filename);
     const lockPath = join(this.paths.tmp, `.${validated.contentHash}.enqueue.lock`);
-    let lock: Awaited<ReturnType<typeof open>>;
+    let lock: Awaited<ReturnType<typeof open>> | undefined;
     try {
       this.assertDirectoryIdentities();
       lock = await open(
@@ -158,12 +161,29 @@ export class QueueStore {
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
         0o600
       );
+      if (this.lockOwner !== undefined) {
+        await lock.writeFile(serializeBridgeOwner(this.lockOwner), "utf8");
+        await lock.sync();
+      }
     } catch (error) {
+      if (lock !== undefined) {
+        const acquired = await lock.stat();
+        await lock.close();
+        try {
+          const current = lstatSync(lockPath);
+          if (current.isFile() && current.dev === acquired.dev && current.ino === acquired.ino) {
+            await unlink(lockPath);
+          }
+        } catch {
+          // Preserve the owner-record failure and never remove a changed lock.
+        }
+      }
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new QueueConflictError(validated.contentHash);
       }
       throw error;
     }
+    if (lock === undefined) throw new Error("Queue lock acquisition failed");
 
     try {
       this.assertDirectoryIdentities();
@@ -185,8 +205,13 @@ export class QueueStore {
       await this.atomicWrite(destination, Buffer.from(canonicalJson(queuedPackage), "utf8"));
       return { filename, path: destination, package: queuedPackage };
     } finally {
+      const lockIdentity = await lock.stat();
       await lock.close();
       this.assertDirectoryIdentities();
+      const current = lstatSync(lockPath);
+      if (current.dev !== lockIdentity.dev || current.ino !== lockIdentity.ino || !current.isFile()) {
+        throw new Error("Queue lock changed ownership before release");
+      }
       await unlink(lockPath);
     }
   }
@@ -274,6 +299,10 @@ export class QueueStore {
       throw writeError;
     }
     return { filename, path: destination, reportFilename, reportPath };
+  }
+
+  assertHealthy(): void {
+    this.assertDirectoryIdentities();
   }
 
   private async atomicWrite(destination: string, bytes: Uint8Array): Promise<void> {

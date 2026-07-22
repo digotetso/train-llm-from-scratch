@@ -5,6 +5,8 @@ import {
   constants,
   existsSync,
   fsyncSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -14,6 +16,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { LIMITS } from "../shared/limits.ts";
+import { serializeBridgeOwner, type BridgeOwner } from "./ownership.ts";
 
 type Clock = () => number;
 type RandomSource = (size: number) => Uint8Array;
@@ -136,14 +139,32 @@ function readState(statePath: string): AuthState | null {
   }
 }
 
-function acquireStateLock(lockPath: string): number {
+function acquireStateLock(lockPath: string, owner: BridgeOwner | undefined): number {
+  let descriptor: number | undefined;
   try {
-    return openSync(
+    descriptor = openSync(
       lockPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600
     );
+    if (owner !== undefined) {
+      writeFileSync(descriptor, serializeBridgeOwner(owner), "utf8");
+      fsyncSync(descriptor);
+    }
+    return descriptor;
   } catch (error) {
+    if (descriptor !== undefined) {
+      const acquired = fstatSync(descriptor);
+      closeSync(descriptor);
+      try {
+        const current = lstatSync(lockPath);
+        if (current.isFile() && current.dev === acquired.dev && current.ino === acquired.ino) {
+          unlinkSync(lockPath);
+        }
+      } catch {
+        // Preserve the owner-record failure and never remove a changed lock.
+      }
+    }
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       throw new Error("Authentication state is locked");
     }
@@ -157,18 +178,21 @@ export class AuthStore {
   private readonly now: Clock;
   private readonly randomSource: RandomSource;
   private readonly directorySync: DirectorySync;
+  private readonly lockOwner: BridgeOwner | undefined;
   private stateLockHeld = false;
 
   constructor(
     now: Clock = Date.now,
     randomSource: RandomSource = randomBytes,
-    directorySync: DirectorySync = syncDirectory
+    directorySync: DirectorySync = syncDirectory,
+    lockOwner?: BridgeOwner
   ) {
     this.state = { version: 1, pairing: null, tokens: [] };
     this.statePath = undefined;
     this.now = now;
     this.randomSource = randomSource;
     this.directorySync = directorySync;
+    this.lockOwner = lockOwner;
   }
 
   private static fromState(
@@ -176,9 +200,10 @@ export class AuthStore {
     state: AuthState,
     now: Clock,
     randomSource: RandomSource,
-    directorySync: DirectorySync
+    directorySync: DirectorySync,
+    lockOwner?: BridgeOwner
   ): AuthStore {
-    const store = new AuthStore(now, randomSource, directorySync);
+    const store = new AuthStore(now, randomSource, directorySync, lockOwner);
     store.state = state;
     store.statePath = statePath;
     return store;
@@ -188,7 +213,8 @@ export class AuthStore {
     statePath: string,
     now: Clock = Date.now,
     randomSource: RandomSource = randomBytes,
-    directorySync: DirectorySync = syncDirectory
+    directorySync: DirectorySync = syncDirectory,
+    lockOwner?: BridgeOwner
   ): Promise<AuthStore> {
     if (!statePath || basename(statePath) !== "auth.json") {
       throw new TypeError("Authentication state path must end in auth.json");
@@ -201,7 +227,8 @@ export class AuthStore {
       { version: 1, pairing: null, tokens: [] },
       now,
       randomSource,
-      directorySync
+      directorySync,
+      lockOwner
     );
     store.withStateLock(() => store.persistUnlocked(), true);
     return store;
@@ -289,7 +316,8 @@ export class AuthStore {
   private withStateLock<T>(operation: () => T, allowMissingState = false): T {
     if (this.statePath === undefined) return operation();
     const lockPath = `${this.statePath}.lock`;
-    const lockDescriptor = acquireStateLock(lockPath);
+    const lockDescriptor = acquireStateLock(lockPath, this.lockOwner);
+    const lockIdentity = fstatSync(lockDescriptor);
     this.stateLockHeld = true;
     try {
       const persisted = readState(this.statePath);
@@ -303,6 +331,10 @@ export class AuthStore {
     } finally {
       this.stateLockHeld = false;
       closeSync(lockDescriptor);
+      const current = lstatSync(lockPath);
+      if (current.dev !== lockIdentity.dev || current.ino !== lockIdentity.ino || !current.isFile()) {
+        throw new Error("Authentication lock changed ownership before release");
+      }
       unlinkSync(lockPath);
     }
   }
