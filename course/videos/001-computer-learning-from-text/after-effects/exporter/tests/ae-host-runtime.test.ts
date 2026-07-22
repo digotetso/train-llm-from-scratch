@@ -53,6 +53,8 @@ function instrumentImporter(source: string): string {
             rememberItem: rememberItem,
             rollbackItems: rollbackItems,
             addRunAnimator: addRunAnimator,
+            applyResolvedFont: applyResolvedFont,
+            resolveRunFont: resolveRunFont,
             setLayerGeometry: setLayerGeometry,
             isQueuedPackageFile: isQueuedPackageFile,
             parseJson: function (value) { return JSON.parse(value); }
@@ -68,6 +70,7 @@ function makeImporterHarness(forcedSystemHash?: string) {
   const projectItems: FolderItemMock[] = [];
   const removalLog: string[] = [];
   const systemCommands: string[] = [];
+  const fontsByPostScriptName = new Map<string, Array<{ postScriptName: string; hasGlyphsFor(value: string): boolean }>>();
   let beginUndoCount = 0;
 
   function parentPath(path: string): string {
@@ -227,6 +230,11 @@ function makeImporterHarness(forcedSystemHash?: string) {
     },
     app: {
       project,
+      fonts: {
+        getFontsByPostScriptName(postScriptName: string) {
+          return fontsByPostScriptName.get(postScriptName) ?? [];
+        }
+      },
       beginUndoGroup() {
         beginUndoCount += 1;
       },
@@ -256,6 +264,8 @@ function makeImporterHarness(forcedSystemHash?: string) {
       rememberItem(items: FolderItemMock[], item: FolderItemMock): FolderItemMock;
       rollbackItems(items: FolderItemMock[]): void;
       addRunAnimator(layer: unknown, run: { start: number; end: number; color: string; fontSize: number }, dominant: { fontSize: number }, scaleY: number): void;
+      applyResolvedFont(documentValue: { fontObject: unknown; fauxBold: boolean }, resolved: { fontObject: unknown; fauxBold: boolean }): void;
+      resolveRunFont(run: { start: number; end: number; fontFamily: string; fontStyle: string }, node: { id: string; name: string; text: string }, state: { missingFonts: string[]; fallbacks: unknown[]; warnings: string[] }): { fontObject: unknown; postScriptName: string; fauxBold: boolean };
       setLayerGeometry(layer: unknown, rect: { x: number; y: number; width: number; height: number }, rotation: number, opacity: number, boxTextPos?: number[]): void;
       parseJson(value: string): unknown;
     };
@@ -336,12 +346,107 @@ function makeImporterHarness(forcedSystemHash?: string) {
     systemCommands,
     preexisting,
     projectItems,
+    fontsByPostScriptName,
     trustedQueuePath,
     get beginUndoCount() {
       return beginUndoCount;
     }
   };
 }
+
+test("font resolution rejects an installed font that cannot render the exact run text", () => {
+  const harness = makeImporterHarness();
+  harness.fontsByPostScriptName.set("Sora-Bold", [{
+    postScriptName: "Sora-Bold",
+    hasGlyphsFor(value: string) { return value !== "θ"; }
+  }]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [{
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return true; }
+  }]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 17, end: 18, fontFamily: "Sora", fontStyle: "Bold" },
+    { id: "model-label", name: "MODEL_Parameters θ", text: "MODEL_Parameters θ" },
+    state
+  );
+
+  assert.equal(result.postScriptName, "Inter-Regular");
+  assert.deepEqual(state.missingFonts, ["Sora-Bold"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.fallbacks)), [{
+    type: "font-substitution",
+    nodeId: "model-label",
+    nodeName: "MODEL_Parameters θ",
+    property: "font",
+    start: 17,
+    end: 18,
+    requested: "Sora-Bold",
+    replacement: "Inter-Regular"
+  }]);
+});
+
+test("font resolution checks visible glyphs without treating paragraph breaks as missing glyphs", () => {
+  const harness = makeImporterHarness();
+  harness.fontsByPostScriptName.set("Sora-SemiBold", [{
+    postScriptName: "Sora-SemiBold",
+    hasGlyphsFor(value: string) { return value === "LEARNINGBOUNDARY"; }
+  }]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [{
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor(value: string) { return value === "LEARNINGBOUNDARY"; }
+  }]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 17, fontFamily: "Sora", fontStyle: "SemiBold" },
+    { id: "boundary-label", name: "TXT_BoundaryLabel", text: "LEARNING\nBOUNDARY" },
+    state
+  );
+
+  assert.equal(result.postScriptName, "Sora-SemiBold");
+  assert.deepEqual(state.missingFonts, []);
+  assert.deepEqual(state.fallbacks, []);
+  assert.deepEqual(state.warnings, []);
+});
+
+test("font substitution preserves bold emphasis without bolding ordinary Inter text", () => {
+  const harness = makeImporterHarness();
+  const soraBold = {
+    postScriptName: "Sora-Bold",
+    hasGlyphsFor(value: string) { return value !== "θ"; }
+  };
+  const interRegular = {
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return true; }
+  };
+  harness.fontsByPostScriptName.set("Sora-Bold", [soraBold]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [interRegular]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const substitutedBold = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 1, fontFamily: "Sora", fontStyle: "Bold" },
+    { id: "model-parameters", name: "MODEL_Parameters", text: "θ" },
+    state
+  );
+  const ordinaryInter = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 4, fontFamily: "Inter", fontStyle: "Regular" },
+    { id: "node-detail", name: "TXT_NodeDetail", text: "text" },
+    state
+  );
+  const substitutedDocument = { fontObject: null as unknown, fauxBold: false };
+  const ordinaryDocument = { fontObject: null as unknown, fauxBold: false };
+
+  harness.importer.__test.applyResolvedFont(substitutedDocument, substitutedBold);
+  harness.importer.__test.applyResolvedFont(ordinaryDocument, ordinaryInter);
+
+  assert.equal(substitutedBold.postScriptName, "Inter-Regular");
+  assert.equal(substitutedDocument.fontObject, interRegular);
+  assert.equal(substitutedDocument.fauxBold, true);
+  assert.equal(ordinaryInter.postScriptName, "Inter-Regular");
+  assert.equal(ordinaryDocument.fontObject, interRegular);
+  assert.equal(ordinaryDocument.fauxBold, false);
+});
 
 function transformRecorder() {
   const values = new Map<string, unknown>();

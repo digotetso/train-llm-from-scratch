@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -12,6 +13,7 @@ IMPORTER_PATH = AE_SOURCE_DIR / "importer.jsxinc"
 PANEL_PATH = AE_SOURCE_DIR / "panel.jsx"
 AUDIT_PATH = AE_SOURCE_DIR / "audit-export.jsx"
 HOST_RUNTIME_TEST_PATH = EXPORTER_DIR / "tests/ae-host-runtime.test.ts"
+SHOT_32_AUDIT_PATH = EXPORTER_DIR / "evidence/shot-32-audit.json"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -22,6 +24,35 @@ def ae_sources() -> dict[Path, str]:
     )
     assert paths, "the exporter must contain After Effects source files"
     return {path: path.read_text(encoding="utf-8") for path in paths}
+
+
+def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
+    audit = json.loads(SHOT_32_AUDIT_PATH.read_text(encoding="utf-8"))
+
+    assert audit["comp"]["name"] == "S001_SH32_Repo_PreparationNotLearning_v001"
+    assert audit["comp"]["width"] == 1920
+    assert audit["comp"]["height"] == 1080
+    assert audit["comp"]["fps"] == 30
+    assert audit["comp"]["duration"] == 28
+    texts = {layer["name"]: layer["text"] for layer in audit["layers"] if layer["type"] == "text"}
+    assert texts["MODEL_Parameters"] == "θ"
+    assert "·" in texts["TXT_Caveat"]
+    assert audit["textChecks"]["TXT_Title"]["lineCount"] == audit["reference"]["TXT_Title"]["lineCount"]
+    assert audit["hardChecks"]["thetaResolvedFont"] == "Inter-Regular"
+    assert audit["textChecks"]["MODEL_Parameters"]["fauxBold"] is True
+    assert audit["textChecks"]["TXT_Deck"]["fauxBold"] is False
+    assert audit["hardChecks"]["nativeCount"] == 30
+    assert audit["hardChecks"]["rasterCount"] == 0
+    assert audit["duplicate"] == {
+        "status": "DUPLICATE_CONTENT",
+        "itemCountBefore": 10,
+        "itemCountAfter": 10,
+    }
+    assert audit["changed"]["createdCompNames"] == [
+        "S001_SH32_Repo_PreparationNotLearning_v002"
+    ]
+    assert audit["v001Immutable"] is True
+    assert audit["mutatedPreexistingItems"] == []
 
 
 def test_after_effects_sources_forbid_destructive_project_and_process_calls():
@@ -58,6 +89,20 @@ def test_import_core_remains_es3_compatible():
 
     for description, pattern in prohibited_patterns.items():
         assert re.search(pattern, source) is None, f"import core contains {description}"
+
+
+def test_import_core_avoids_the_ae_regex_literal_parser_failure_for_path_separators():
+    source = CORE_PATH.read_text(encoding="utf-8")
+
+    assert 'split(/[\\\\/]+/)' not in source
+    assert 'replace(new RegExp("\\\\\\\\", "g"), "/").split("/")' in source
+
+
+def test_importer_avoids_the_ae_regex_literal_parser_failure_for_base64_slashes():
+    source = IMPORTER_PATH.read_text(encoding="utf-8")
+
+    assert '!/^(?:[A-Za-z0-9+/]{4})*' not in source
+    assert 'new RegExp("^(?:[A-Za-z0-9+/]{4})*' in source
 
 
 def test_import_core_uses_exact_three_digit_versions_with_a_v999_ceiling():
@@ -135,6 +180,22 @@ def test_paragraph_text_geometry_uses_the_actual_box_origin_and_size():
     assert re.search(r"anchorX\s*=\s*boxTextPos\[0\]\s*\+\s*rect\.width\s*/\s*2", importer)
     assert re.search(r"anchorY\s*=\s*boxTextPos\[1\]\s*\+\s*rect\.height\s*/\s*2", importer)
     assert 'setValue([anchorX, anchorY])' in importer
+
+
+def test_text_resets_inherited_ae_style_state_before_applying_figma_runs():
+    importer = IMPORTER_PATH.read_text(encoding="utf-8")
+    add_text = importer[
+        importer.index("function addText"):
+        importer.index("function addFillAndStroke")
+    ]
+
+    reset_character = add_text.index("documentValue.resetCharStyle();")
+    reset_paragraph = add_text.index("documentValue.resetParagraphStyle();")
+    set_text = add_text.index("documentValue.text = node.text;")
+    set_font = add_text.index("applyResolvedFont(documentValue, dominantResolved);")
+    assert reset_character < set_text
+    assert reset_paragraph < set_text
+    assert set_text < set_font
 
 
 def test_package_identity_and_every_asset_are_preflighted_before_project_mutation():

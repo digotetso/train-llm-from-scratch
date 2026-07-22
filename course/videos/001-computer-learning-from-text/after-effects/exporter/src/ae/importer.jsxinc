@@ -194,7 +194,7 @@ var Video001ExporterImporter = (function (core) {
         var sourceIndex;
         if (
             source.length % 4 !== 0 ||
-            !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(source)
+            !new RegExp("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$").test(source)
         ) {
             throw new Error("Manual raster fallback is not canonical base64");
         }
@@ -653,14 +653,22 @@ var Video001ExporterImporter = (function (core) {
     function resolveRunFont(run, node, state) {
         var candidates = fontCandidates(run);
         var requested = candidates[0];
+        var runText = node.text.substring(run.start, run.end).replace(new RegExp("[\\r\\n]", "g"), "");
         var fontObject = null;
         var replacement = "";
         var index;
         for (index = 0; index < candidates.length; index += 1) {
             fontObject = findFontByPostScriptName(candidates[index]);
             if (fontObject !== null) {
-                replacement = fontObject.postScriptName;
-                break;
+                try {
+                    if (runText.length === 0 || fontObject.hasGlyphsFor(runText)) {
+                        replacement = fontObject.postScriptName;
+                        break;
+                    }
+                } catch (glyphCoverageError) {
+                    fontObject = null;
+                }
+                fontObject = null;
             }
         }
         if (fontObject === null || replacement === "") {
@@ -683,8 +691,16 @@ var Video001ExporterImporter = (function (core) {
         return {
             fontObject: fontObject,
             postScriptName: replacement,
-            requested: requested
+            requested: requested,
+            fauxBold: replacement === FALLBACK_FONT &&
+                replacement !== requested &&
+                new RegExp("(?:bold|black|heavy)", "i").test(String(run.fontStyle || ""))
         };
+    }
+
+    function applyResolvedFont(documentValue, resolved) {
+        documentValue.fontObject = resolved.fontObject;
+        documentValue.fauxBold = resolved.fauxBold;
     }
 
     function dominantRunIndex(runs) {
@@ -705,6 +721,7 @@ var Video001ExporterImporter = (function (core) {
     function runDiffers(run, resolved, dominantRun, dominantResolved) {
         return (
             resolved.postScriptName !== dominantResolved.postScriptName ||
+            resolved.fauxBold !== dominantResolved.fauxBold ||
             run.fontSize !== dominantRun.fontSize ||
             !sameColor(run.color, dominantRun.color)
         );
@@ -817,8 +834,10 @@ var Video001ExporterImporter = (function (core) {
         layer.comment = "Figma native text " + node.id;
         source = layer.property("ADBE Text Properties").property("ADBE Text Document");
         documentValue = source.value;
+        documentValue.resetCharStyle();
+        documentValue.resetParagraphStyle();
         documentValue.text = node.text;
-        documentValue.fontObject = dominantResolved.fontObject;
+        applyResolvedFont(documentValue, dominantResolved);
         documentValue.fontSize = dominantRun.fontSize * scaleY;
         documentValue.applyFill = true;
         documentValue.fillColor = hexToRgb(dominantRun.color);
@@ -843,7 +862,7 @@ var Video001ExporterImporter = (function (core) {
             for (index = 0; index < runs.length; index += 1) {
                 if (index !== dominantIndex && runDiffers(runs[index], resolvedRuns[index], dominantRun, dominantResolved)) {
                     range = documentValue.characterRange(runs[index].start, runs[index].end);
-                    range.fontObject = resolvedRuns[index].fontObject;
+                    applyResolvedFont(range, resolvedRuns[index]);
                     addRunAnimator(layer, runs[index], dominantRun, scaleY);
                 }
             }

@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "dimensions": {
+    "width": 1920,
+    "height": 1080
+  },
+  "figma": {
+    "file": "shot-32-figma.png",
+    "sha256": "65b0c8341b7370200e87531dbd7197aff2557a50ecdb0ee0e09383e911da62b3"
+  },
+  "afterEffects": {
+    "file": "shot-32-ae.png",
+    "sha256": "91559ca55b724d5948cc54b5641fe4e21483b04cfd96803514f3f91e7718cffe"
+  },
+  "visualReview": {
+    "geometryAndZOrder": "PASS",
+    "exactUnicodeTheta": "PASS",
+    "exactUnicodeMiddleDot": "PASS",
+    "titleWrappingAndClipping": "PASS",
+    "nativeEditability": "PASS",
+    "fallbackWeightPreservation": "PASS",
+    "notes": [
+      "The title remains exactly two lines and all text stays inside its Figma text box.",
+      "Sora-Bold lacks θ in After Effects; Inter-Regular supplies the glyph and faux bold preserves the requested emphasis.",
+      "Ordinary Inter text remains fauxBold=false."
+    ]
+  },
+  "pixelDiagnostics": {
+    "gating": false,
+    "normalizedRmse": 0.146282,
+    "psnr": 16.6962,
+    "structuralSimilarity": 0.9402225,
+    "rationale": "Font engines rasterize differently; semantic, geometry, wrapping, and editability checks are the release gate."
+  }
+}

@@ -70,7 +70,7 @@ var Video001ExporterCore = (function () {
     }
 
     function sanitizeAeName(name) {
-        var segments = String(name).split(/[\\/]+/);
+        var segments = String(name).replace(new RegExp("\\\\", "g"), "/").split("/");
         var safeName = "";
         var index;
 
