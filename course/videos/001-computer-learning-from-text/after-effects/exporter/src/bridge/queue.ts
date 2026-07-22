@@ -305,6 +305,10 @@ export class QueueStore {
     this.assertDirectoryIdentities();
   }
 
+  async syncTemporaryDirectory(): Promise<void> {
+    await this.syncKnownDirectory(this.paths.tmp);
+  }
+
   private async atomicWrite(destination: string, bytes: Uint8Array): Promise<void> {
     const temporaryName = `.${basename(destination)}.${process.pid}.${randomUUID()}.tmp`;
     const temporaryPath = join(this.paths.tmp, temporaryName);

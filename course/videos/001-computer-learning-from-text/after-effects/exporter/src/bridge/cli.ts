@@ -61,6 +61,19 @@ export interface RunningBridgeCli {
   shutdown(): Promise<void>;
 }
 
+export interface StartBridgeCliDependencies {
+  stateDirectorySync?: DirectorySync;
+}
+
+export class StatePublicationCleanupError extends Error {
+  constructor(publicationError: unknown, cleanupError: unknown) {
+    super("Bridge state publication failed and its durable cleanup could not be confirmed", {
+      cause: new AggregateError([publicationError, cleanupError])
+    });
+    this.name = "StatePublicationCleanupError";
+  }
+}
+
 function syncDirectorySync(path: string): void {
   const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -378,21 +391,54 @@ export async function publishBridgeState(
   const destination = join(root, STATE_FILE);
   const temporaryPath = join(root, `.state.json.${process.pid}.${randomUUID()}.tmp`);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let temporaryIdentity: { device: number; inode: number } | undefined;
+  let renamed = false;
   try {
     handle = await open(
       temporaryPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600
     );
+    const opened = await handle.stat();
+    if (!opened.isFile()) throw new Error("Bridge state temporary path is not a regular file");
+    temporaryIdentity = { device: opened.dev, inode: opened.ino };
     await handle.writeFile(JSON.stringify(state), "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
     await rename(temporaryPath, destination);
+    renamed = true;
     await directorySync(root);
   } catch (error) {
-    if (handle !== undefined) await handle.close();
-    try { await unlink(temporaryPath); } catch { /* preserve the original failure */ }
+    if (handle !== undefined) {
+      try { await handle.close(); } catch { /* preserve the publication failure */ }
+    }
+    if (renamed && temporaryIdentity !== undefined) {
+      try {
+        const persisted = await readNoFollow(destination);
+        const persistedState = validateState(JSON.parse(persisted.bytes) as unknown);
+        if (
+          persisted.device !== temporaryIdentity.device ||
+          persisted.inode !== temporaryIdentity.inode ||
+          persistedState.pid !== state.pid ||
+          persistedState.port !== state.port ||
+          persistedState.pairingCode !== state.pairingCode ||
+          persistedState.pairingExpiresAt !== state.pairingExpiresAt
+        ) {
+          throw new Error("Bridge state changed identity or contents during publication cleanup");
+        }
+        await unlinkUnchanged(destination, persisted.device, persisted.inode);
+        await directorySync(root);
+      } catch (cleanupError) {
+        throw new StatePublicationCleanupError(error, cleanupError);
+      }
+    } else if (temporaryIdentity !== undefined) {
+      try {
+        await unlinkUnchanged(temporaryPath, temporaryIdentity.device, temporaryIdentity.inode);
+      } catch {
+        // Preserve the publication failure and never unlink a changed temporary path.
+      }
+    }
     throw error;
   }
 }
@@ -411,7 +457,10 @@ export async function removeBridgeState(
   await directorySync(root);
 }
 
-export async function startBridgeCli(argv: readonly string[]): Promise<RunningBridgeCli> {
+export async function startBridgeCli(
+  argv: readonly string[],
+  dependencies: StartBridgeCliDependencies = {}
+): Promise<RunningBridgeCli> {
   const { root, port } = parseCliArgs(argv);
   const lifecycle = await acquireBridgeLifecycle(root);
   let bridge: BridgeServer | undefined;
@@ -436,7 +485,7 @@ export async function startBridgeCli(argv: readonly string[]): Promise<RunningBr
       pairingCode,
       pairingExpiresAt: pairingCreatedAt + LIMITS.pairingTtlMs
     };
-    await publishBridgeState(root, state);
+    await publishBridgeState(root, state, dependencies.stateDirectorySync ?? syncDirectory);
     statePublished = true;
     let shutdownPromise: Promise<void> | undefined;
     return {
@@ -458,7 +507,9 @@ export async function startBridgeCli(argv: readonly string[]): Promise<RunningBr
     if (statePublished) {
       try { await removeBridgeState(root, process.pid); } catch { /* preserve the startup failure */ }
     }
-    try { await lifecycle.release(); } catch { /* preserve the startup failure */ }
+    if (!(error instanceof StatePublicationCleanupError)) {
+      try { await lifecycle.release(); } catch { /* preserve the startup failure */ }
+    }
     throw error;
   }
 }

@@ -14,6 +14,8 @@ import {
   publishBridgeState,
   recoverBridgeStartupGuard,
   removeBridgeState,
+  startBridgeCli,
+  StatePublicationCleanupError,
   type BridgeOwner
 } from "../src/bridge/cli.ts";
 import { QueueStore } from "../src/bridge/queue.ts";
@@ -64,6 +66,7 @@ async function startBridge(
   t: test.TestContext,
   options: {
     maxBodyBytes?: number;
+    maxJsonParseBytes?: number;
     maxLogBytes?: number;
     now?: () => number;
     requestTimeoutMs?: number;
@@ -82,6 +85,7 @@ async function startBridge(
     now,
     limits: {
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
+      ...(options.maxJsonParseBytes === undefined ? {} : { maxJsonParseBytes: options.maxJsonParseBytes }),
       ...(options.maxLogBytes === undefined ? {} : { maxLogBytes: options.maxLogBytes }),
       ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs })
     }
@@ -442,12 +446,23 @@ test("bridge uses exact routes, methods, media types, and JSON error envelopes",
 });
 
 test("bridge enforces streaming body limits before waiting for a slow sender", async (t) => {
-  const { base } = await startBridge(t, { maxBodyBytes: 1_024 });
+  const { base, code } = await startBridge(t, { maxBodyBytes: 1_024 });
+  const token = await pair(base, code);
+  const unauthorized = await fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      "content-length": "2048",
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: "x".repeat(2_048)
+  });
+  assert.equal(unauthorized.status, 401);
   const startedAt = Date.now();
   const status = await new Promise<number>((resolve, reject) => {
     const request = httpRequest(`${base}/v1/export`, {
       method: "POST",
       headers: {
+        authorization: `Bearer ${token}`,
         "content-length": "2048",
         "content-type": "application/vnd.video001.figma-ae+json"
       }
@@ -473,7 +488,7 @@ test("bridge enforces streaming body limits before waiting for a slow sender", a
 });
 
 test("bridge times out slow bodies and survives client-aborted bodies", async (t) => {
-  const { base } = await startBridge(t, { requestTimeoutMs: 50 });
+  const { base, code, root } = await startBridge(t, { requestTimeoutMs: 50 });
   const timeoutStatus = await new Promise<number>((resolve, reject) => {
     const request = httpRequest(`${base}/v1/pair`, {
       method: "POST",
@@ -486,6 +501,25 @@ test("bridge times out slow bodies and survives client-aborted bodies", async (t
     request.write("{");
   });
   assert.equal(timeoutStatus, 408);
+
+  const token = await pair(base, code);
+  const exportTimeoutStatus = await new Promise<number>((resolve, reject) => {
+    const request = httpRequest(`${base}/v1/export`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/vnd.video001.figma-ae+json",
+        "transfer-encoding": "chunked"
+      }
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.once("error", reject);
+    request.write("{");
+  });
+  assert.equal(exportTimeoutStatus, 408);
+  assert.deepEqual(await readdir(join(root, "tmp")), []);
 
   await new Promise<void>((resolve) => {
     const request = httpRequest(`${base}/v1/pair`, {
@@ -621,6 +655,322 @@ test("pairing rate limit is global, rolling, and resets after success", async (t
   assert.equal(afterReset.status, 401);
 });
 
+test("parallel slow pairing requests reserve the global failure budget", async (t) => {
+  let now = 200_000;
+  const { base, code } = await startBridge(t, { now: () => now });
+  const requests: Array<ReturnType<typeof httpRequest>> = [];
+  const responses = Array.from({ length: 6 }, () => new Promise<number>((resolve, reject) => {
+    const request = httpRequest(`${base}/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "transfer-encoding": "chunked" }
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.once("error", reject);
+    request.write('{"code":"999');
+    requests.push(request);
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  for (const request of requests) request.end('999"}');
+
+  const statuses = await Promise.all(responses);
+  assert.equal(statuses.filter((status) => status === 401).length, 5, statuses.join(","));
+  assert.equal(statuses.filter((status) => status === 429).length, 1, statuses.join(","));
+
+  now += 60_001;
+  await pair(base, code);
+  const afterSuccess = await fetch(`${base}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: "999999" })
+  });
+  assert.equal(afterSuccess.status, 401);
+});
+
+test("pairing bodies use a tiny cap independent from the export body limit", async (t) => {
+  const { base } = await startBridge(t, { maxBodyBytes: 64 * 1024 });
+  const response = await fetch(`${base}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "x".repeat(1_025)
+  });
+
+  assert.equal(response.status, 413);
+  assert.equal((await response.json() as { error: { code: string } }).error.code, "PAYLOAD_TOO_LARGE");
+});
+
+test("pairing operational failures map to generic 500 without leaking the failure", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "video001-pair-operational-failure-"));
+  const secret = "Bearer operational-secret-in-error";
+  let randomCalls = 0;
+  const auth = new AuthStore(Date.now, () => {
+    randomCalls += 1;
+    if (randomCalls === 1) return Buffer.alloc(32, 91);
+    throw new Error(`random source unavailable ${secret}`);
+  });
+  const code = auth.createPairingCode();
+  const queue = new QueueStore(root);
+  const bridge = createBridgeServer({ auth, queue, host: "127.0.0.1", port: 0 });
+  const address = await bridge.start();
+  t.after(async () => bridge.close());
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const attempt = async (): Promise<Response> => fetch(`${base}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code })
+  });
+
+  const response = await attempt();
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: { code: "INTERNAL_ERROR", message: "The bridge could not process the request" }
+  });
+  const consumed = await attempt();
+  assert.equal(consumed.status, 401);
+  assert.deepEqual(await consumed.json(), {
+    error: { code: "PAIRING_FAILED", message: "The pairing code is invalid or expired" }
+  });
+  await bridge.flushLogs();
+  const contents = await Promise.all(
+    (await readdir(join(root, "logs"))).filter((name) => name.startsWith("bridge")).map((name) =>
+      readFile(join(root, "logs", name), "utf8")
+    )
+  );
+  assert.equal(contents.join("\n").includes(secret), false);
+});
+
+test("unexpected pairing storage failures are never downgraded to authentication failures", async (t) => {
+  const { auth, base, code } = await startBridge(t);
+  auth.exchangePairingCode = () => {
+    throw new Error("injected auth lock/write/fsync failure");
+  };
+
+  const response = await fetch(`${base}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code })
+  });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: { code: "INTERNAL_ERROR", message: "The bridge could not process the request" }
+  });
+});
+
+test("reset consumes an empty body before revoking and rejects oversized chunked input", async (t) => {
+  const { auth, base, code } = await startBridge(t);
+  const token = await pair(base, code);
+  const status = await new Promise<number>((resolve, reject) => {
+    const request = httpRequest(`${base}/v1/reset`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/octet-stream",
+        "transfer-encoding": "chunked"
+      }
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.once("error", reject);
+    request.end("x".repeat(1_025));
+  });
+
+  assert.equal(status, 413);
+  assert.equal(auth.authenticateBearer(`Bearer ${token}`), true);
+
+  const nonEmpty = await fetch(`${base}/v1/reset`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: "x"
+  });
+  assert.equal(nonEmpty.status, 400);
+  assert.equal(auth.authenticateBearer(`Bearer ${token}`), true);
+
+  const reset = await fetch(`${base}/v1/reset`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: ""
+  });
+  assert.equal(reset.status, 204);
+  assert.equal(auth.authenticateBearer(`Bearer ${token}`), false);
+});
+
+test("authenticated exports spool privately, parse below a hard cap, and clean temporary bodies", async (t) => {
+  const value = fingerprint(makeValidPackage());
+  const body = JSON.stringify(value);
+  const { base, code, root } = await startBridge(t, {
+    maxBodyBytes: Buffer.byteLength(body) + 1_024,
+    maxJsonParseBytes: Buffer.byteLength(body) - 1
+  });
+  const token = await pair(base, code);
+
+  const result = await new Promise<{ body: unknown; status: number }>((resolve, reject) => {
+    const request = httpRequest(`${base}/v1/export`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/vnd.video001.figma-ae+json",
+        "transfer-encoding": "chunked"
+      }
+    }, (response) => {
+      let responseBody = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => { responseBody += chunk; });
+      response.once("end", () => resolve({
+        body: JSON.parse(responseBody) as unknown,
+        status: response.statusCode ?? 0
+      }));
+    });
+    request.once("error", reject);
+    request.end(body);
+  });
+
+  assert.equal(result.status, 413);
+  assert.deepEqual(result.body, {
+    error: { code: "PAYLOAD_TOO_LARGE", message: "The request body exceeds the safe JSON parsing limit" }
+  });
+  assert.deepEqual(await readdir(join(root, "tmp")), []);
+  assert.deepEqual(await readdir(join(root, "incoming")), []);
+});
+
+test("export body processing is globally single-flight and uses a mode-0600 spool", async (t) => {
+  const { auth, base, code, root } = await startBridge(t);
+  const token = await pair(base, code);
+  const first = fingerprint(makeValidPackage());
+  const second = makeValidPackage();
+  second.exporterVersion = "second-concurrent-export";
+  fingerprint(second);
+  const third = makeValidPackage();
+  third.exporterVersion = "third-concurrent-export";
+  fingerprint(third);
+  const send = (value: ExporterPackage): Promise<Response> => fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: JSON.stringify(value)
+  });
+
+  const firstBody = JSON.stringify(first);
+  let resolveFirstResponse: ((status: number) => void) | undefined;
+  let rejectFirstResponse: ((error: unknown) => void) | undefined;
+  const firstResponse = new Promise<number>((resolve, reject) => {
+    resolveFirstResponse = resolve;
+    rejectFirstResponse = reject;
+  });
+  const firstRequest = httpRequest(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json",
+      "transfer-encoding": "chunked"
+    }
+  }, (response) => {
+    response.resume();
+    response.once("end", () => resolveFirstResponse?.(response.statusCode ?? 0));
+  });
+  firstRequest.once("error", (error) => rejectFirstResponse?.(error));
+  t.after(() => { if (!firstRequest.destroyed) firstRequest.destroy(); });
+  const split = Math.floor(firstBody.length / 2);
+  firstRequest.write(firstBody.slice(0, split));
+
+  const spoolDeadline = Date.now() + 2_000;
+  let names: string[] = [];
+  do {
+    names = await readdir(join(root, "tmp"));
+    if (names.some((name) => name.startsWith(".http-body."))) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  } while (Date.now() < spoolDeadline);
+  const spools = names.filter((name) => name.startsWith(".http-body.") && name.endsWith(".tmp"));
+  assert.equal(spools.length, 1, names.join(","));
+  assert.equal((await stat(join(root, "tmp", spools[0]!))).mode & 0o777, 0o600);
+
+  let secondAuthenticated = false;
+  const authenticate = auth.authenticateBearer.bind(auth);
+  auth.authenticateBearer = (authorization: string | undefined) => {
+    const result = authenticate(authorization);
+    if (result) secondAuthenticated = true;
+    return result;
+  };
+  const secondRequest = send(second);
+  const deadline = Date.now() + 2_000;
+  while (!secondAuthenticated && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(secondAuthenticated, true);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal((await readdir(join(root, "tmp"))).filter((name) => name.startsWith(".http-body.")).length, 1);
+
+  const busy = await send(third);
+  assert.equal(busy.status, 503);
+  assert.equal((await busy.json() as { error: { code: string } }).error.code, "EXPORT_BUSY");
+
+  firstRequest.end(firstBody.slice(split));
+  const secondResponse = await secondRequest;
+  assert.deepEqual([await firstResponse, secondResponse.status], [202, 202]);
+  assert.deepEqual(await readdir(join(root, "tmp")), []);
+  assert.equal((await readdir(join(root, "incoming"))).length, 2);
+});
+
+test("a queued export body deadline frees its bounded waiter", async (t) => {
+  const { base, code, queue } = await startBridge(t, { requestTimeoutMs: 75 });
+  const token = await pair(base, code);
+  const enqueue = queue.enqueue.bind(queue);
+  let entered = 0;
+  let markFirstEntered: (() => void) | undefined;
+  let releaseFirst: (() => void) | undefined;
+  const firstEntered = new Promise<void>((resolve) => { markFirstEntered = resolve; });
+  const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  t.after(() => releaseFirst?.());
+  queue.enqueue = async (value: unknown) => {
+    entered += 1;
+    if (entered === 1) {
+      markFirstEntered?.();
+      await firstReleased;
+    }
+    return enqueue(value);
+  };
+  const send = (label: string): Promise<Response> => {
+    const value = makeValidPackage();
+    value.exporterVersion = label;
+    fingerprint(value);
+    return fetch(`${base}/v1/export`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/vnd.video001.figma-ae+json"
+      },
+      body: JSON.stringify(value)
+    });
+  };
+
+  const first = send("deadline-first");
+  await firstEntered;
+  const second = send("deadline-second");
+  const secondStatus = await Promise.race([
+    second.then((response) => response.status),
+    new Promise<number>((resolve) => setTimeout(() => resolve(0), 500))
+  ]);
+  if (secondStatus !== 408) {
+    releaseFirst?.();
+    await Promise.allSettled([first, second]);
+  }
+  assert.equal(secondStatus, 408);
+
+  const third = send("deadline-third");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  releaseFirst?.();
+  assert.deepEqual((await Promise.all([first, third])).map((response) => response.status), [202, 202]);
+});
+
+test("bridge body readers use Node 20-compatible abort composition", async () => {
+  const source = await readFile(fileURLToPath(new URL("../src/bridge/server.ts", import.meta.url)), "utf8");
+  assert.equal(source.includes("AbortSignal.any"), false);
+});
+
 test("startup retention and structured log rotation are deterministic and redacted", async (t) => {
   let now = Date.UTC(2026, 6, 22, 12);
   const root = await mkdtemp(join(tmpdir(), "video001-retention-"));
@@ -733,6 +1083,81 @@ test("CLI arguments are strict and state publication/removal is durable and owne
   await removeBridgeState(root, state.pid, (path) => { syncs.push(path); });
   await assert.rejects(readFile(statePath), /ENOENT/);
   assert.deepEqual(syncs, [root, root]);
+});
+
+test("failed state-directory fsync removes the renamed state before a restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-cli-state-fsync-failure-"));
+  const firstOwner = owner(9_101, "91019101-9101-4101-8101-910191019101");
+  const lifecycle = await acquireBridgeLifecycle(root, { owner: firstOwner });
+  let syncCalls = 0;
+  try {
+    await assert.rejects(
+      publishBridgeState(root, {
+        pid: firstOwner.pid,
+        port: 54_321,
+        pairingCode: "123456",
+        pairingExpiresAt: 999_999
+      }, () => {
+        syncCalls += 1;
+        if (syncCalls === 1) throw new Error("injected state parent fsync failure");
+      }),
+      /injected state parent fsync failure/
+    );
+  } finally {
+    await lifecycle.release();
+  }
+
+  assert.equal(syncCalls, 2);
+  await assert.rejects(readFile(join(root, "state.json")), /ENOENT/);
+  const restarted = await acquireBridgeLifecycle(root, {
+    owner: owner(9_102, "91029102-9102-4102-8102-910291029102")
+  });
+  await restarted.release();
+});
+
+test("state cleanup never unlinks a replacement and reports lifecycle retention", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-cli-state-replacement-"));
+  const statePath = join(root, "state.json");
+  const displacedPath = join(root, "displaced-state.json");
+  const replacement = JSON.stringify({ replacement: true });
+  let firstSync = true;
+  await assert.rejects(
+    publishBridgeState(root, {
+      pid: 9_201,
+      port: 54_321,
+      pairingCode: "123456",
+      pairingExpiresAt: 999_999
+    }, async () => {
+      if (!firstSync) return;
+      firstSync = false;
+      await rename(statePath, displacedPath);
+      await writeFile(statePath, replacement, { mode: 0o600 });
+      throw new Error("injected replacement race");
+    }),
+    (error: unknown) => error instanceof StatePublicationCleanupError
+  );
+  assert.equal(await readFile(statePath, "utf8"), replacement);
+  assert.equal((await stat(displacedPath)).isFile(), true);
+
+  const retainedRoot = await mkdtemp(join(tmpdir(), "video001-cli-state-retained-lifecycle-"));
+  let syncCalls = 0;
+  await assert.rejects(
+    startBridgeCli(["--root", retainedRoot, "--port", "0"], {
+      stateDirectorySync: () => {
+        syncCalls += 1;
+        throw new Error("injected repeated directory fsync failure");
+      }
+    }),
+    (error: unknown) => error instanceof StatePublicationCleanupError
+  );
+  assert.equal(syncCalls, 2);
+  const retained = JSON.parse(await readFile(join(retainedRoot, ".bridge-lifecycle.json"), "utf8")) as BridgeOwner;
+  assert.equal(retained.pid, process.pid);
+  const recovered = await acquireBridgeLifecycle(retainedRoot, {
+    owner: owner(9_202, "92029202-9202-4202-8202-920292029202"),
+    probeProcess: (pid) => pid === retained.pid ? "dead" : "ambiguous"
+  });
+  await recovered.release();
 });
 
 test("CLI handles SIGTERM cleanly and reports bind failures without secrets or stacks", async (t) => {

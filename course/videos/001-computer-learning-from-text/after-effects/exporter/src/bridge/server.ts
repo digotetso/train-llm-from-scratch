@@ -1,12 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readdir, rename, unlink } from "node:fs/promises";
+import { lstat, open, readdir, rename, unlink, type FileHandle } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { contentFingerprintInput, type ExporterPackage, validatePackage } from "../shared/contract.ts";
 import { LIMITS } from "../shared/limits.ts";
-import type { AuthStore } from "./auth.ts";
+import { PairingCodeError, type AuthStore } from "./auth.ts";
 import { QueueConflictError, type QueueStore } from "./queue.ts";
 
 const JSON_MEDIA_TYPE = "application/json";
@@ -15,9 +15,18 @@ const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_LOG_BYTES = 10 * 1024 * 1024;
 const PAIRING_WINDOW_MS = 60_000;
 const MAX_PAIRING_FAILURES = 5;
+const MAX_CONTROL_BODY_BYTES = 1_024;
+const MAX_CONCURRENT_EXPORT_BODY_WORK = 1;
+const MAX_QUEUED_EXPORT_BODY_WORK = 1;
+// JSON.parse materializes the complete document. Until the bridge has a streaming
+// package parser, this is therefore a whole-package cap (including embedded assets),
+// not merely the asset-free manifest limit enforced by validatePackage.
+const DEFAULT_MAX_JSON_PARSE_BYTES = LIMITS.maxManifestBytes;
 
 interface BridgeLimits {
   maxBodyBytes: number;
+  maxControlBodyBytes: number;
+  maxJsonParseBytes: number;
   maxLogBytes: number;
   requestTimeoutMs: number;
   retentionMs: number;
@@ -49,6 +58,79 @@ interface ErrorBody {
 class BodyTooLargeError extends Error {}
 class BodyTimeoutError extends Error {}
 class BodyAbortedError extends Error {}
+
+interface SpooledBody {
+  device: number;
+  inode: number;
+  path: string;
+  size: number;
+}
+
+type GateAcquisition = (() => void) | "busy" | "shutdown" | "timeout";
+
+interface GateWaiter {
+  cleanup(): void;
+  resolve(result: GateAcquisition): void;
+}
+
+class BoundedWorkGate {
+  private active = 0;
+  private readonly waiters: GateWaiter[] = [];
+
+  constructor(
+    private readonly concurrency: number,
+    private readonly maximumQueued: number
+  ) {}
+
+  acquire(timeoutSignal: AbortSignal, shutdownSignal: AbortSignal): Promise<GateAcquisition> {
+    if (shutdownSignal.aborted) return Promise.resolve("shutdown");
+    if (timeoutSignal.aborted) return Promise.resolve("timeout");
+    if (this.active < this.concurrency) {
+      this.active += 1;
+      return Promise.resolve(this.releaseFunction());
+    }
+    if (this.waiters.length >= this.maximumQueued) return Promise.resolve("busy");
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: GateAcquisition): void => {
+        if (settled) return;
+        settled = true;
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        waiter.cleanup();
+        resolve(result);
+      };
+      const onTimeout = (): void => finish("timeout");
+      const onShutdown = (): void => finish("shutdown");
+      const waiter: GateWaiter = {
+        cleanup(): void {
+          timeoutSignal.removeEventListener("abort", onTimeout);
+          shutdownSignal.removeEventListener("abort", onShutdown);
+        },
+        resolve: finish
+      };
+      this.waiters.push(waiter);
+      timeoutSignal.addEventListener("abort", onTimeout, { once: true });
+      shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+      if (shutdownSignal.aborted) onShutdown();
+      else if (timeoutSignal.aborted) onTimeout();
+    });
+  }
+
+  private releaseFunction(): () => void {
+    let released = false;
+    return (): void => {
+      if (released) return;
+      released = true;
+      const next = this.waiters.shift();
+      if (next === undefined) {
+        this.active -= 1;
+      } else {
+        next.resolve(this.releaseFunction());
+      }
+    };
+  }
+}
 
 function validateIntegerLimit(name: string, value: number, allowZero = false): number {
   if (!Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
@@ -120,7 +202,6 @@ async function readBoundedBody(
     if (parsedLength > maxBytes) throw new BodyTooLargeError();
   }
 
-  const signal = AbortSignal.any([timeoutSignal, shutdownSignal]);
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
@@ -131,7 +212,8 @@ async function readBoundedBody(
       request.off("end", onEnd);
       request.off("aborted", onAborted);
       request.off("error", onAborted);
-      signal.removeEventListener("abort", onTimeout);
+      timeoutSignal.removeEventListener("abort", onTimeout);
+      shutdownSignal.removeEventListener("abort", onShutdown);
     };
     const settle = (operation: () => void): void => {
       if (settled) return;
@@ -153,15 +235,104 @@ async function readBoundedBody(
     const onAborted = (): void => settle(() => reject(new BodyAbortedError()));
     const onTimeout = (): void => {
       request.pause();
-      settle(() => reject(shutdownSignal.aborted ? new BodyAbortedError() : new BodyTimeoutError()));
+      settle(() => reject(new BodyTimeoutError()));
+    };
+    const onShutdown = (): void => {
+      request.pause();
+      settle(() => reject(new BodyAbortedError()));
     };
 
     request.on("data", onData);
     request.once("end", onEnd);
     request.once("aborted", onAborted);
     request.once("error", onAborted);
-    signal.addEventListener("abort", onTimeout, { once: true });
-    if (signal.aborted) onTimeout();
+    timeoutSignal.addEventListener("abort", onTimeout, { once: true });
+    shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+    if (shutdownSignal.aborted) onShutdown();
+    else if (timeoutSignal.aborted) onTimeout();
+  });
+}
+
+async function streamRequestToFile(
+  request: IncomingMessage,
+  handle: FileHandle,
+  maxBytes: number,
+  timeoutSignal: AbortSignal,
+  shutdownSignal: AbortSignal
+): Promise<number> {
+  const declaredLength = request.headers["content-length"];
+  if (typeof declaredLength === "string") {
+    if (!/^(?:0|[1-9]\d*)$/.test(declaredLength)) throw new BodyAbortedError();
+    const parsedLength = Number(declaredLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength > maxBytes) throw new BodyTooLargeError();
+  }
+  if (request.aborted || request.destroyed) throw new BodyAbortedError();
+
+  return new Promise<number>((resolve, reject) => {
+    let received = 0;
+    let settled = false;
+    let requestedError: Error | undefined;
+    let pendingWrite: Promise<void> = Promise.resolve();
+
+    const cleanup = (): void => {
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("aborted", onAborted);
+      request.off("error", onAborted);
+      timeoutSignal.removeEventListener("abort", onTimeout);
+      shutdownSignal.removeEventListener("abort", onShutdown);
+    };
+    const settle = (operation: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      operation();
+    };
+    const rejectAfterPendingWrite = (error: Error): void => {
+      if (requestedError !== undefined || settled) return;
+      requestedError = error;
+      request.pause();
+      void pendingWrite.then(
+        () => settle(() => reject(error)),
+        (writeError: unknown) => settle(() => reject(writeError))
+      );
+    };
+    const onData = (chunk: Buffer | string): void => {
+      request.pause();
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      received += bytes.byteLength;
+      if (received > maxBytes) {
+        rejectAfterPendingWrite(new BodyTooLargeError());
+        return;
+      }
+      pendingWrite = pendingWrite.then(async () => {
+        await handle.write(bytes);
+      });
+      void pendingWrite.then(
+        () => {
+          if (!settled && requestedError === undefined) request.resume();
+        },
+        (error: unknown) => settle(() => reject(error))
+      );
+    };
+    const onEnd = (): void => {
+      void pendingWrite.then(
+        () => settle(() => resolve(received)),
+        (error: unknown) => settle(() => reject(error))
+      );
+    };
+    const onAborted = (): void => rejectAfterPendingWrite(new BodyAbortedError());
+    const onTimeout = (): void => rejectAfterPendingWrite(new BodyTimeoutError());
+    const onShutdown = (): void => rejectAfterPendingWrite(new BodyAbortedError());
+
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("aborted", onAborted);
+    request.once("error", onAborted);
+    timeoutSignal.addEventListener("abort", onTimeout, { once: true });
+    shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+    if (shutdownSignal.aborted) onShutdown();
+    else if (timeoutSignal.aborted) onTimeout();
   });
 }
 
@@ -307,6 +478,11 @@ class NodeBridgeServer implements BridgeServer {
   private readonly server: Server;
   private readonly shutdownController = new AbortController();
   private readonly activeHandlers = new Set<Promise<void>>();
+  private readonly exportBodyGate = new BoundedWorkGate(
+    MAX_CONCURRENT_EXPORT_BODY_WORK,
+    MAX_QUEUED_EXPORT_BODY_WORK
+  );
+  private activePairingReservations = 0;
   private failedPairings: number[] = [];
   private started = false;
   private closing: Promise<void> | undefined;
@@ -321,6 +497,14 @@ class NodeBridgeServer implements BridgeServer {
     const configured = options.limits ?? {};
     this.limits = {
       maxBodyBytes: validateIntegerLimit("maxBodyBytes", configured.maxBodyBytes ?? LIMITS.maxBodyBytes),
+      maxControlBodyBytes: validateIntegerLimit(
+        "maxControlBodyBytes",
+        configured.maxControlBodyBytes ?? MAX_CONTROL_BODY_BYTES
+      ),
+      maxJsonParseBytes: validateIntegerLimit(
+        "maxJsonParseBytes",
+        configured.maxJsonParseBytes ?? DEFAULT_MAX_JSON_PARSE_BYTES
+      ),
       maxLogBytes: validateIntegerLimit("maxLogBytes", configured.maxLogBytes ?? MAX_LOG_BYTES),
       requestTimeoutMs: validateIntegerLimit("requestTimeoutMs", configured.requestTimeoutMs ?? LIMITS.requestTimeoutMs),
       retentionMs: validateIntegerLimit("retentionMs", configured.retentionMs ?? RETENTION_MS)
@@ -411,7 +595,11 @@ class NodeBridgeServer implements BridgeServer {
       this.respondError(response, route, 405, "METHOD_NOT_ALLOWED", "The request method is not allowed for this route");
       return;
     }
-    if (request.method === "POST" && declaredBodyIsOversized(request, this.limits.maxBodyBytes)) {
+    if (
+      request.method === "POST" &&
+      (route === "pair" || route === "reset") &&
+      declaredBodyIsOversized(request, this.limits.maxControlBodyBytes)
+    ) {
       this.respondError(response, route, 413, "PAYLOAD_TOO_LARGE", "The request body exceeds the configured limit");
       terminateRequestAfterResponse(request, response);
       return;
@@ -430,6 +618,17 @@ class NodeBridgeServer implements BridgeServer {
         this.respondError(response, route, 401, "UNAUTHORIZED", "A valid bearer token is required");
         return;
       }
+      const body = await this.readBodyOrRespond(
+        request,
+        response,
+        route,
+        this.limits.maxControlBodyBytes
+      );
+      if (body === undefined) return;
+      if (body.byteLength !== 0) {
+        this.respondError(response, route, 400, "RESET_BODY_NOT_EMPTY", "The reset request body must be empty");
+        return;
+      }
       this.auth.revokeAll();
       sendEmpty(response, 204);
       this.log.record(route, 204);
@@ -445,32 +644,43 @@ class NodeBridgeServer implements BridgeServer {
       return;
     }
     this.prunePairingFailures();
-    if (this.failedPairings.length >= MAX_PAIRING_FAILURES) {
+    if (this.failedPairings.length + this.activePairingReservations >= MAX_PAIRING_FAILURES) {
       this.respondError(response, route, 429, "PAIRING_RATE_LIMITED", "Too many failed pairing attempts");
       terminateRequestAfterResponse(request, response);
       return;
     }
-    const body = await this.readBodyOrRespond(request, response, route);
-    if (body === undefined) return;
-    let value: unknown;
+    this.activePairingReservations += 1;
     try {
-      value = parseJson(body);
-    } catch {
-      this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
-      return;
-    }
-    if (!isPairRequest(value)) {
-      this.respondError(response, route, 422, "INVALID_PAIRING_REQUEST", "The pairing request is invalid");
-      return;
-    }
-    try {
-      const token = this.auth.exchangePairingCode(value.code);
-      this.failedPairings = [];
-      sendJson(response, 200, { token });
-      this.log.record(route, 200);
-    } catch {
-      this.failedPairings.push(this.now());
-      this.respondError(response, route, 401, "PAIRING_FAILED", "The pairing code is invalid or expired");
+      const body = await this.readBodyOrRespond(
+        request,
+        response,
+        route,
+        this.limits.maxControlBodyBytes
+      );
+      if (body === undefined) return;
+      let value: unknown;
+      try {
+        value = parseJson(body);
+      } catch {
+        this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
+        return;
+      }
+      if (!isPairRequest(value)) {
+        this.respondError(response, route, 422, "INVALID_PAIRING_REQUEST", "The pairing request is invalid");
+        return;
+      }
+      try {
+        const token = this.auth.exchangePairingCode(value.code);
+        this.failedPairings = [];
+        sendJson(response, 200, { token });
+        this.log.record(route, 200);
+      } catch (error) {
+        if (!(error instanceof PairingCodeError)) throw error;
+        this.failedPairings.push(this.now());
+        this.respondError(response, route, 401, "PAIRING_FAILED", "The pairing code is invalid or expired");
+      }
+    } finally {
+      this.activePairingReservations -= 1;
     }
   }
 
@@ -484,53 +694,265 @@ class NodeBridgeServer implements BridgeServer {
       this.respondError(response, route, 401, "UNAUTHORIZED", "A valid bearer token is required");
       return;
     }
-    const body = await this.readBodyOrRespond(request, response, route);
-    if (body === undefined) return;
-    let parsed: unknown;
+    if (declaredBodyIsOversized(request, this.limits.maxBodyBytes)) {
+      this.respondError(response, route, 413, "PAYLOAD_TOO_LARGE", "The request body exceeds the configured limit");
+      terminateRequestAfterResponse(request, response);
+      return;
+    }
+    if (declaredBodyIsOversized(request, this.limits.maxJsonParseBytes)) {
+      this.respondError(
+        response,
+        route,
+        413,
+        "PAYLOAD_TOO_LARGE",
+        "The request body exceeds the safe JSON parsing limit"
+      );
+      terminateRequestAfterResponse(request, response);
+      return;
+    }
+    const bodyDeadline = AbortSignal.timeout(this.limits.requestTimeoutMs);
+    const bodyWork = await this.exportBodyGate.acquire(bodyDeadline, this.shutdownController.signal);
+    if (bodyWork === "busy") {
+      this.respondError(response, route, 503, "EXPORT_BUSY", "The export body processor is busy");
+      terminateRequestAfterResponse(request, response);
+      return;
+    }
+    if (bodyWork === "timeout") {
+      this.respondError(response, route, 408, "REQUEST_TIMEOUT", "The request body was not received in time");
+      terminateRequestAfterResponse(request, response);
+      return;
+    }
+    if (bodyWork === "shutdown") {
+      if (!request.destroyed) request.destroy();
+      return;
+    }
+    const releaseBodyWork = bodyWork;
+    let spool: SpooledBody | undefined;
     try {
-      parsed = parseJson(body);
-    } catch {
-      this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
-      return;
-    }
-    let value: ExporterPackage;
-    try {
-      value = validatePackage(parsed);
-    } catch {
-      this.respondError(response, route, 422, "INVALID_PACKAGE", "The export package is invalid");
-      return;
-    }
-    const actualContentHash = createHash("sha256").update(contentFingerprintInput(value)).digest("hex");
-    if (actualContentHash !== value.contentHash) {
-      this.respondError(response, route, 422, "CONTENT_HASH_MISMATCH", "The package fingerprint does not match its contents");
-      return;
-    }
-    if (!verifyAssets(value)) {
-      this.respondError(response, route, 422, "ASSET_HASH_MISMATCH", "An asset hash does not match its decoded bytes");
-      return;
-    }
-    try {
-      await this.queue.enqueue(value);
-    } catch (error) {
-      if (error instanceof QueueConflictError) {
-        this.respondError(response, route, 409, "QUEUE_DUPLICATE", "This package is already queued");
+      const spoolLimit = Math.min(this.limits.maxBodyBytes, this.limits.maxJsonParseBytes);
+      spool = await this.spoolBodyOrRespond(
+        request,
+        response,
+        route,
+        spoolLimit,
+        bodyDeadline,
+        this.limits.maxJsonParseBytes <= this.limits.maxBodyBytes
+          ? "The request body exceeds the safe JSON parsing limit"
+          : "The request body exceeds the configured limit"
+      );
+      if (spool === undefined) return;
+      const body = await this.readSpooledBody(spool, this.limits.maxJsonParseBytes);
+      await this.removeSpooledBody(spool);
+      spool = undefined;
+      let parsed: unknown;
+      try {
+        parsed = parseJson(body);
+      } catch {
+        this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
         return;
+      }
+      let value: ExporterPackage;
+      try {
+        value = validatePackage(parsed);
+      } catch {
+        this.respondError(response, route, 422, "INVALID_PACKAGE", "The export package is invalid");
+        return;
+      }
+      const actualContentHash = createHash("sha256").update(contentFingerprintInput(value)).digest("hex");
+      if (actualContentHash !== value.contentHash) {
+        this.respondError(response, route, 422, "CONTENT_HASH_MISMATCH", "The package fingerprint does not match its contents");
+        return;
+      }
+      if (!verifyAssets(value)) {
+        this.respondError(response, route, 422, "ASSET_HASH_MISMATCH", "An asset hash does not match its decoded bytes");
+        return;
+      }
+      try {
+        await this.queue.enqueue(value);
+      } catch (error) {
+        if (error instanceof QueueConflictError) {
+          this.respondError(response, route, 409, "QUEUE_DUPLICATE", "This package is already queued");
+          return;
+        }
+        throw error;
+      }
+      sendJson(response, 202, { status: "accepted", contentHash: value.contentHash });
+      this.log.record(route, 202);
+    } finally {
+      try {
+        if (spool !== undefined) await this.removeSpooledBody(spool);
+      } finally {
+        releaseBodyWork();
+      }
+    }
+  }
+
+  private async spoolBodyOrRespond(
+    request: IncomingMessage,
+    response: ServerResponse,
+    route: string,
+    maxBytes: number,
+    timeoutSignal: AbortSignal,
+    tooLargeMessage: string
+  ): Promise<SpooledBody | undefined> {
+    try {
+      return await this.spoolBody(request, maxBytes, timeoutSignal);
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        this.respondError(response, route, 413, "PAYLOAD_TOO_LARGE", tooLargeMessage);
+        terminateRequestAfterResponse(request, response);
+      } else if (error instanceof BodyTimeoutError) {
+        this.respondError(response, route, 408, "REQUEST_TIMEOUT", "The request body was not received in time");
+        terminateRequestAfterResponse(request, response);
+      } else if (error instanceof BodyAbortedError) {
+        if (!request.destroyed) request.destroy();
+      } else {
+        throw error;
+      }
+      return undefined;
+    }
+  }
+
+  private async spoolBody(
+    request: IncomingMessage,
+    maxBytes: number,
+    timeoutSignal: AbortSignal
+  ): Promise<SpooledBody> {
+    const path = join(this.queue.paths.tmp, `.http-body.${process.pid}.${randomUUID()}.tmp`);
+    let handle: FileHandle | undefined;
+    let identity: Omit<SpooledBody, "size"> | undefined;
+    try {
+      this.queue.assertHealthy();
+      handle = await open(
+        path,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
+      await handle.chmod(0o600);
+      const opened = await handle.stat();
+      if (!opened.isFile()) throw new Error("Export body spool is not a regular file");
+      identity = { device: opened.dev, inode: opened.ino, path };
+      this.queue.assertHealthy();
+      const size = await streamRequestToFile(
+        request,
+        handle,
+        maxBytes,
+        timeoutSignal,
+        this.shutdownController.signal
+      );
+      await handle.sync();
+      const completed = await handle.stat();
+      if (
+        !completed.isFile() ||
+        completed.dev !== identity.device ||
+        completed.ino !== identity.inode ||
+        completed.size !== size
+      ) {
+        throw new Error("Export body spool changed identity or size");
+      }
+      await handle.close();
+      handle = undefined;
+      return { ...identity, size };
+    } catch (error) {
+      const cleanupFailures: unknown[] = [];
+      if (handle !== undefined) {
+        if (identity === undefined) {
+          try {
+            const opened = await handle.stat();
+            if (opened.isFile()) identity = { device: opened.dev, inode: opened.ino, path };
+          } catch (identityError) {
+            cleanupFailures.push(identityError);
+            // Without a stable identity, retain the path rather than unlinking an unknown replacement.
+          }
+        }
+        try {
+          await handle.close();
+        } catch (closeError) {
+          cleanupFailures.push(closeError);
+        }
+      }
+      if (identity !== undefined) {
+        try {
+          await this.removeSpooledBody({ ...identity, size: 0 });
+        } catch (removeError) {
+          cleanupFailures.push(removeError);
+        }
+      }
+      if (cleanupFailures.length > 0) {
+        throw new Error("Export body spool cleanup failed", {
+          cause: new AggregateError([error, ...cleanupFailures])
+        });
       }
       throw error;
     }
-    sendJson(response, 202, { status: "accepted", contentHash: value.contentHash });
-    this.log.record(route, 202);
+  }
+
+  private async readSpooledBody(spool: SpooledBody, maxBytes: number): Promise<Buffer> {
+    this.queue.assertHealthy();
+    const handle = await open(spool.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const details = await handle.stat();
+      if (
+        !details.isFile() ||
+        details.dev !== spool.device ||
+        details.ino !== spool.inode ||
+        details.size !== spool.size
+      ) {
+        throw new Error("Export body spool changed before parsing");
+      }
+      if (details.size > maxBytes) throw new BodyTooLargeError();
+      const bytes = Buffer.allocUnsafe(details.size);
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+        if (result.bytesRead === 0) throw new Error("Export body spool ended before its recorded size");
+        offset += result.bytesRead;
+      }
+      const afterRead = await handle.stat();
+      if (
+        afterRead.dev !== spool.device ||
+        afterRead.ino !== spool.inode ||
+        afterRead.size !== spool.size
+      ) {
+        throw new Error("Export body spool changed while being read");
+      }
+      return bytes;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async removeSpooledBody(spool: SpooledBody): Promise<void> {
+    this.queue.assertHealthy();
+    let current: Awaited<ReturnType<typeof lstat>>;
+    try {
+      current = await lstat(spool.path);
+    } catch (error) {
+      throw error;
+    }
+    if (
+      !current.isFile() ||
+      current.isSymbolicLink() ||
+      current.dev !== spool.device ||
+      current.ino !== spool.inode
+    ) {
+      throw new Error("Export body spool changed before cleanup");
+    }
+    await unlink(spool.path);
+    this.queue.assertHealthy();
+    await this.queue.syncTemporaryDirectory();
   }
 
   private async readBodyOrRespond(
     request: IncomingMessage,
     response: ServerResponse,
-    route: string
+    route: string,
+    maxBytes = this.limits.maxBodyBytes
   ): Promise<Buffer | undefined> {
     try {
       return await readBoundedBody(
         request,
-        this.limits.maxBodyBytes,
+        maxBytes,
         AbortSignal.timeout(this.limits.requestTimeoutMs),
         this.shutdownController.signal
       );

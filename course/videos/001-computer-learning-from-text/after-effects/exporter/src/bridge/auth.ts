@@ -39,6 +39,15 @@ interface AuthState {
   tokens: TokenRecord[];
 }
 
+export type PairingCodeErrorCode = "PAIRING_CODE_INVALID" | "PAIRING_CODE_USED" | "PAIRING_CODE_EXPIRED";
+
+export class PairingCodeError extends Error {
+  constructor(readonly code: PairingCodeErrorCode, message: string) {
+    super(message);
+    this.name = "PairingCodeError";
+  }
+}
+
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const PAIRING_CODE_PATTERN = /^\d{6}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -257,14 +266,14 @@ export class AuthStore {
     return this.withStateLock(() => {
       const pairing = this.state.pairing;
       if (!PAIRING_CODE_PATTERN.test(code) || pairing === null) {
-        throw new Error("Invalid pairing code");
+        throw new PairingCodeError("PAIRING_CODE_INVALID", "Invalid pairing code");
       }
       if (!digestMatches(digest(code), pairing.codeDigest)) {
-        throw new Error("Invalid pairing code");
+        throw new PairingCodeError("PAIRING_CODE_INVALID", "Invalid pairing code");
       }
-      if (pairing.used) throw new Error("Pairing code already used");
+      if (pairing.used) throw new PairingCodeError("PAIRING_CODE_USED", "Pairing code already used");
       if (this.now() - pairing.createdAt >= LIMITS.pairingTtlMs) {
-        throw new Error("Pairing code expired");
+        throw new PairingCodeError("PAIRING_CODE_EXPIRED", "Pairing code expired");
       }
 
       pairing.used = true;
