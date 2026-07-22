@@ -20,6 +20,7 @@ import {
 } from "../src/bridge/cli.ts";
 import { QueueStore } from "../src/bridge/queue.ts";
 import { createBridgeServer, type BridgeServer } from "../src/bridge/server.ts";
+import type { BridgeWorkContext } from "../src/bridge/work-control.ts";
 import { contentFingerprintInput, type ExporterPackage, type RasterNode } from "../src/shared/contract.ts";
 import { LIMITS } from "../src/shared/limits.ts";
 import { makeValidPackage } from "./helpers/package.ts";
@@ -65,6 +66,7 @@ interface StartedBridge {
 async function startBridge(
   t: test.TestContext,
   options: {
+    createExportDeadlineSignal?: () => AbortSignal;
     maxAggregateAssetBytes?: number;
     maxAssetBytes?: number;
     maxBodyBytes?: number;
@@ -72,6 +74,7 @@ async function startBridge(
     maxLogBytes?: number;
     now?: () => number;
     requestTimeoutMs?: number;
+    workCheckpoint?: BridgeWorkContext["checkpoint"];
   } = {}
 ): Promise<StartedBridge> {
   const root = await mkdtemp(join(tmpdir(), "video001-http-"));
@@ -86,6 +89,10 @@ async function startBridge(
     host: "127.0.0.1",
     port: 0,
     now,
+    ...(options.createExportDeadlineSignal === undefined ? {} : {
+      createExportDeadlineSignal: options.createExportDeadlineSignal
+    }),
+    ...(options.workCheckpoint === undefined ? {} : { workCheckpoint: options.workCheckpoint }),
     limits: {
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
       ...(options.maxManifestBytes === undefined ? {} : { maxManifestBytes: options.maxManifestBytes }),
@@ -987,8 +994,15 @@ test("export body processing is globally single-flight and uses a mode-0600 spoo
   assert.equal((await readdir(join(root, "incoming"))).length, 2);
 });
 
-test("a queued export body deadline frees its bounded waiter", async (t) => {
-  const { base, code, queue } = await startBridge(t, { requestTimeoutMs: 75 });
+test("an aborted queued export deadline frees its bounded waiter", async (t) => {
+  const firstDeadline = new AbortController();
+  const secondDeadline = new AbortController();
+  const thirdDeadline = new AbortController();
+  const deadlines = [firstDeadline, secondDeadline, thirdDeadline];
+  const { base, code, queue } = await startBridge(t, {
+    createExportDeadlineSignal: () => deadlines.shift()?.signal ?? AbortSignal.timeout(5_000),
+    requestTimeoutMs: 5_000
+  });
   const token = await pair(base, code);
   const enqueue = queue.enqueueVerified.bind(queue);
   let entered = 0;
@@ -997,13 +1011,13 @@ test("a queued export body deadline frees its bounded waiter", async (t) => {
   const firstEntered = new Promise<void>((resolve) => { markFirstEntered = resolve; });
   const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
   t.after(() => releaseFirst?.());
-  queue.enqueueVerified = async (value, sources) => {
+  queue.enqueueVerified = async (value, sources, options) => {
     entered += 1;
     if (entered === 1) {
       markFirstEntered?.();
       await firstReleased;
     }
-    return enqueue(value, sources);
+    return enqueue(value, sources, options);
   };
   const send = (label: string): Promise<Response> => {
     const value = makeValidPackage();
@@ -1022,6 +1036,8 @@ test("a queued export body deadline frees its bounded waiter", async (t) => {
   const first = send("deadline-first");
   await firstEntered;
   const second = send("deadline-second");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  secondDeadline.abort();
   const secondStatus = await Promise.race([
     second.then((response) => response.status),
     new Promise<number>((resolve) => setTimeout(() => resolve(0), 500))
@@ -1036,6 +1052,180 @@ test("a queued export body deadline frees its bounded waiter", async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 25));
   releaseFirst?.();
   assert.deepEqual((await Promise.all([first, third])).map((response) => response.status), [202, 202]);
+});
+
+test("a processing deadline releases the export slot before owner-safe cleanup completes", async (t) => {
+  const firstDeadline = new AbortController();
+  let deadlineCalls = 0;
+  let blockedFingerprint = false;
+  let markFingerprintBlocked: (() => void) | undefined;
+  const fingerprintBlocked = new Promise<void>((resolve) => { markFingerprintBlocked = resolve; });
+  const never = new Promise<void>(() => {});
+  const { base, code, queue, root } = await startBridge(t, {
+    createExportDeadlineSignal: () => {
+      deadlineCalls += 1;
+      return deadlineCalls === 1 ? firstDeadline.signal : AbortSignal.timeout(5_000);
+    },
+    workCheckpoint: ({ phase }) => {
+      if (phase !== "fingerprint" || blockedFingerprint) return;
+      blockedFingerprint = true;
+      markFingerprintBlocked?.();
+      return never;
+    }
+  });
+  const token = await pair(base, code);
+  let blockCleanup = false;
+  let cleanupDidBlock = false;
+  let markCleanupBlocked: (() => void) | undefined;
+  let releaseCleanup: (() => void) | undefined;
+  const cleanupBlocked = new Promise<void>((resolve) => { markCleanupBlocked = resolve; });
+  const cleanupReleased = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+  const syncTemporaryDirectory = queue.syncTemporaryDirectory.bind(queue);
+  queue.syncTemporaryDirectory = async () => {
+    if (blockCleanup && !cleanupDidBlock) {
+      cleanupDidBlock = true;
+      markCleanupBlocked?.();
+      await cleanupReleased;
+    }
+    await syncTemporaryDirectory();
+  };
+  t.after(() => releaseCleanup?.());
+  const send = (value: ExporterPackage): Promise<Response> => fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: JSON.stringify(value)
+  });
+  const firstValue = makeValidPackage();
+  pngAsset(firstValue, Buffer.from("deadline cleanup asset"));
+  fingerprint(firstValue);
+  const first = send(firstValue);
+  await Promise.race([
+    fingerprintBlocked,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("fingerprint checkpoint not reached")), 500))
+  ]);
+
+  const secondValue = makeValidPackage();
+  secondValue.exporterVersion = "after-processing-deadline";
+  fingerprint(secondValue);
+  const second = send(secondValue);
+  blockCleanup = true;
+  firstDeadline.abort();
+  await Promise.race([
+    cleanupBlocked,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("cleanup did not block")), 500))
+  ]);
+
+  const secondStatus = await Promise.race([
+    second.then((response) => response.status),
+    new Promise<number>((resolve) => setTimeout(() => resolve(0), 500))
+  ]);
+  assert.equal(secondStatus, 202);
+  releaseCleanup?.();
+  const firstResponse = await first;
+  assert.equal(firstResponse.status, 408);
+  assert.equal((await firstResponse.json() as { error: { code: string } }).error.code, "REQUEST_TIMEOUT");
+  assert.deepEqual((await readdir(join(root, "tmp"))).filter((name) => name.startsWith(".http-")), []);
+});
+
+test("a post-commit deadline releases the export slot but preserves the accepted response", async (t) => {
+  const firstDeadline = new AbortController();
+  let deadlineCalls = 0;
+  const { base, code, queue } = await startBridge(t, {
+    createExportDeadlineSignal: () => {
+      deadlineCalls += 1;
+      return deadlineCalls === 1 ? firstDeadline.signal : AbortSignal.timeout(5_000);
+    }
+  });
+  const token = await pair(base, code);
+  let cleanupDidBlock = false;
+  let markCleanupBlocked: (() => void) | undefined;
+  let releaseCleanup: (() => void) | undefined;
+  const cleanupBlocked = new Promise<void>((resolve) => { markCleanupBlocked = resolve; });
+  const cleanupReleased = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+  const syncTemporaryDirectory = queue.syncTemporaryDirectory.bind(queue);
+  queue.syncTemporaryDirectory = async () => {
+    if (!cleanupDidBlock && (await readdir(queue.paths.incoming)).length === 1) {
+      cleanupDidBlock = true;
+      markCleanupBlocked?.();
+      await cleanupReleased;
+    }
+    await syncTemporaryDirectory();
+  };
+  t.after(() => releaseCleanup?.());
+  const send = (value: ExporterPackage): Promise<Response> => fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: JSON.stringify(value)
+  });
+  const firstValue = makeValidPackage();
+  pngAsset(firstValue, Buffer.from("post-commit cleanup asset"));
+  fingerprint(firstValue);
+  const first = send(firstValue);
+  await Promise.race([
+    cleanupBlocked,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("post-commit cleanup did not block")), 500))
+  ]);
+
+  const secondValue = makeValidPackage();
+  secondValue.exporterVersion = "after-post-commit-deadline";
+  fingerprint(secondValue);
+  const second = send(secondValue);
+  firstDeadline.abort();
+  const secondStatus = await Promise.race([
+    second.then((response) => response.status),
+    new Promise<number>((resolve) => setTimeout(() => resolve(0), 500))
+  ]);
+  assert.equal(secondStatus, 202);
+  releaseCleanup?.();
+  assert.equal((await first).status, 202);
+});
+
+test("shutdown interrupts processing work and cleans owner-stamped temporary files", async (t) => {
+  let markFingerprintBlocked: (() => void) | undefined;
+  const fingerprintBlocked = new Promise<void>((resolve) => { markFingerprintBlocked = resolve; });
+  const never = new Promise<void>(() => {});
+  const { base, bridge, code, root } = await startBridge(t, {
+    requestTimeoutMs: 5_000,
+    workCheckpoint: ({ phase }) => {
+      if (phase !== "fingerprint") return;
+      markFingerprintBlocked?.();
+      return never;
+    }
+  });
+  const token = await pair(base, code);
+  const value = makeValidPackage();
+  pngAsset(value, Buffer.from("shutdown cleanup asset"));
+  fingerprint(value);
+  const pending = fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: JSON.stringify(value)
+  });
+  const pendingFailure = pending.then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  await Promise.race([
+    fingerprintBlocked,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("fingerprint checkpoint not reached")), 500))
+  ]);
+
+  const closed = bridge.close();
+  await Promise.race([
+    closed,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("bridge shutdown did not interrupt processing")), 500))
+  ]);
+  assert.ok(await pendingFailure instanceof Error);
+  assert.deepEqual((await readdir(join(root, "tmp"))).filter((name) => name.startsWith(".http-")), []);
 });
 
 test("bridge body readers use Node 20-compatible abort composition", async () => {

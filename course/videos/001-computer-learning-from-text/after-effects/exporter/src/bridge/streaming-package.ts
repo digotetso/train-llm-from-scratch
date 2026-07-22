@@ -17,11 +17,15 @@ import {
   type OwnedHttpTemporaryKind
 } from "./ownership.ts";
 import type { QueueStore } from "./queue.ts";
+import {
+  checkpointBridgeWork,
+  observeBridgeWorkCancellation,
+  type BridgeWorkContext
+} from "./work-control.ts";
 
 const BASE64_BUFFER_BYTES = 64 * 1024;
 const BASE64_ALPHABET_BYTES = Buffer.from("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", "ascii");
 const DEFAULT_FILE_CHUNK_BYTES = 64 * 1024;
-const MAX_JSON_DEPTH = 256;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 export type OwnedTemporaryKind = OwnedHttpTemporaryKind;
@@ -57,6 +61,7 @@ export interface StreamingPackageResult {
 export interface StreamingReadOptions {
   chunkBytes?: number;
   limits?: StreamingPackageLimits;
+  work?: BridgeWorkContext;
 }
 
 export class StreamingPackageSyntaxError extends Error {
@@ -144,10 +149,15 @@ async function removeTemporary(file: OwnedTemporaryFile, queue: QueueStore, sync
 
 export async function cleanupStreamedAssets(
   files: readonly StreamedAssetFile[],
-  queue: QueueStore
+  queue: QueueStore,
+  work?: BridgeWorkContext
 ): Promise<void> {
   if (files.length === 0) return;
-  for (const file of files) await removeTemporary(file, queue, false);
+  observeBridgeWorkCancellation(work);
+  for (const file of files) {
+    await removeTemporary(file, queue, false);
+    observeBridgeWorkCancellation(work);
+  }
   await queue.syncTemporaryDirectory();
 }
 
@@ -161,27 +171,39 @@ class JsonFileReader {
   constructor(
     private readonly handle: FileHandle,
     chunkBytes: number,
-    private readonly maxManifestBytes: number
+    private readonly maxManifestBytes: number,
+    private readonly work?: BridgeWorkContext
   ) {
     this.buffer = Buffer.allocUnsafe(chunkBytes);
   }
 
   async peek(): Promise<number | undefined> {
-    if (this.bufferPosition >= this.bufferEnd) await this.fill();
-    return this.bufferPosition >= this.bufferEnd ? undefined : this.buffer[this.bufferPosition];
+    return (await this.available())[0];
   }
 
   async read(countManifest = true): Promise<number | undefined> {
-    const value = await this.peek();
+    const value = (await this.available())[0];
     if (value === undefined) return undefined;
-    this.bufferPosition += 1;
+    this.consume(1, countManifest);
+    return value;
+  }
+
+  async available(): Promise<Buffer> {
+    if (this.bufferPosition >= this.bufferEnd) await this.fill();
+    return this.buffer.subarray(this.bufferPosition, this.bufferEnd);
+  }
+
+  consume(length: number, countManifest = true): void {
+    if (!Number.isSafeInteger(length) || length < 0 || this.bufferPosition + length > this.bufferEnd) {
+      throw new Error("JSON reader consume length exceeds its available buffer");
+    }
+    this.bufferPosition += length;
     if (countManifest) {
-      this.manifestBytes += 1;
+      this.manifestBytes += length;
       if (this.manifestBytes > this.maxManifestBytes) {
         throw new StreamingPackageLimitError("Package manifest exceeds its byte limit");
       }
     }
-    return value;
   }
 
   get bytesRead(): number {
@@ -193,6 +215,7 @@ class JsonFileReader {
     this.bufferPosition = 0;
     this.bufferEnd = result.bytesRead;
     this.filePosition += result.bytesRead;
+    await checkpointBridgeWork(this.work, "parse", this.filePosition);
   }
 }
 
@@ -286,7 +309,8 @@ class StreamingJsonParser {
     private readonly reader: JsonFileReader,
     private readonly queue: QueueStore,
     private readonly owner: BridgeOwner,
-    private readonly limits: StreamingPackageLimits
+    private readonly limits: StreamingPackageLimits,
+    private readonly work?: BridgeWorkContext
   ) {}
 
   async parse(): Promise<unknown> {
@@ -301,13 +325,12 @@ class StreamingJsonParser {
     return this.evidence;
   }
 
-  private async parseValue(path: string, depth: number): Promise<unknown> {
-    if (depth > MAX_JSON_DEPTH) throw new StreamingPackageValidationError("JSON nesting exceeds the bridge limit");
+  private async parseValue(path: string, containerDepth: number): Promise<unknown> {
     await this.skipWhitespace();
     const byte = await this.reader.peek();
     if (byte === undefined) throw new StreamingPackageSyntaxError("Unexpected end of JSON input");
-    if (byte === 0x7b) return this.parseObject(path, depth + 1);
-    if (byte === 0x5b) return this.parseArray(path, depth + 1);
+    if (byte === 0x7b) return this.parseObject(path, this.nextContainerDepth(containerDepth));
+    if (byte === 0x5b) return this.parseArray(path, this.nextContainerDepth(containerDepth));
     if (byte === 0x22) return this.parseString();
     if (byte === 0x74) return this.parseLiteral("true", true);
     if (byte === 0x66) return this.parseLiteral("false", false);
@@ -316,9 +339,9 @@ class StreamingJsonParser {
     throw new StreamingPackageSyntaxError("Unexpected JSON token");
   }
 
-  private async parseObject(path: string, depth: number): Promise<Record<string, unknown>> {
+  private async parseObject(path: string, containerDepth: number): Promise<Record<string, unknown>> {
     await this.expect(0x7b);
-    const result: Record<string, unknown> = {};
+    const result = Object.create(null) as Record<string, unknown>;
     await this.skipWhitespace();
     if (await this.consumeIf(0x7d)) return result;
     while (true) {
@@ -329,14 +352,14 @@ class StreamingJsonParser {
       await this.skipWhitespace();
       if (path === "$" && key === "assets" && await this.reader.peek() === 0x5b) {
         if (this.assets.length > 0) {
-          await cleanupStreamedAssets([...this.assets], this.queue);
+          await cleanupStreamedAssets([...this.assets], this.queue, this.work);
           this.assets.length = 0;
           this.evidence.length = 0;
           this.aggregateAssetBytes = 0;
         }
-        result[key] = await this.parseAssets(depth + 1);
+        result[key] = await this.parseAssets(this.nextContainerDepth(containerDepth));
       } else {
-        result[key] = await this.parseValue(`${path}.${key}`, depth + 1);
+        result[key] = await this.parseValue(`${path}.${key}`, containerDepth);
       }
       await this.skipWhitespace();
       if (await this.consumeIf(0x7d)) return result;
@@ -345,13 +368,13 @@ class StreamingJsonParser {
     }
   }
 
-  private async parseArray(path: string, depth: number): Promise<unknown[]> {
+  private async parseArray(path: string, containerDepth: number): Promise<unknown[]> {
     await this.expect(0x5b);
     const result: unknown[] = [];
     await this.skipWhitespace();
     if (await this.consumeIf(0x5d)) return result;
     while (true) {
-      result.push(await this.parseValue(`${path}[${result.length}]`, depth + 1));
+      result.push(await this.parseValue(`${path}[${result.length}]`, containerDepth));
       await this.skipWhitespace();
       if (await this.consumeIf(0x5d)) return result;
       await this.expect(0x2c);
@@ -359,7 +382,7 @@ class StreamingJsonParser {
     }
   }
 
-  private async parseAssets(depth: number): Promise<unknown[]> {
+  private async parseAssets(containerDepth: number): Promise<unknown[]> {
     await this.expect(0x5b);
     const result: unknown[] = [];
     await this.skipWhitespace();
@@ -368,9 +391,10 @@ class StreamingJsonParser {
       const index = result.length;
       if (index >= LIMITS.maxAssets) throw new StreamingPackageValidationError("Asset count exceeds its limit");
       await this.skipWhitespace();
-      if (await this.reader.peek() === 0x7b) result.push(await this.parseAssetObject(index, depth + 1));
-      else {
-        result.push(await this.parseValue(`$.assets[${index}]`, depth + 1));
+      if (await this.reader.peek() === 0x7b) {
+        result.push(await this.parseAssetObject(index, this.nextContainerDepth(containerDepth)));
+      } else {
+        result.push(await this.parseValue(`$.assets[${index}]`, containerDepth));
         this.evidence[index] = { byteLength: -1, hash: "" };
       }
       await this.skipWhitespace();
@@ -380,9 +404,9 @@ class StreamingJsonParser {
     }
   }
 
-  private async parseAssetObject(index: number, depth: number): Promise<Record<string, unknown>> {
+  private async parseAssetObject(index: number, containerDepth: number): Promise<Record<string, unknown>> {
     await this.expect(0x7b);
-    const result: Record<string, unknown> = {};
+    const result = Object.create(null) as Record<string, unknown>;
     let currentFile: StreamedAssetFile | undefined;
     await this.skipWhitespace();
     if (await this.consumeIf(0x7d)) {
@@ -397,14 +421,14 @@ class StreamingJsonParser {
       await this.skipWhitespace();
       if (key === "dataBase64" && await this.reader.peek() === 0x22) {
         if (currentFile !== undefined) {
-          await cleanupStreamedAssets([currentFile], this.queue);
+          await cleanupStreamedAssets([currentFile], this.queue, this.work);
           const existing = this.assets.indexOf(currentFile);
           if (existing >= 0) this.assets.splice(existing, 1);
           this.aggregateAssetBytes -= currentFile.size;
         }
         currentFile = await this.parseBase64Asset();
         if (this.aggregateAssetBytes + currentFile.size > this.limits.maxAggregateAssetBytes) {
-          await cleanupStreamedAssets([currentFile], this.queue);
+          await cleanupStreamedAssets([currentFile], this.queue, this.work);
           throw new StreamingPackageValidationError("Assets exceed the aggregate decoded-byte limit");
         }
         this.aggregateAssetBytes += currentFile.size;
@@ -412,7 +436,7 @@ class StreamingJsonParser {
         this.evidence[index] = { byteLength: currentFile.size, hash: currentFile.hash };
         result[key] = EXTERNAL_ASSET_DATA;
       } else {
-        result[key] = await this.parseValue(`$.assets[${index}].${key}`, depth + 1);
+        result[key] = await this.parseValue(`$.assets[${index}].${key}`, containerDepth);
       }
       await this.skipWhitespace();
       if (await this.consumeIf(0x7d)) {
@@ -455,7 +479,7 @@ class StreamingJsonParser {
       let decodedTotal = 0;
       let sawPadding = false;
       let padding = 0;
-      const finalQuartet: number[] = [];
+      const finalQuartet = Buffer.allocUnsafe(4);
       const digest = createHash("sha256");
 
       const flush = async (): Promise<void> => {
@@ -468,39 +492,48 @@ class StreamingJsonParser {
         digest.update(decoded);
         if (handle === undefined) throw new Error("Streamed asset temporary handle is unavailable");
         await writeAll(handle, decoded);
+        await checkpointBridgeWork(this.work, "parse", decodedTotal);
         encodedLength = 0;
       };
 
       while (true) {
-        const next = await this.reader.peek();
-        if (next === undefined) throw new StreamingPackageSyntaxError("Unterminated asset data string");
-        if (next === 0x22) {
-          await this.reader.read(true);
+        const available = await this.reader.available();
+        if (available.byteLength === 0) throw new StreamingPackageSyntaxError("Unterminated asset data string");
+        const closingQuote = available.indexOf(0x22);
+        const contentLength = closingQuote < 0 ? available.byteLength : closingQuote;
+        let position = 0;
+        while (position < contentLength) {
+          const count = Math.min(contentLength - position, encoded.byteLength - encodedLength);
+          for (let index = 0; index < count; index += 1) {
+            const byte = available[position + index]!;
+            const symbol = base64Value(byte);
+            if (byte === 0x3d) {
+              sawPadding = true;
+              padding += 1;
+              if (padding > 2) throw new StreamingPackageValidationError("Asset data is not canonical base64");
+            } else if (symbol < 0 || sawPadding) {
+              throw new StreamingPackageValidationError("Asset data is not unescaped canonical base64");
+            }
+            encoded[encodedLength + index] = byte;
+            finalQuartet[encodedTotal % 4] = byte;
+            encodedTotal += 1;
+          }
+          encodedLength += count;
+          position += count;
+          this.reader.consume(count, false);
+          if (encodedLength === encoded.byteLength) await flush();
+        }
+        if (closingQuote >= 0) {
+          this.reader.consume(1, true);
           break;
         }
-        const byte = await this.reader.read(false);
-        if (byte === undefined) throw new StreamingPackageSyntaxError("Unterminated asset data string");
-        const symbol = base64Value(byte);
-        if (byte === 0x3d) {
-          sawPadding = true;
-          padding += 1;
-          if (padding > 2) throw new StreamingPackageValidationError("Asset data is not canonical base64");
-        } else if (symbol < 0 || sawPadding) {
-          throw new StreamingPackageValidationError("Asset data is not unescaped canonical base64");
-        }
-        encoded[encodedLength] = byte;
-        encodedLength += 1;
-        encodedTotal += 1;
-        finalQuartet.push(byte);
-        if (finalQuartet.length > 4) finalQuartet.shift();
-        if (encodedLength === encoded.byteLength && !sawPadding) await flush();
       }
 
-      if (encodedTotal % 4 !== 0 || finalQuartet.length !== Math.min(encodedTotal, 4)) {
+      if (encodedTotal % 4 !== 0) {
         throw new StreamingPackageValidationError("Asset data is not canonical base64");
       }
       if (padding > 0) {
-        if (finalQuartet.length !== 4 || finalQuartet[3] !== 0x3d) {
+        if (encodedTotal < 4 || finalQuartet[3] !== 0x3d) {
           throw new StreamingPackageValidationError("Asset data is not canonical base64");
         }
         if (padding === 2) {
@@ -614,6 +647,16 @@ class StreamingJsonParser {
   private async expect(expected: number): Promise<void> {
     if (await this.reader.read(true) !== expected) throw new StreamingPackageSyntaxError("Unexpected JSON punctuation");
   }
+
+  private nextContainerDepth(parentDepth: number): number {
+    const depth = parentDepth + 1;
+    if (depth > LIMITS.maxJsonContainerDepth) {
+      throw new StreamingPackageValidationError(
+        `JSON container nesting exceeds the ${LIMITS.maxJsonContainerDepth}-level limit`
+      );
+    }
+    return depth;
+  }
 }
 
 export async function readStreamingPackage(
@@ -648,8 +691,8 @@ export async function readStreamingPackage(
     ) {
       throw new Error("HTTP body spool changed before streaming parse");
     }
-    const reader = new JsonFileReader(handle, chunkBytes, limits.maxManifestBytes);
-    parser = new StreamingJsonParser(reader, queue, owner, limits);
+    const reader = new JsonFileReader(handle, chunkBytes, limits.maxManifestBytes, options.work);
+    parser = new StreamingJsonParser(reader, queue, owner, limits, options.work);
     const value = await parser.parse();
     if (reader.bytesRead !== spool.size) throw new Error("HTTP body spool read count changed");
     const after = await handle.stat();
@@ -668,7 +711,7 @@ export async function readStreamingPackage(
       package: packageValue
     };
   } catch (error) {
-    if (parser !== undefined) await cleanupStreamedAssets([...parser.assets], queue);
+    if (parser !== undefined) await cleanupStreamedAssets([...parser.assets], queue, options.work);
     throw error;
   } finally {
     await handle.close();
@@ -683,10 +726,11 @@ async function updateCanonicalHash(
   hash: Hash,
   value: unknown,
   queue: QueueStore,
-  chunkBytes: number
+  chunkBytes: number,
+  work?: BridgeWorkContext
 ): Promise<void> {
   if (value instanceof ExternalCanonicalBase64) {
-    await updateBase64Hash(hash, value.file, queue, chunkBytes);
+    await updateBase64Hash(hash, value.file, queue, chunkBytes, work);
     return;
   }
   if (value === null || typeof value !== "object") {
@@ -699,7 +743,7 @@ async function updateCanonicalHash(
     hash.update("[");
     for (let index = 0; index < value.length; index += 1) {
       if (index > 0) hash.update(",");
-      await updateCanonicalHash(hash, value[index], queue, chunkBytes);
+      await updateCanonicalHash(hash, value[index], queue, chunkBytes, work);
     }
     hash.update("]");
     return;
@@ -711,7 +755,7 @@ async function updateCanonicalHash(
     const key = keys[index]!;
     if (index > 0) hash.update(",");
     hash.update(`${JSON.stringify(key)}:`);
-    await updateCanonicalHash(hash, record[key], queue, chunkBytes);
+    await updateCanonicalHash(hash, record[key], queue, chunkBytes, work);
   }
   hash.update("}");
 }
@@ -720,7 +764,8 @@ async function updateBase64Hash(
   outputHash: Hash,
   file: StreamedAssetFile,
   queue: QueueStore,
-  chunkBytes: number
+  chunkBytes: number,
+  work?: BridgeWorkContext
 ): Promise<void> {
   if (!HASH_PATTERN.test(file.hash)) throw new Error("Streamed asset hash is invalid");
   queue.assertHealthy();
@@ -745,6 +790,7 @@ async function updateBase64Hash(
       if (complete > 0) outputHash.update(encodeBase64Bytes(combined.subarray(0, complete)));
       carry = Buffer.from(combined.subarray(complete));
       position += result.bytesRead;
+      await checkpointBridgeWork(work, "fingerprint", position);
     }
     if (carry.byteLength > 0) outputHash.update(encodeBase64Bytes(carry));
     outputHash.update('"');
@@ -766,7 +812,7 @@ export async function fingerprintStreamingPackage(
   value: ExternalExporterPackage,
   assets: readonly StreamedAssetFile[],
   queue: QueueStore,
-  options: { chunkBytes?: number } = {}
+  options: { chunkBytes?: number; work?: BridgeWorkContext } = {}
 ): Promise<string> {
   if (value.assets.length !== assets.length) throw new Error("Streamed asset count does not match the package");
   const chunkBytes = positiveInteger("chunkBytes", options.chunkBytes ?? DEFAULT_FILE_CHUNK_BYTES);
@@ -780,6 +826,7 @@ export async function fingerprintStreamingPackage(
     }))
   };
   const hash = createHash("sha256");
-  await updateCanonicalHash(hash, canonicalValue, queue, chunkBytes);
+  await checkpointBridgeWork(options.work, "fingerprint", 0);
+  await updateCanonicalHash(hash, canonicalValue, queue, chunkBytes, options.work);
   return hash.digest("hex");
 }

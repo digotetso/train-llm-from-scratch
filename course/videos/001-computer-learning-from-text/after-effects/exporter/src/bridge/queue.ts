@@ -33,6 +33,7 @@ import {
 } from "./ownership.ts";
 import { exporterPaths, type ExporterPaths } from "./paths.ts";
 import type { StreamedAssetFile } from "./streaming-package.ts";
+import { checkpointBridgeWork, type BridgeWorkContext } from "./work-control.ts";
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const PACKAGE_SUFFIX = ".video001-ae.json";
@@ -57,6 +58,10 @@ export interface EnqueueResult {
   filename: string;
   path: string;
   package: QueuedPackage;
+}
+
+export interface VerifiedEnqueueOptions {
+  work?: BridgeWorkContext;
 }
 
 export interface QuarantineResult {
@@ -181,7 +186,8 @@ export class QueueStore {
 
   async enqueueVerified(
     value: ExternalExporterPackage,
-    sources: readonly StreamedAssetFile[]
+    sources: readonly StreamedAssetFile[],
+    options: VerifiedEnqueueOptions = {}
   ): Promise<EnqueueResult> {
     this.assertDirectoryIdentities();
     if (this.lockOwner === undefined) throw new Error("Verified enqueue requires a bridge lifecycle owner");
@@ -202,13 +208,14 @@ export class QueueStore {
     return this.enqueueValidated(validated, (index, asset) => {
       const source = sources[index];
       if (source === undefined) throw new Error("Verified asset source is missing");
-      return this.copyVerifiedAsset(source, asset);
-    });
+      return this.copyVerifiedAsset(source, asset, options.work);
+    }, options.work);
   }
 
   private async enqueueValidated(
     validated: ExporterPackage | ExternalExporterPackage,
-    materializeAsset: (index: number, asset: AssetDescriptor | ExternalAssetDescriptor) => Promise<string>
+    materializeAsset: (index: number, asset: AssetDescriptor | ExternalAssetDescriptor) => Promise<string>,
+    work?: BridgeWorkContext
   ): Promise<EnqueueResult> {
     assertHash(validated.contentHash);
     const filename = `${validated.contentHash}${PACKAGE_SUFFIX}`;
@@ -263,6 +270,7 @@ export class QueueStore {
       }
 
       const queuedPackage: QueuedPackage = { ...validated, assets };
+      await checkpointBridgeWork(work, "copy", assets.reduce((total, asset) => total + asset.byteLength, 0));
       await this.atomicWrite(destination, Buffer.from(canonicalJson(queuedPackage), "utf8"));
       return { filename, path: destination, package: queuedPackage };
     } finally {
@@ -279,7 +287,8 @@ export class QueueStore {
 
   private async copyVerifiedAsset(
     source: StreamedAssetFile,
-    asset: ExternalAssetDescriptor
+    asset: ExternalAssetDescriptor,
+    work?: BridgeWorkContext
   ): Promise<string> {
     this.assertDirectoryIdentities();
     assertHash(asset.hash);
@@ -347,6 +356,7 @@ export class QueueStore {
         digest.update(bytes);
         await writeAll(temporaryHandle, bytes);
         position += result.bytesRead;
+        await checkpointBridgeWork(work, "copy", position);
       }
       const sourceAfter = await sourceHandle.stat();
       if (
@@ -371,7 +381,7 @@ export class QueueStore {
         await this.syncKnownDirectory(this.paths.assets);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (!(await this.verifyExistingAsset(destination, asset.hash, asset.byteLength))) throw error;
+        if (!(await this.verifyExistingAsset(destination, asset.hash, asset.byteLength, work))) throw error;
       }
       return destination;
     } finally {
@@ -399,7 +409,8 @@ export class QueueStore {
   private async verifyExistingAsset(
     path: string,
     expectedHash: string,
-    expectedSize: number
+    expectedSize: number,
+    work?: BridgeWorkContext
   ): Promise<boolean> {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
@@ -424,6 +435,7 @@ export class QueueStore {
         if (result.bytesRead === 0) throw new Error("Existing asset ended before its recorded size");
         digest.update(buffer.subarray(0, result.bytesRead));
         position += result.bytesRead;
+        await checkpointBridgeWork(work, "copy", position);
       }
       const after = await handle.stat();
       if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size) {

@@ -6,6 +6,7 @@ import {
   canonicalJson,
   contentFingerprintInput,
   type ExporterPackage,
+  type GroupNode,
   type RasterNode,
   type TextNode,
   validatePackage,
@@ -321,4 +322,24 @@ test("verified external assets reuse package schema and reference validation", (
     () => validatePackageWithVerifiedAssets(externalValue, [], byteCounts),
     /evidence|asset/i
   );
+});
+
+test("package validation rejects cyclic containers before recursive schema traversal", () => {
+  const value = makeValidPackage();
+  const group: GroupNode = {
+    id: "cyclic-group",
+    kind: "group",
+    name: "Cyclic_Group",
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    rotation: 0,
+    opacity: 1,
+    children: []
+  };
+  group.children.push(group);
+  value.frames[0]!.children = [group];
+
+  assert.throws(() => validatePackage(value), /cycle/i);
 });

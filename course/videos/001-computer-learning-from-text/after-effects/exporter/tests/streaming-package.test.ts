@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import { QueueStore } from "../src/bridge/queue.ts";
+import { BridgeWorkDeadlineError, type BridgeWorkContext, type BridgeWorkPhase } from "../src/bridge/work-control.ts";
 import {
   cleanupStreamedAssets,
   fingerprintStreamingPackage,
@@ -14,7 +17,14 @@ import {
   type OwnedTemporaryFile,
   type StreamingPackageLimits
 } from "../src/bridge/streaming-package.ts";
-import { contentFingerprintInput, type ExporterPackage, type RasterNode } from "../src/shared/contract.ts";
+import {
+  contentFingerprintInput,
+  type ExporterPackage,
+  type GroupNode,
+  type RasterNode,
+  validatePackage
+} from "../src/shared/contract.ts";
+import { LIMITS } from "../src/shared/limits.ts";
 import { makeValidPackage } from "./helpers/package.ts";
 
 const OWNER = {
@@ -59,6 +69,48 @@ function reverseWireOrder(value: ExporterPackage): Record<string, unknown> {
   };
 }
 
+function defineProtoKey(record: Record<string, unknown>): void {
+  Object.defineProperty(record, "__proto__", {
+    configurable: true,
+    enumerable: true,
+    value: { reviewFinding: true },
+    writable: true
+  });
+}
+
+function wrapFrameChildrenInGroups(value: ExporterPackage, count: number): void {
+  let children = value.frames[0]!.children;
+  for (let index = 0; index < count; index += 1) {
+    const group: GroupNode = {
+      id: `depth-group-${index}`,
+      kind: "group",
+      name: `Depth_Group_${index}`,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      rotation: 0,
+      opacity: 1,
+      children
+    };
+    children = [group];
+  }
+  value.frames[0]!.children = children;
+}
+
+function abortAtPhase(phase: BridgeWorkPhase): { context: BridgeWorkContext; controller: AbortController } {
+  const controller = new AbortController();
+  return {
+    controller,
+    context: {
+      deadlineSignal: controller.signal,
+      checkpoint: (progress) => {
+        if (progress.phase === phase) controller.abort();
+      }
+    }
+  };
+}
+
 async function spool(queue: QueueStore, body: string): Promise<OwnedTemporaryFile> {
   const path = join(
     queue.paths.tmp,
@@ -79,7 +131,10 @@ async function spool(queue: QueueStore, body: string): Promise<OwnedTemporaryFil
 function limits(body: string, value: ExporterPackage): StreamingPackageLimits {
   const encodedBytes = value.assets.reduce((total, asset) => total + asset.dataBase64.length, 0);
   return {
-    maxAggregateAssetBytes: value.assets.reduce((total, asset) => total + asset.byteLength, 0),
+    maxAggregateAssetBytes: Math.max(
+      value.assets.reduce((total, asset) => total + asset.byteLength, 0),
+      1
+    ),
     maxAssetBytes: Math.max(...value.assets.map((asset) => asset.byteLength), 1),
     maxBodyBytes: Buffer.byteLength(body),
     maxManifestBytes: Buffer.byteLength(body) - encodedBytes
@@ -137,6 +192,207 @@ test("streaming base64 decode and fingerprint encoding cross internal buffer bou
     value.contentHash
   );
   await cleanupStreamedAssets(result.assets, queue);
+});
+
+test("streaming asset parsing creates promises per chunk rather than per encoded byte", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "video001-streaming-promise-budget-"));
+  const queue = new QueueStore(root, OWNER);
+  const value = makeValidPackage();
+  const bytes = Buffer.allocUnsafe(49_157);
+  for (let index = 0; index < bytes.byteLength; index += 1) bytes[index] = (index * 19 + 7) & 0xff;
+  addAsset(value, bytes, "raster-promise-budget");
+  const body = JSON.stringify(reverseWireOrder(value));
+  const temporary = await spool(queue, body);
+  let promiseCount = 0;
+  const hook = createHook({
+    init(_asyncId, type): void {
+      if (type === "PROMISE") promiseCount += 1;
+    }
+  });
+
+  hook.enable();
+  let result: Awaited<ReturnType<typeof readStreamingPackage>>;
+  try {
+    result = await readStreamingPackage(temporary, queue, OWNER, {
+      chunkBytes: 64 * 1024,
+      limits: limits(body, value)
+    });
+  } finally {
+    hook.disable();
+  }
+
+  t.diagnostic(`${promiseCount} promises while parsing ${bytes.byteLength} decoded asset bytes`);
+  assert.ok(promiseCount < 20_000, `created ${promiseCount} promises while parsing ${bytes.byteLength} bytes`);
+  await cleanupStreamedAssets(result.assets, queue);
+});
+
+test("streaming parser sustains production-headroom throughput on four MiB of encoded asset data", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "video001-streaming-throughput-"));
+  const queue = new QueueStore(root, OWNER);
+  const value = makeValidPackage();
+  const bytes = Buffer.allocUnsafe(3 * 1024 * 1024 + 64);
+  for (let index = 0; index < bytes.byteLength; index += 1) bytes[index] = (index * 13 + 29) & 0xff;
+  addAsset(value, bytes, "raster-throughput");
+  assert.ok(value.assets[0]!.dataBase64.length > 4 * 1024 * 1024);
+  const body = JSON.stringify(reverseWireOrder(value));
+  const temporary = await spool(queue, body);
+  let parseCheckpoints = 0;
+  const chunkBytes = 64 * 1024;
+
+  const startedAt = performance.now();
+  const result = await readStreamingPackage(temporary, queue, OWNER, {
+    chunkBytes,
+    limits: limits(body, value),
+    work: {
+      checkpoint: ({ phase }) => {
+        if (phase === "parse") parseCheckpoints += 1;
+      }
+    }
+  });
+  const elapsedMs = performance.now() - startedAt;
+  const encodedMiB = value.assets[0]!.dataBase64.length / (1024 * 1024);
+  const throughputMiBPerSecond = encodedMiB / (elapsedMs / 1_000);
+
+  t.diagnostic(
+    `${encodedMiB.toFixed(3)} MiB encoded in ${elapsedMs.toFixed(3)} ms (${throughputMiBPerSecond.toFixed(1)} MiB/s), ${parseCheckpoints} parse checkpoints`
+  );
+  assert.ok(
+    throughputMiBPerSecond >= 30,
+    `streaming parse throughput ${throughputMiBPerSecond.toFixed(1)} MiB/s is below the 30 MiB/s budget`
+  );
+  const inputChunks = Math.ceil(Buffer.byteLength(body) / chunkBytes);
+  assert.ok(parseCheckpoints >= inputChunks);
+  assert.ok(parseCheckpoints <= inputChunks * 2 + 4);
+  await cleanupStreamedAssets(result.assets, queue);
+});
+
+test("streaming parse stops at an injected deadline checkpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-streaming-parse-deadline-"));
+  const queue = new QueueStore(root, OWNER);
+  const value = makeValidPackage();
+  addAsset(value, Buffer.from("parse deadline"), "raster-parse-deadline");
+  const body = JSON.stringify(reverseWireOrder(value));
+  const { context } = abortAtPhase("parse");
+
+  await assert.rejects(
+    readStreamingPackage(await spool(queue, body), queue, OWNER, {
+      chunkBytes: 3,
+      limits: limits(body, value),
+      work: context
+    }),
+    (error: unknown) => error instanceof BridgeWorkDeadlineError
+  );
+  assert.deepEqual((await readdir(queue.paths.tmp)).filter((name) => name.startsWith(".http-asset.")), []);
+});
+
+test("streaming fingerprint stops at an injected deadline checkpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-streaming-fingerprint-deadline-"));
+  const queue = new QueueStore(root, OWNER);
+  const value = makeValidPackage();
+  addAsset(value, Buffer.from("fingerprint deadline"), "raster-fingerprint-deadline");
+  const body = JSON.stringify(reverseWireOrder(value));
+  const parsed = await readStreamingPackage(await spool(queue, body), queue, OWNER, {
+    chunkBytes: 3,
+    limits: limits(body, value)
+  });
+  const { context } = abortAtPhase("fingerprint");
+
+  try {
+    await assert.rejects(
+      fingerprintStreamingPackage(parsed.package, parsed.assets, queue, { chunkBytes: 3, work: context }),
+      (error: unknown) => error instanceof BridgeWorkDeadlineError
+    );
+  } finally {
+    await cleanupStreamedAssets(parsed.assets, queue);
+  }
+});
+
+test("verified queue copy stops at an injected deadline checkpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-streaming-copy-deadline-"));
+  const queue = new QueueStore(root, OWNER);
+  const value = makeValidPackage();
+  const bytes = Buffer.from("verified copy deadline");
+  addAsset(value, bytes, "raster-copy-deadline");
+  value.contentHash = createHash("sha256").update(contentFingerprintInput(value)).digest("hex");
+  const body = JSON.stringify(reverseWireOrder(value));
+  const parsed = await readStreamingPackage(await spool(queue, body), queue, OWNER, {
+    chunkBytes: 3,
+    limits: limits(body, value)
+  });
+  const { context } = abortAtPhase("copy");
+
+  try {
+    await assert.rejects(
+      queue.enqueueVerified(parsed.package, parsed.assets, { work: context }),
+      (error: unknown) => error instanceof BridgeWorkDeadlineError
+    );
+    assert.deepEqual(await readdir(queue.paths.incoming), []);
+    assert.deepEqual(await readdir(queue.paths.assets), []);
+  } finally {
+    await cleanupStreamedAssets(parsed.assets, queue);
+  }
+});
+
+test("streaming objects preserve prototype-named keys for exact-key validation", async () => {
+  for (const boundary of ["package", "node", "asset"] as const) {
+    const root = await mkdtemp(join(tmpdir(), `video001-streaming-proto-${boundary}-`));
+    const queue = new QueueStore(root, OWNER);
+    const value = makeValidPackage();
+    if (boundary === "asset") addAsset(value, Buffer.from("proto asset"), "raster-proto");
+    const wire = reverseWireOrder(value);
+    if (boundary === "package") {
+      defineProtoKey(wire);
+    } else if (boundary === "node") {
+      const frames = wire.frames as Array<{ children: Array<Record<string, unknown>> }>;
+      defineProtoKey(frames[0]!.children[0]!);
+    } else {
+      defineProtoKey((wire.assets as Array<Record<string, unknown>>)[0]!);
+    }
+    const body = JSON.stringify(wire);
+    const parsed = JSON.parse(body) as unknown;
+    assert.throws(() => validatePackage(parsed), /unexpected|unknown field/i, boundary);
+
+    await assert.rejects(
+      readStreamingPackage(await spool(queue, body), queue, OWNER, {
+        chunkBytes: 3,
+        limits: limits(body, value)
+      }),
+      /unexpected|unknown field/i,
+      boundary
+    );
+  }
+});
+
+test("normal and streaming validation share the same JSON container-depth limit", async () => {
+  assert.equal(LIMITS.maxJsonContainerDepth, 64);
+  const cases = [
+    { groups: 28, accepted: true },
+    { groups: 29, accepted: false }
+  ];
+  for (const entry of cases) {
+    const root = await mkdtemp(join(tmpdir(), `video001-streaming-depth-${entry.groups}-`));
+    const queue = new QueueStore(root, OWNER);
+    const value = makeValidPackage();
+    wrapFrameChildrenInGroups(value, entry.groups);
+    const body = JSON.stringify(reverseWireOrder(value));
+    const parsed = JSON.parse(body) as unknown;
+    if (entry.accepted) {
+      assert.doesNotThrow(() => validatePackage(parsed));
+      await readStreamingPackage(await spool(queue, body), queue, OWNER, {
+        chunkBytes: 3,
+        limits: limits(body, value)
+      });
+    } else {
+      assert.throws(() => validatePackage(parsed), /nesting|depth/i);
+      await assert.rejects(
+        readStreamingPackage(await spool(queue, body), queue, OWNER, {
+          chunkBytes: 3,
+          limits: limits(body, value)
+        }),
+        /nesting|depth/i
+      );
+    }
+  }
 });
 
 test("streaming reader rejects raw, manifest, per-asset, and aggregate byte excesses", async () => {

@@ -417,11 +417,42 @@ function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
+function assertJsonContainerDepth(value: unknown): void {
+  type Entry = { depth: number; exit: boolean; value: unknown };
+  const ancestors = new Set<object>();
+  const stack: Entry[] = [{ depth: 1, exit: false, value }];
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (entry === undefined || entry.value === null || typeof entry.value !== "object") continue;
+    const container = entry.value;
+    if (entry.exit) {
+      ancestors.delete(container);
+      continue;
+    }
+    if (entry.depth > LIMITS.maxJsonContainerDepth) {
+      invalid("$", `JSON container nesting exceeds the ${LIMITS.maxJsonContainerDepth}-level limit`);
+    }
+    if (ancestors.has(container)) invalid("$", "JSON containers must not contain a cycle");
+    ancestors.add(container);
+    stack.push({ depth: entry.depth, exit: true, value: container });
+    const children = Array.isArray(container)
+      ? container
+      : Object.keys(container).map((key) => (container as UnknownRecord)[key]);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (child !== null && typeof child === "object") {
+        stack.push({ depth: entry.depth + 1, exit: false, value: child });
+      }
+    }
+  }
+}
+
 function validatePackageInternal(
   value: unknown,
   allowEmptyContentHash: boolean,
   verifiedAssets?: { byteCounts: PackageByteCounts; evidence: readonly VerifiedAssetEvidence[] }
 ): ExporterPackage {
+  assertJsonContainerDepth(value);
   const record = recordAt(value, "$");
   exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "source", "target", "frames", "assets"], "$");
 

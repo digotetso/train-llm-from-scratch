@@ -18,6 +18,11 @@ import {
   type OwnedTemporaryFile,
   type StreamedAssetFile
 } from "./streaming-package.ts";
+import {
+  BridgeWorkDeadlineError,
+  BridgeWorkShutdownError,
+  type BridgeWorkContext
+} from "./work-control.ts";
 
 const JSON_MEDIA_TYPE = "application/json";
 const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
@@ -42,11 +47,13 @@ interface BridgeLimits {
 
 export interface CreateBridgeServerOptions {
   auth: AuthStore;
+  createExportDeadlineSignal?: () => AbortSignal;
   host: string;
   limits?: Partial<BridgeLimits>;
   now?: () => number;
   port: number;
   queue: QueueStore;
+  workCheckpoint?: BridgeWorkContext["checkpoint"];
 }
 
 export interface BridgeServer {
@@ -466,6 +473,7 @@ class StructuredLog {
 
 class NodeBridgeServer implements BridgeServer {
   private readonly auth: AuthStore;
+  private readonly createExportDeadlineSignal: () => AbortSignal;
   private readonly host: string;
   private readonly limits: BridgeLimits;
   private readonly log: StructuredLog;
@@ -474,6 +482,7 @@ class NodeBridgeServer implements BridgeServer {
   private readonly port: number;
   private readonly queue: QueueStore;
   private readonly server: Server;
+  private readonly workCheckpoint: BridgeWorkContext["checkpoint"];
   private readonly shutdownController = new AbortController();
   private readonly activeHandlers = new Set<Promise<void>>();
   private readonly exportBodyGate = new BoundedWorkGate(
@@ -516,10 +525,13 @@ class NodeBridgeServer implements BridgeServer {
       retentionMs: validateIntegerLimit("retentionMs", configured.retentionMs ?? RETENTION_MS)
     };
     this.auth = options.auth;
+    this.createExportDeadlineSignal = options.createExportDeadlineSignal
+      ?? (() => AbortSignal.timeout(this.limits.requestTimeoutMs));
     this.host = options.host;
     this.now = options.now ?? Date.now;
     this.port = options.port;
     this.queue = options.queue;
+    this.workCheckpoint = options.workCheckpoint;
     if (this.queue.owner === undefined) throw new TypeError("Bridge queue requires lifecycle ownership");
     this.owner = this.queue.owner;
     this.log = new StructuredLog(
@@ -707,7 +719,10 @@ class NodeBridgeServer implements BridgeServer {
       terminateRequestAfterResponse(request, response);
       return;
     }
-    const bodyDeadline = AbortSignal.timeout(this.limits.requestTimeoutMs);
+    const bodyDeadline = this.createExportDeadlineSignal();
+    if (!(bodyDeadline instanceof AbortSignal)) {
+      throw new TypeError("Export deadline factory must return an AbortSignal");
+    }
     const bodyWork = await this.exportBodyGate.acquire(bodyDeadline, this.shutdownController.signal);
     if (bodyWork === "busy") {
       this.respondError(response, route, 503, "EXPORT_BUSY", "The export body processor is busy");
@@ -724,6 +739,27 @@ class NodeBridgeServer implements BridgeServer {
       return;
     }
     const releaseBodyWork = bodyWork;
+    const work: BridgeWorkContext = {
+      deadlineSignal: bodyDeadline,
+      onCancellation: releaseBodyWork,
+      shutdownSignal: this.shutdownController.signal,
+      ...(this.workCheckpoint === undefined ? {} : { checkpoint: this.workCheckpoint })
+    };
+    let observesProcessingCancellation = false;
+    const releaseOnProcessingCancellation = (): void => releaseBodyWork();
+    const observeProcessingCancellation = (): void => {
+      if (observesProcessingCancellation) return;
+      observesProcessingCancellation = true;
+      bodyDeadline.addEventListener("abort", releaseOnProcessingCancellation, { once: true });
+      this.shutdownController.signal.addEventListener("abort", releaseOnProcessingCancellation, { once: true });
+      if (bodyDeadline.aborted || this.shutdownController.signal.aborted) releaseBodyWork();
+    };
+    const stopObservingProcessingCancellation = (): void => {
+      if (!observesProcessingCancellation) return;
+      observesProcessingCancellation = false;
+      bodyDeadline.removeEventListener("abort", releaseOnProcessingCancellation);
+      this.shutdownController.signal.removeEventListener("abort", releaseOnProcessingCancellation);
+    };
     let spool: OwnedTemporaryFile | undefined;
     let streamedAssets: StreamedAssetFile[] = [];
     try {
@@ -736,6 +772,7 @@ class NodeBridgeServer implements BridgeServer {
         "The request body exceeds the configured limit"
       );
       if (spool === undefined) return;
+      observeProcessingCancellation();
       let parsed: Awaited<ReturnType<typeof readStreamingPackage>>;
       try {
         parsed = await readStreamingPackage(spool, this.queue, this.owner, {
@@ -744,7 +781,8 @@ class NodeBridgeServer implements BridgeServer {
             maxAssetBytes: this.limits.maxAssetBytes,
             maxBodyBytes: this.limits.maxBodyBytes,
             maxManifestBytes: this.limits.maxManifestBytes
-          }
+          },
+          work
         });
       } catch (error) {
         await this.removeSpooledBody(spool);
@@ -766,41 +804,67 @@ class NodeBridgeServer implements BridgeServer {
       streamedAssets = [...parsed.assets];
       await this.removeSpooledBody(spool);
       spool = undefined;
-      const actualContentHash = await fingerprintStreamingPackage(parsed.package, streamedAssets, this.queue);
+      const actualContentHash = await fingerprintStreamingPackage(
+        parsed.package,
+        streamedAssets,
+        this.queue,
+        { work }
+      );
       if (actualContentHash !== parsed.package.contentHash) {
-        await cleanupStreamedAssets(streamedAssets, this.queue);
+        await cleanupStreamedAssets(streamedAssets, this.queue, work);
         streamedAssets = [];
         this.respondError(response, route, 422, "CONTENT_HASH_MISMATCH", "The package fingerprint does not match its contents");
         return;
       }
       if (parsed.package.assets.some((asset, index) => asset.hash !== streamedAssets[index]?.hash)) {
-        await cleanupStreamedAssets(streamedAssets, this.queue);
+        await cleanupStreamedAssets(streamedAssets, this.queue, work);
         streamedAssets = [];
         this.respondError(response, route, 422, "ASSET_HASH_MISMATCH", "An asset hash does not match its decoded bytes");
         return;
       }
       try {
-        await this.queue.enqueueVerified(parsed.package, streamedAssets);
+        await this.queue.enqueueVerified(parsed.package, streamedAssets, { work });
       } catch (error) {
         if (error instanceof QueueConflictError) {
-          await cleanupStreamedAssets(streamedAssets, this.queue);
+          await cleanupStreamedAssets(streamedAssets, this.queue, work);
           streamedAssets = [];
           this.respondError(response, route, 409, "QUEUE_DUPLICATE", "This package is already queued");
           return;
         }
         throw error;
       }
-      await cleanupStreamedAssets(streamedAssets, this.queue);
+      await cleanupStreamedAssets(streamedAssets, this.queue, work);
       streamedAssets = [];
       sendJson(response, 202, { status: "accepted", contentHash: parsed.package.contentHash });
       this.log.record(route, 202);
+    } catch (error) {
+      if (error instanceof BridgeWorkDeadlineError || error instanceof BridgeWorkShutdownError) {
+        releaseBodyWork();
+        if (streamedAssets.length > 0) {
+          await cleanupStreamedAssets(streamedAssets, this.queue, work);
+          streamedAssets = [];
+        }
+        if (spool !== undefined) {
+          await this.removeSpooledBody(spool);
+          spool = undefined;
+        }
+        if (error instanceof BridgeWorkDeadlineError) {
+          this.respondError(response, route, 408, "REQUEST_TIMEOUT", "The export request exceeded its processing deadline");
+          terminateRequestAfterResponse(request, response);
+        } else if (!request.destroyed) {
+          request.destroy();
+        }
+        return;
+      }
+      throw error;
     } finally {
       try {
-        if (streamedAssets.length > 0) await cleanupStreamedAssets(streamedAssets, this.queue);
+        if (streamedAssets.length > 0) await cleanupStreamedAssets(streamedAssets, this.queue, work);
       } finally {
         try {
           if (spool !== undefined) await this.removeSpooledBody(spool);
         } finally {
+          stopObservingProcessingCancellation();
           releaseBodyWork();
         }
       }
