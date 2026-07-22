@@ -861,6 +861,7 @@ test("manifest generator rejects missing, malformed, and example IDs and emits e
       ui: "ui.html",
       editorType: ["figma"],
       documentAccess: "dynamic-page",
+      enablePrivatePluginApi: true,
       networkAccess: {
         allowedDomains: ["none"],
         devAllowedDomains: [BRIDGE_BASE_URL],
@@ -903,6 +904,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     const html = readFileSync(join(outDir, "ui.html"), "utf8");
     const manifest = readFileSync(join(outDir, "manifest.json"), "utf8");
     const parsedManifest = JSON.parse(manifest) as {
+      enablePrivatePluginApi: boolean;
       networkAccess: { allowedDomains: string[]; devAllowedDomains: string[] };
     };
     assert.match(code, /95:44/);
@@ -919,6 +921,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.doesNotMatch(`${code}\n${html}`, /console\.(?:log|debug|info)\s*\(/);
     assert.doesNotMatch(`${code}\n${html}`, /1661000000000000000/);
     assert.doesNotMatch(code, /TextEncoder|crypto\.subtle|globalThis\.crypto/);
+    assert.equal(parsedManifest.enablePrivatePluginApi, true);
     assert.deepEqual(parsedManifest.networkAccess.allowedDomains, ["none"]);
     assert.deepEqual(parsedManifest.networkAccess.devAllowedDomains, [BRIDGE_BASE_URL]);
     assert.match(code, /http:\/\/localhost:3456/);

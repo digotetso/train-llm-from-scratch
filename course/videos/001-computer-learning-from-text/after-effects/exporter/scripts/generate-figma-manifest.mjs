@@ -27,6 +27,7 @@ export function figmaManifest(id) {
     ui: "ui.html",
     editorType: ["figma"],
     documentAccess: "dynamic-page",
+    enablePrivatePluginApi: true,
     networkAccess: {
       allowedDomains: ["none"],
       devAllowedDomains: [FIGMA_BRIDGE_ORIGIN],
