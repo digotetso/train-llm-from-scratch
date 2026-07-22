@@ -5,6 +5,7 @@ import {
   type ExportNode,
   type ExporterPackage
 } from "../shared/contract.ts";
+import { sha256Hex } from "../shared/sha256.ts";
 import type { ControllerToUi, FrameSummary, UiToController } from "./controller.ts";
 
 const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
@@ -29,7 +30,7 @@ export interface UiViewModel {
 export interface UiDependencies {
   postMessage(message: UiToController): void;
   render(view: UiViewModel): void;
-  digest(algorithm: "SHA-256", bytes: ArrayBuffer): Promise<ArrayBuffer>;
+  sha256(bytes: Uint8Array): Promise<string>;
   download(value: { bytes: Uint8Array; filename: string; mimeType: string }): void;
 }
 
@@ -152,10 +153,6 @@ export function validateControllerToUi(value: unknown): ControllerToUi {
   }
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function countNodes(nodes: readonly ExportNode[]): { native: number; raster: number } {
   let native = 0;
   let raster = 0;
@@ -253,13 +250,10 @@ export function createUiController(dependencies: UiDependencies): UiController {
         update({ busy: true, error: "", status: "Hashing package…" });
         try {
           const input = new TextEncoder().encode(contentFingerprintInput(message.value));
-          const digest = await dependencies.digest(
-            "SHA-256",
-            input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength) as ArrayBuffer
-          );
+          const contentHash = await dependencies.sha256(input);
           const finalValue = validatePackage({
             ...message.value,
-            contentHash: bytesToHex(new Uint8Array(digest))
+            contentHash
           });
           if (generationAtStart !== packageGeneration) return;
           retainedPackage = finalValue;
@@ -404,7 +398,7 @@ function startRuntime(): void {
 
   const ui = createUiController({
     postMessage: (message) => parent.postMessage({ pluginMessage: message }, "*"),
-    digest: (algorithm, bytes) => crypto.subtle.digest(algorithm, bytes),
+    sha256: async (bytes) => sha256Hex(bytes),
     download: ({ bytes, filename, mimeType }) => {
       const blob = new Blob([
         bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer

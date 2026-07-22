@@ -278,6 +278,9 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   });
   const uiJavaScript = singleOutput(uiResult, "UI");
   assertBrowserBundle(uiJavaScript, "UI");
+  if (/crypto\.subtle|globalThis\.crypto|SubtleCrypto/.test(uiJavaScript)) {
+    throw new Error("UI bundle contains Web Crypto unavailable in Figma's null-origin iframe");
+  }
   const uiHtml = template.replace(SCRIPT_MARKER, `<script>${uiJavaScript.replaceAll("</script", "<\\/script")}</script>`);
   if (/https?:\/\//.test(uiHtml)) throw new Error("UI output contains a remote asset or URL");
 

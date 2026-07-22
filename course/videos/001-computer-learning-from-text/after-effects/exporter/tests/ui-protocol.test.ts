@@ -28,6 +28,7 @@ import {
   type UiViewModel
 } from "../src/figma/ui.ts";
 import { contentFingerprintInput, validatePackage, type ExporterPackage } from "../src/shared/contract.ts";
+import { sha256Hex } from "../src/shared/sha256.ts";
 import { makeValidPackage } from "./helpers/package.ts";
 
 const PROJECT_ROOT = new URL("../", import.meta.url);
@@ -504,14 +505,14 @@ async function hashedPackage(): Promise<ExporterPackage> {
   return validatePackage(value);
 }
 
-test("UI hashes with Web Crypto parity, returns only package-ready, exposes counts, and downloads exact UTF-8 vendor bytes", async () => {
+test("UI hashes with pure SHA-256 parity, returns only package-ready, exposes counts, and downloads exact UTF-8 vendor bytes", async () => {
   const posted: unknown[] = [];
   const views: UiViewModel[] = [];
   const downloads: Array<{ bytes: Uint8Array; filename: string; mimeType: string }> = [];
   const ui = createUiController({
     postMessage: (message) => posted.push(structuredClone(message)),
     render: (view) => views.push(structuredClone(view)),
-    digest: (algorithm, bytes) => crypto.subtle.digest(algorithm, bytes),
+    sha256: async (bytes) => sha256Hex(bytes),
     download: (value) => downloads.push(value)
   });
   const unhashed = makeValidPackage();
@@ -539,18 +540,18 @@ test("UI hashes with Web Crypto parity, returns only package-ready, exposes coun
   assert.deepEqual(JSON.parse(new TextDecoder().decode(downloads[0]?.bytes)), ready.value);
 });
 
-test("UI discards a stale digest after a newer selection and package generation", async () => {
-  const firstDigest = deferred<ArrayBuffer>();
+test("UI discards a stale hash after a newer selection and package generation", async () => {
+  const firstHash = deferred<string>();
   let digestCount = 0;
   const posted: unknown[] = [];
   const views: UiViewModel[] = [];
   const ui = createUiController({
     postMessage: (message) => posted.push(structuredClone(message)),
     render: (view) => views.push(structuredClone(view)),
-    digest: async (algorithm, bytes) => {
+    sha256: async (bytes) => {
       digestCount += 1;
-      if (digestCount === 1) return firstDigest.promise;
-      return crypto.subtle.digest(algorithm, bytes);
+      if (digestCount === 1) return firstHash.promise;
+      return sha256Hex(bytes);
     },
     download: () => undefined
   });
@@ -573,7 +574,7 @@ test("UI discards a stale digest after a newer selection and package generation"
     frames: [{ nodeId: "95:44", name: current.frames[0]!.name, duration: 28 }]
   });
   await ui.handleMessage({ type: "package-unhashed", generation: 2, value: current });
-  firstDigest.resolve(new Uint8Array(32).buffer);
+  firstHash.resolve("0".repeat(64));
   await staleHash;
 
   const readyMessages = posted.filter((message): message is { type: "package-ready"; generation: number; value: ExporterPackage } =>
@@ -591,7 +592,7 @@ test("UI gates bridge actions with matching operation generations and a busy sta
   const ui = createUiController({
     postMessage: (message) => posted.push(structuredClone(message)),
     render: (view) => views.push(structuredClone(view)),
-    digest: (algorithm, bytes) => crypto.subtle.digest(algorithm, bytes),
+    sha256: async (bytes) => sha256Hex(bytes),
     download: () => undefined
   });
 
@@ -904,7 +905,7 @@ test("bridge outage reports a structured result and leaves UI manual download en
   const ui = createUiController({
     postMessage: () => undefined,
     render: (view) => views.push(structuredClone(view)),
-    digest: (algorithm, bytes) => crypto.subtle.digest(algorithm, bytes),
+    sha256: async (bytes) => sha256Hex(bytes),
     download: () => undefined
   });
   const value = makeValidPackage();
@@ -1046,6 +1047,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.doesNotMatch(`${code}\n${html}`, /console\.(?:log|debug|info)\s*\(/);
     assert.doesNotMatch(`${code}\n${html}`, /1661000000000000000/);
     assert.doesNotMatch(code, /TextEncoder|crypto\.subtle|globalThis\.crypto/);
+    assert.doesNotMatch(html, /crypto\.subtle|globalThis\.crypto|SubtleCrypto/);
     assert.equal(parsedManifest.enablePrivatePluginApi, true);
     assert.deepEqual(parsedManifest.networkAccess.allowedDomains, ["none"]);
     assert.deepEqual(parsedManifest.networkAccess.devAllowedDomains, [BRIDGE_BASE_URL]);
@@ -1072,7 +1074,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
   }
 });
 
-test("built UI accepts Figma-forwarded controller envelopes with routing metadata", () => {
+test("built UI accepts routed messages and hashes packages without crypto", async () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-ui-runtime-"));
   try {
     const pluginIdFile = join(fixture, ".figma-plugin-id");
@@ -1147,15 +1149,15 @@ test("built UI accepts Figma-forwarded controller envelopes with routing metadat
         createObjectURL: () => "blob:fixture",
         revokeObjectURL: () => undefined
       },
-      crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
+      crypto: undefined,
       document,
       messageJson: "",
       nonParentSource: {},
       parent: parentWindow,
-      structuredClone,
       window
     };
     const context = createContext(sandbox);
+    runInContext("globalThis.structuredClone = value => JSON.parse(JSON.stringify(value))", context);
     runInContext(uiJavaScript, context);
 
     assert.deepEqual(posted, [{ pluginMessage: { type: "refresh-selection" } }]);
@@ -1206,6 +1208,47 @@ test("built UI accepts Figma-forwarded controller envelopes with routing metadat
     runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
     assert.equal(elements.get("status")?.textContent, "Plugin message rejected.");
     assert.match(elements.get("error")?.textContent ?? "", /unknown field/i);
+
+    const unhashed = makeValidPackage();
+    unhashed.contentHash = "";
+    sandbox.messageJson = JSON.stringify({
+      pluginMessage: {
+        type: "selection",
+        generation: 3,
+        frames: [{ nodeId: "95:44", name: unhashed.frames[0]!.name, duration: 28 }]
+      },
+      pluginId: "987654321012345678"
+    });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    sandbox.messageJson = JSON.stringify({
+      pluginMessage: { type: "package-unhashed", generation: 3, value: unhashed },
+      pluginId: "987654321012345678"
+    });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    for (let attempt = 0; attempt < 20 && !posted.some((message) =>
+      typeof message === "object" && message !== null &&
+      "pluginMessage" in message &&
+      typeof message.pluginMessage === "object" && message.pluginMessage !== null &&
+      "type" in message.pluginMessage && message.pluginMessage.type === "package-ready"
+    ); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const readyEnvelope = posted.find((message) =>
+      typeof message === "object" && message !== null &&
+      "pluginMessage" in message &&
+      typeof message.pluginMessage === "object" && message.pluginMessage !== null &&
+      "type" in message.pluginMessage && message.pluginMessage.type === "package-ready"
+    ) as { pluginMessage: { type: "package-ready"; generation: number; value: ExporterPackage } } | undefined;
+    assert.ok(readyEnvelope, JSON.stringify(posted));
+    assert.equal(readyEnvelope.pluginMessage.generation, 3);
+    assert.equal(
+      readyEnvelope.pluginMessage.value.contentHash,
+      createHash("sha256").update(contentFingerprintInput(unhashed), "utf8").digest("hex")
+    );
+    assert.equal(elements.get("status")?.textContent, "Package ready for live send or download.");
+    assert.equal(elements.get("native-count")?.textContent, "1");
+    assert.equal(elements.get("raster-count")?.textContent, "0");
+    assert.equal(elements.get("download-package")?.disabled, false);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

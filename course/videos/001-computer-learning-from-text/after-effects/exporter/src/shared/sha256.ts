@@ -18,7 +18,7 @@ function rotateRight(value: number, count: number): number {
   return (value >>> count) | (value << (32 - count));
 }
 
-/** Pure SHA-256 for the restricted Figma main-thread sandbox. */
+/** Pure SHA-256 for restricted Figma runtimes. */
 export function sha256Hex(bytes: Uint8Array): string {
   const paddedLength = Math.ceil((bytes.byteLength + 9) / 64) * 64;
   const padded = new Uint8Array(paddedLength);
