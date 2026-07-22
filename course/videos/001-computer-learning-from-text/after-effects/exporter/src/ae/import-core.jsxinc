@@ -1,0 +1,118 @@
+/*
+ * Video 001 Figma to After Effects Exporter import core.
+ *
+ * This file uses concepts from AEUX and has been modified for this exporter.
+ * Copyright 2017 Google Inc.
+ * Licensed under the Apache License, Version 2.0.
+ */
+
+var Video001ExporterCore = (function () {
+    function escapeRegularExpression(value) {
+        return value.replace(/([\\^$.*+?()[\]{}|])/g, "\\$1");
+    }
+
+    function padVersion(value) {
+        if (value < 10) {
+            return "00" + value;
+        }
+        if (value < 100) {
+            return "0" + value;
+        }
+        return String(value);
+    }
+
+    function nextVersionName(existingNames, baseName) {
+        var pattern = new RegExp("^" + escapeRegularExpression(baseName) + "_v([0-9]{3})$");
+        var highest = 0;
+        var index;
+        var match;
+        var version;
+
+        for (index = 0; index < existingNames.length; index += 1) {
+            match = pattern.exec(existingNames[index]);
+            if (match) {
+                version = parseInt(match[1], 10);
+                if (version > highest) {
+                    highest = version;
+                }
+            }
+        }
+
+        if (highest >= 999) {
+            throw new Error("Cannot create version beyond " + baseName + "_v999");
+        }
+
+        return baseName + "_v" + padVersion(highest + 1);
+    }
+
+    function scaleRect(rect, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+        var scaleX = targetWidth / sourceWidth;
+        var scaleY = targetHeight / sourceHeight;
+        return {
+            x: rect.x * scaleX,
+            y: rect.y * scaleY,
+            width: rect.width * scaleX,
+            height: rect.height * scaleY
+        };
+    }
+
+    function sanitizeAeName(name) {
+        var segments = String(name).split(/[\\/]+/);
+        var safeName = "";
+        var index;
+
+        for (index = 0; index < segments.length; index += 1) {
+            if (segments[index] !== "" && segments[index] !== "." && segments[index] !== "..") {
+                safeName = segments[index];
+            }
+        }
+
+        safeName = safeName.replace(/[^A-Za-z0-9 _.\-]/g, "_");
+        if (safeName === "" || safeName === "." || safeName === "..") {
+            safeName = "Untitled";
+        }
+        return safeName.substring(0, 120);
+    }
+
+    function isDuplicateHash(items, contentHash) {
+        var expectedComment = "Video001Export sha256:" + contentHash;
+        var index;
+        for (index = 0; index < items.length; index += 1) {
+            if (items[index] && items[index].comment === expectedComment) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function copyArray(values) {
+        var result = [];
+        var index;
+        for (index = 0; index < values.length; index += 1) {
+            result[result.length] = values[index];
+        }
+        return result;
+    }
+
+    function makeImportReport(options) {
+        return {
+            contentHash: options.contentHash,
+            createdCompNames: copyArray(options.createdCompNames),
+            layerCount: options.layerCount,
+            nativeCount: options.nativeCount,
+            rasterCount: options.rasterCount,
+            missingFonts: copyArray(options.missingFonts),
+            fallbacks: copyArray(options.fallbacks),
+            warnings: copyArray(options.warnings),
+            elapsedMs: options.elapsedMs
+        };
+    }
+
+    return {
+        nextVersionName: nextVersionName,
+        scaleRect: scaleRect,
+        sanitizeAeName: sanitizeAeName,
+        isDuplicateHash: isDuplicateHash,
+        makeImportReport: makeImportReport
+    };
+}());
