@@ -67,9 +67,9 @@ Close the two mechanisms into one distinction we can use. **Representation chang
 
 [On screen: `matgpt/data/normalize.py` flowing into `matgpt/data/prepare.py`.]
 
-Use the distinction we just built as a question: when this code runs, is it changing data, or is it changing model parameters? In `normalize.py`, `normalize_text` begins by applying NFKC, a chosen Unicode normalization form. It then replaces Windows-style and older newline styles with `\n`, removes selected control characters, removes whitespace at the right edge of each line, strips whitespace from the outer edges, reduces long blank-line runs, and returns the cleaned text.
+Use the distinction we just built as a question: when this code runs, is it changing data, or is it changing model parameters? In `normalize.py`, `normalize_text` first turns the incoming value into a string with `str(text)`, then applies NFKC, a chosen Unicode normalization form. It then replaces Windows-style and older newline styles with `\n`, removes selected control characters, removes whitespace at the right edge of each line, strips whitespace from the outer edges, reduces long blank-line runs, and returns the cleaned text.
 
-The trace matters. Source text enters the function. NFKC changes it according to the chosen form. Newline replacement makes line endings consistent. The line cleanup and outer stripping remove selected whitespace. The function returns the resulting text; it does not make a prediction or adjust a parameter.
+The trace matters. A source value enters the function. `str(text)` produces its string form. NFKC changes that string according to the chosen form. Newline replacement makes line endings consistent. The line cleanup and outer stripping remove selected whitespace. The function returns the resulting text; it does not make a prediction or adjust a parameter.
 
 The annotations `text: str` and `-> str` communicate the intended input and output types to readers and tools. Python does not enforce those annotations at runtime.
 
