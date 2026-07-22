@@ -82,6 +82,7 @@ type UnknownRecord = Record<string, unknown>;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const UNSAFE_NAME_PATTERN = /[\u0000-\u001f\u007f/\\]/;
 
 function invalid(path: string, message: string): never {
@@ -170,8 +171,29 @@ function decodedBase64Length(value: unknown, path: string): { dataBase64: string
   if (dataBase64.length % 4 !== 0 || !BASE64_PATTERN.test(dataBase64)) {
     invalid(path, "expected canonical base64 data");
   }
+  if (dataBase64.endsWith("==")) {
+    const finalSymbol = BASE64_ALPHABET.indexOf(dataBase64.charAt(dataBase64.length - 3));
+    if ((finalSymbol & 0b1111) !== 0) invalid(path, "expected canonical base64 data");
+  } else if (dataBase64.endsWith("=")) {
+    const finalSymbol = BASE64_ALPHABET.indexOf(dataBase64.charAt(dataBase64.length - 2));
+    if ((finalSymbol & 0b11) !== 0) invalid(path, "expected canonical base64 data");
+  }
   const padding = dataBase64.endsWith("==") ? 2 : dataBase64.endsWith("=") ? 1 : 0;
   return { dataBase64, byteLength: (dataBase64.length / 4) * 3 - padding };
+}
+
+function preflightAssetByteLengths(values: unknown[]): void {
+  let aggregateAssetBytes = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const path = `$.assets[${index}]`;
+    const record = recordAt(values[index], path);
+    const byteLength = safeIntegerAt(record.byteLength, `${path}.byteLength`);
+    if (byteLength > LIMITS.maxAssetBytes) invalid(`${path}.byteLength`, "asset exceeds the per-asset limit");
+    aggregateAssetBytes += byteLength;
+    if (aggregateAssetBytes > LIMITS.maxAggregateAssetBytes) {
+      invalid("$.assets", "assets exceed the aggregate decoded-byte limit");
+    }
+  }
 }
 
 function registerNodeId(value: unknown, path: string, nodeIds: Set<string>): string {
@@ -377,6 +399,7 @@ function validatePackageInternal(value: unknown, allowEmptyContentHash: boolean)
 
   const assetValues = arrayAt(record.assets, "$.assets");
   if (assetValues.length > LIMITS.maxAssets) invalid("$.assets", `exceeds the ${LIMITS.maxAssets}-asset limit`);
+  preflightAssetByteLengths(assetValues);
 
   const nodeIds = new Set<string>();
   const rasterAssetHashes = new Set<string>();
