@@ -260,6 +260,94 @@ test("keeps supported groups and solid shapes native while rasterizing a gradien
   ]);
 });
 
+test("keeps a PASS_THROUGH selected frame editable instead of rasterizing its root", async () => {
+  const rasterized: string[] = [];
+  const frame = await serializeFrame(
+    root([
+      shape({ id: "native-root-child", name: "Native_Root_Child" })
+    ], { blendMode: "PASS_THROUGH" }),
+    { duration: 28 },
+    {
+      rasterScale: 1,
+      exportRaster: async (node) => {
+        rasterized.push(node.id);
+        return rasterAsset(node.id);
+      }
+    }
+  );
+
+  assert.deepEqual(rasterized, []);
+  assert.equal(findNode(frame, "Native_Root_Child").kind, "rect");
+  assert.deepEqual(frame.warnings, []);
+});
+
+test("keeps nested PASS_THROUGH groups and instances editable", async () => {
+  const instance = shape({
+    id: "pass-through-instance",
+    name: "Pass_Through_Instance",
+    type: "INSTANCE",
+    fills: [],
+    blendMode: "PASS_THROUGH",
+    children: [shape({ id: "instance-leaf", name: "Instance_Leaf" })]
+  });
+  const group = shape({
+    id: "pass-through-group",
+    name: "Pass_Through_Group",
+    type: "GROUP",
+    fills: [],
+    blendMode: "PASS_THROUGH",
+    children: [instance]
+  });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(root([group]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(rasterized, []);
+  assert.equal(findNode(frame, "Pass_Through_Group").kind, "group");
+  assert.equal(findNode(frame, "Pass_Through_Instance").kind, "group");
+  assert.equal(findNode(frame, "Instance_Leaf").kind, "rect");
+  assert.deepEqual(frame.warnings, []);
+});
+
+test("rasterizes nonstandard container blends and PASS_THROUGH non-containers", async () => {
+  const multiplyGroup = shape({
+    id: "multiply-group",
+    name: "Multiply_Group",
+    type: "GROUP",
+    fills: [],
+    blendMode: "MULTIPLY",
+    children: [shape({ id: "multiply-child", name: "Multiply_Child" })]
+  });
+  const passThroughShape = shape({
+    id: "pass-through-shape",
+    name: "Pass_Through_Shape",
+    blendMode: "PASS_THROUGH"
+  });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(root([multiplyGroup, passThroughShape]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(rasterized, ["multiply-group", "pass-through-shape"]);
+  assert.equal(findNode(frame, "Multiply_Group").kind, "raster");
+  assert.equal(findNode(frame, "Pass_Through_Shape").kind, "raster");
+  assert.deepEqual(frame.warnings, [
+    { nodeId: "multiply-group", nodeName: "Multiply_Group", property: "blendMode", fallback: "png" },
+    { nodeId: "pass-through-shape", nodeName: "Pass_Through_Shape", property: "blendMode", fallback: "png" }
+  ]);
+});
+
 test("injects pure raster export with deterministic PNG scale and verifies the returned hash", async () => {
   const gradient = shape({
     id: "96:5",

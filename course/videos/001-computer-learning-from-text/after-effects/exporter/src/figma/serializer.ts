@@ -257,10 +257,16 @@ function visibleEffects(node: FigmaNodeSnapshot): readonly { type: string; visib
   return (node.effects ?? []).filter((effect) => effect.visible !== false);
 }
 
+function hasRepresentableBlendMode(node: FigmaNodeSnapshot): boolean {
+  return node.blendMode === undefined ||
+    node.blendMode === "NORMAL" ||
+    (node.blendMode === "PASS_THROUGH" && GROUP_TYPES.has(node.type));
+}
+
 function rootAppearanceReason(node: FigmaNodeSnapshot): string | null {
   if (node.visible === false) return "visible";
   if (node.isMask === true) return "isMask";
-  if (node.blendMode !== undefined && node.blendMode !== "NORMAL") return "blendMode";
+  if (!hasRepresentableBlendMode(node)) return "blendMode";
   if (visibleEffects(node).length > 0) return "effects";
   if ((node.fills ?? []).some((paint) => paint.visible !== false)) return "fills";
   if ((node.strokes ?? []).some((paint) => paint.visible !== false)) return "strokes";
@@ -283,7 +289,7 @@ function segmentPaint(segment: StyledTextSegmentSnapshot): FigmaPaintSnapshot | 
 function directRasterReason(node: FigmaNodeSnapshot): string | null {
   if (node.visible === false) return "visible";
   if (node.isMask === true) return "isMask";
-  if (node.blendMode !== undefined && node.blendMode !== "NORMAL") return "blendMode";
+  if (!hasRepresentableBlendMode(node)) return "blendMode";
   if (visibleEffects(node).length > 0) return "effects";
 
   if (node.type === "TEXT") {
