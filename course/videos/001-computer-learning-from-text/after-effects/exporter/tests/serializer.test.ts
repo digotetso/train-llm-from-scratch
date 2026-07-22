@@ -315,7 +315,42 @@ test("keeps nested PASS_THROUGH groups and instances editable", async () => {
   assert.deepEqual(frame.warnings, []);
 });
 
-test("rasterizes nonstandard container blends and PASS_THROUGH non-containers", async () => {
+test("keeps supported PASS_THROUGH leaves native while MULTIPLY still rasterizes", async () => {
+  const passThroughRect = shape({
+    id: "pass-through-rect",
+    name: "Pass_Through_Rect",
+    blendMode: "PASS_THROUGH"
+  });
+  const passThroughText = textSnapshot({
+    id: "pass-through-text",
+    name: "Pass_Through_Text",
+    blendMode: "PASS_THROUGH"
+  });
+  const multiplyRect = shape({
+    id: "multiply-rect",
+    name: "Multiply_Rect",
+    blendMode: "MULTIPLY"
+  });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(root([passThroughRect, passThroughText, multiplyRect]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.equal(findNode(frame, "Pass_Through_Rect").kind, "rect");
+  assert.equal(findNode(frame, "Pass_Through_Text").kind, "text");
+  assert.equal(findNode(frame, "Multiply_Rect").kind, "raster");
+  assert.deepEqual(rasterized, ["multiply-rect"]);
+  assert.deepEqual(frame.warnings, [
+    { nodeId: "multiply-rect", nodeName: "Multiply_Rect", property: "blendMode", fallback: "png" }
+  ]);
+});
+
+test("rasterizes nonstandard container blends", async () => {
   const multiplyGroup = shape({
     id: "multiply-group",
     name: "Multiply_Group",
@@ -324,14 +359,9 @@ test("rasterizes nonstandard container blends and PASS_THROUGH non-containers", 
     blendMode: "MULTIPLY",
     children: [shape({ id: "multiply-child", name: "Multiply_Child" })]
   });
-  const passThroughShape = shape({
-    id: "pass-through-shape",
-    name: "Pass_Through_Shape",
-    blendMode: "PASS_THROUGH"
-  });
   const rasterized: string[] = [];
 
-  const frame = await serializeFrame(root([multiplyGroup, passThroughShape]), { duration: 28 }, {
+  const frame = await serializeFrame(root([multiplyGroup]), { duration: 28 }, {
     rasterScale: 1,
     exportRaster: async (node) => {
       rasterized.push(node.id);
@@ -339,13 +369,218 @@ test("rasterizes nonstandard container blends and PASS_THROUGH non-containers", 
     }
   });
 
-  assert.deepEqual(rasterized, ["multiply-group", "pass-through-shape"]);
+  assert.deepEqual(rasterized, ["multiply-group"]);
   assert.equal(findNode(frame, "Multiply_Group").kind, "raster");
-  assert.equal(findNode(frame, "Pass_Through_Shape").kind, "raster");
   assert.deepEqual(frame.warnings, [
-    { nodeId: "multiply-group", nodeName: "Multiply_Group", property: "blendMode", fallback: "png" },
-    { nodeId: "pass-through-shape", nodeName: "Pass_Through_Shape", property: "blendMode", fallback: "png" }
+    { nodeId: "multiply-group", nodeName: "Multiply_Group", property: "blendMode", fallback: "png" }
   ]);
+});
+
+test("serializes a nested supported frame surface before its native text", async () => {
+  const reservedId = "nested-frame::container-solid-background";
+  const nested = shape({
+    id: "nested-frame",
+    name: "Nested_Frame",
+    type: "FRAME",
+    width: 600,
+    height: 320,
+    absoluteTransform: matrix(100, 200),
+    fills: [solid()],
+    strokes: [solid(0.1, 0.2, 0.3)],
+    strokeWeight: 4,
+    cornerRadius: 20,
+    blendMode: "PASS_THROUGH",
+    children: [textSnapshot({
+      id: reservedId,
+      name: "Nested_Text",
+      absoluteTransform: matrix(140, 240),
+      blendMode: "PASS_THROUGH"
+    })]
+  });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(root([nested]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(rasterized, []);
+  const group = findNode(frame, "Nested_Frame");
+  assert.equal(group.kind, "group");
+  if (group.kind !== "group") throw new Error("expected group");
+  assert.deepEqual(group.children.map((node) => node.name), [
+    "Nested_Frame__CONTAINER_SOLID_BACKGROUND",
+    "Nested_Text"
+  ]);
+  assert.deepEqual(group.children[0], {
+    id: `${reservedId}:2`,
+    name: "Nested_Frame__CONTAINER_SOLID_BACKGROUND",
+    kind: "rect",
+    x: 100,
+    y: 200,
+    width: 600,
+    height: 320,
+    rotation: 0,
+    opacity: 1,
+    fill: "#4080BF",
+    stroke: "#1A334D",
+    strokeWidth: 4,
+    radius: 20
+  });
+  assert.equal(group.children[1]?.kind, "text");
+  assert.deepEqual(frame.warnings, []);
+});
+
+test("keeps unsupported nested frame surfaces as one raster fallback", async () => {
+  const cases: Array<[string, string, Partial<FigmaNodeSnapshot>]> = [
+    ["nested-gradient", "fills", { fills: [{ type: "GRADIENT_LINEAR" }] }],
+    ["nested-mixed-radius", "cornerRadius", { fills: [solid()], cornerRadius: "MIXED" }]
+  ];
+  for (const [id, property, surface] of cases) {
+    const nested = shape({
+      id,
+      name: id.replaceAll("-", "_"),
+      type: "FRAME",
+      fills: [],
+      blendMode: "PASS_THROUGH",
+      children: [textSnapshot({ id: `${id}-text`, name: `${id}_text` })],
+      ...surface
+    });
+    const rasterized: string[] = [];
+    const frame = await serializeFrame(root([nested]), { duration: 28 }, {
+      rasterScale: 1,
+      exportRaster: async (node) => {
+        rasterized.push(node.id);
+        return rasterAsset(node.id);
+      }
+    });
+
+    assert.deepEqual(rasterized, [id]);
+    assert.equal(findNode(frame, id.replaceAll("-", "_")).kind, "raster");
+    assert.deepEqual(frame.warnings, [{
+      nodeId: id,
+      nodeName: id.replaceAll("-", "_"),
+      property,
+      fallback: "png"
+    }]);
+  }
+});
+
+test("omits hidden descendants without rasterizing or reordering visible siblings", async () => {
+  const visibleBefore = shape({ id: "visible-before", name: "Visible_Before" });
+  const hiddenGuide = shape({
+    id: "hidden-guide",
+    name: "GUIDE_TitleSafe",
+    visible: false,
+    blendMode: "MULTIPLY",
+    effects: [{ type: "DROP_SHADOW", visible: true }]
+  });
+  const visibleAfter = textSnapshot({ id: "visible-after", name: "Visible_After" });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(root([visibleBefore, hiddenGuide, visibleAfter]), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(frame.children.map((node) => node.name), ["Visible_Before", "Visible_After"]);
+  assert.throws(() => findNode(frame, "GUIDE_TitleSafe"), /missing exported node/);
+  assert.deepEqual(rasterized, []);
+  assert.deepEqual(frame.warnings, []);
+});
+
+test("keeps a Shot31-shaped tree editable except for the effectful code panel", async () => {
+  const text = (id: string, name: string): FigmaNodeSnapshot => textSnapshot({
+    id,
+    name,
+    blendMode: "PASS_THROUGH"
+  });
+  const card = (id: string, name: string): FigmaNodeSnapshot => shape({
+    id,
+    name,
+    type: "FRAME",
+    width: 420,
+    height: 240,
+    fills: [solid(0.1, 0.2, 0.3)],
+    strokes: [solid(0.5, 0.6, 0.7)],
+    strokeWeight: 2,
+    cornerRadius: 18,
+    blendMode: "PASS_THROUGH",
+    children: [text(`${id}-label`, `${name}_Label`)]
+  });
+  const source = root([
+    shape({ id: "95:42", name: "BG_Base", blendMode: "PASS_THROUGH", cornerRadius: 24 }),
+    shape({ id: "95:43", name: "GUIDE_TitleSafe", visible: false }),
+    text("95:44", "TXT_Eyebrow"),
+    text("95:45", "TXT_Title"),
+    text("95:46", "TXT_Deck"),
+    shape({
+      id: "95:47",
+      name: "CODE_PrepareRecord",
+      type: "INSTANCE",
+      fills: [],
+      blendMode: "PASS_THROUGH",
+      effects: [{ type: "DROP_SHADOW", visible: true }],
+      children: [text("95:47:1", "CODE_Text")]
+    }),
+    card("95:48", "DATA_Card"),
+    card("95:49", "PROG_Card"),
+    card("95:50", "MODEL_Card")
+  ], {
+    id: "95:41",
+    name: "S001_SH31_Repo_PrepareRecord",
+    fills: [solid()],
+    strokes: [solid(0.2, 0.3, 0.4)],
+    strokeWeight: 2,
+    cornerRadius: 24,
+    blendMode: "PASS_THROUGH"
+  });
+  const rasterized: string[] = [];
+
+  const frame = await serializeFrame(source, { duration: 27 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(rasterized, ["95:47"]);
+  assert.deepEqual(frame.warnings, [{
+    nodeId: "95:47",
+    nodeName: "CODE_PrepareRecord",
+    property: "effects",
+    fallback: "png"
+  }]);
+  assert.throws(() => findNode(frame, "GUIDE_TitleSafe"), /missing exported node/);
+  for (const name of ["BG_Base", "TXT_Eyebrow", "TXT_Title", "TXT_Deck"]) {
+    assert.notEqual(findNode(frame, name).kind, "raster", name);
+  }
+  for (const name of ["DATA_Card", "PROG_Card", "MODEL_Card"]) {
+    assert.equal(findNode(frame, name).kind, "group", name);
+    assert.equal(findNode(frame, `${name}_Label`).kind, "text", name);
+  }
+  assert.equal(findNode(frame, "CODE_PrepareRecord").kind, "raster");
+  const pending = [...frame.children];
+  let nativeCount = 0;
+  let rasterCount = 0;
+  while (pending.length > 0) {
+    const node = pending.shift();
+    if (node === undefined) continue;
+    if (node.kind === "raster") rasterCount += 1;
+    else {
+      nativeCount += 1;
+      if (node.kind === "group") pending.unshift(...node.children);
+    }
+  }
+  assert.equal(nativeCount, 14);
+  assert.equal(rasterCount, 1);
 });
 
 test("serializes one opaque root fill as an editable full-frame background behind children", async () => {

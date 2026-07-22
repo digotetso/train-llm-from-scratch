@@ -111,16 +111,16 @@ export interface FrameTiming {
 type Classification = "native" | "group" | "raster";
 type MutableMatrix = [[number, number, number], [number, number, number]];
 
-interface RootSurface {
+interface ContainerSurface {
   fill: FigmaPaintSnapshot;
   stroke: FigmaPaintSnapshot | undefined;
   strokeWidth: number;
   radius: number;
 }
 
-interface RootSurfaceClassification {
+interface ContainerSurfaceClassification {
   reason: "fills" | "strokes" | "strokeWeight" | "cornerRadius" | null;
-  surface?: RootSurface;
+  surface?: ContainerSurface;
 }
 
 interface SerializationContext {
@@ -129,10 +129,12 @@ interface SerializationContext {
   warnings: ExportFrame["warnings"];
   rasterBytes: number;
   assetHashes: Set<string>;
+  nodeIds: Set<string>;
   limits: SerializerLimits;
 }
 
 const GROUP_TYPES = new Set(["FRAME", "GROUP", "COMPONENT", "INSTANCE"]);
+const NATIVE_LEAF_TYPES = new Set(["TEXT", "RECTANGLE", "ELLIPSE"]);
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -272,7 +274,10 @@ function visibleEffects(node: FigmaNodeSnapshot): readonly { type: string; visib
 function hasRepresentableBlendMode(node: FigmaNodeSnapshot): boolean {
   return node.blendMode === undefined ||
     node.blendMode === "NORMAL" ||
-    (node.blendMode === "PASS_THROUGH" && GROUP_TYPES.has(node.type));
+    (node.blendMode === "PASS_THROUGH" && (
+      GROUP_TYPES.has(node.type) ||
+      (NATIVE_LEAF_TYPES.has(node.type) && (node.children?.length ?? 0) === 0)
+    ));
 }
 
 function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
@@ -282,7 +287,7 @@ function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
   return [r, g, b].every((channel) => typeof channel === "number" && Number.isFinite(channel) && channel >= 0 && channel <= 1);
 }
 
-function classifyRootSurface(node: FigmaNodeSnapshot): RootSurfaceClassification {
+function classifyContainerSurface(node: FigmaNodeSnapshot): ContainerSurfaceClassification {
   const fills = node.fills ?? [];
   const strokes = node.strokes ?? [];
   const hasVisibleFill = fills.some((paint) => paint.visible !== false);
@@ -312,7 +317,7 @@ function classifyRootSurface(node: FigmaNodeSnapshot): RootSurfaceClassification
   };
 }
 
-function rootAppearanceReason(node: FigmaNodeSnapshot, surface: RootSurfaceClassification): string | null {
+function rootAppearanceReason(node: FigmaNodeSnapshot, surface: ContainerSurfaceClassification): string | null {
   if (node.visible === false) return "visible";
   if (node.isMask === true) return "isMask";
   if (!hasRepresentableBlendMode(node)) return "blendMode";
@@ -370,8 +375,8 @@ function directRasterReason(node: FigmaNodeSnapshot): string | null {
   }
 
   if (GROUP_TYPES.has(node.type)) {
-    if ((node.fills?.length ?? 0) !== 0) return "fills";
-    if ((node.strokes?.length ?? 0) !== 0) return "strokes";
+    const surface = classifyContainerSurface(node);
+    if (surface.reason !== null) return surface.reason;
     if (!Array.isArray(node.children)) return "children";
     return null;
   }
@@ -392,7 +397,9 @@ function rasterReason(
   try {
     const children = node.children ?? [];
     for (let index = 0; index < children.length; index += 1) {
-      const childReason = rasterReason(children[index]!, `${path}.children[${index}]`, ancestors);
+      const child = children[index]!;
+      if (child.visible === false) continue;
+      const childReason = rasterReason(child, `${path}.children[${index}]`, ancestors);
       if (childReason !== null) return `children[${index}].${childReason}`;
     }
     return null;
@@ -446,6 +453,7 @@ function preflightNode(
   ids: Set<string>,
   rootInverse: MutableMatrix
 ): void {
+  if (node.visible === false) return;
   validateNodeIdentity(node, path, ids);
   relativeGeometry(node, path, rootInverse);
   const reason = rasterReason(node, path, new Set());
@@ -454,7 +462,9 @@ function preflightNode(
   if (!GROUP_TYPES.has(node.type)) return;
   const children = node.children ?? [];
   for (let index = 0; index < children.length; index += 1) {
-    preflightNode(children[index]!, `${path}.children[${index}]`, ids, rootInverse);
+    const child = children[index]!;
+    if (child.visible === false) continue;
+    preflightNode(child, `${path}.children[${index}]`, ids, rootInverse);
   }
 }
 
@@ -543,6 +553,27 @@ function serializeShape(node: FigmaNodeSnapshot, path: string, context: Serializ
     stroke: stroke === undefined ? null : colorHex(stroke, `${path}.strokes[0]`),
     strokeWidth,
     radius
+  };
+}
+
+function serializeContainerSurface(
+  node: FigmaNodeSnapshot,
+  path: string,
+  surface: ContainerSurface,
+  context: SerializationContext,
+  identity: { idSuffix: string; nameSuffix: string }
+): ShapeNode {
+  const geometry = relativeGeometry(node, path, context.rootInverse);
+  return {
+    id: reserveSyntheticNodeId(node.id, identity.idSuffix, context.nodeIds),
+    name: safeName(`${node.name}${identity.nameSuffix}`, `${path}.synthetic.name`),
+    kind: "rect",
+    ...geometry,
+    opacity: 1,
+    fill: colorHex(surface.fill, `${path}.fills[0]`),
+    stroke: surface.stroke === undefined ? null : colorHex(surface.stroke, `${path}.strokes[0]`),
+    strokeWidth: surface.strokeWidth,
+    radius: surface.radius
   };
 }
 
@@ -664,8 +695,17 @@ async function serializeNode(
   if (node.type === "RECTANGLE" || node.type === "ELLIPSE") return serializeShape(node, path, context);
 
   const children: ExportNode[] = [];
+  const surface = classifyContainerSurface(node).surface;
+  if (surface !== undefined) {
+    children.push(serializeContainerSurface(node, path, surface, context, {
+      idSuffix: "container-solid-background",
+      nameSuffix: "__CONTAINER_SOLID_BACKGROUND"
+    }));
+  }
   for (let index = 0; index < (node.children?.length ?? 0); index += 1) {
-    children.push(await serializeNode(node.children![index]!, `${path}.children[${index}]`, context));
+    const child = node.children![index]!;
+    if (child.visible === false) continue;
+    children.push(await serializeNode(child, `${path}.children[${index}]`, context));
   }
   const group: GroupNode = {
     ...baseNode(node, path, context.rootInverse),
@@ -712,7 +752,7 @@ export async function serializeFrame(
   const height = positiveNumber(node.height, "$.height");
   const rootOpacity = node.opacity === undefined ? 1 : finiteNumber(node.opacity, "$.opacity");
   if (rootOpacity < 0 || rootOpacity > 1) invalid("$.opacity", "expected a number between 0 and 1");
-  const rootSurface = classifyRootSurface(node);
+  const rootSurface = classifyContainerSurface(node);
   const rootReason = rootAppearanceReason(node, rootSurface);
 
   const context: SerializationContext = {
@@ -721,6 +761,7 @@ export async function serializeFrame(
     warnings: [],
     rasterBytes: 0,
     assetHashes: new Set(),
+    nodeIds: new Set([frameId]),
     limits: serializerLimits
   };
   if (rootReason !== null) {
@@ -755,33 +796,25 @@ export async function serializeFrame(
     invalid("$.children", "empty frames are not supported by the shared contract");
   }
 
-  const ids = new Set<string>([frameId]);
   for (let index = 0; index < node.children.length; index += 1) {
-    preflightNode(node.children[index]!, `$.children[${index}]`, ids, rootInverse);
+    const child = node.children[index]!;
+    if (child.visible === false) continue;
+    preflightNode(child, `$.children[${index}]`, context.nodeIds, rootInverse);
   }
 
   const children: ExportNode[] = [];
   if (rootSurface.surface !== undefined) {
-    const { fill, stroke, strokeWidth, radius } = rootSurface.surface;
-    children.push({
-      id: reserveSyntheticNodeId(frameId, "root-solid-background", ids),
-      name: safeName(`${frameName}__ROOT_SOLID_BACKGROUND`, "$.synthetic.name"),
-      kind: "rect",
-      x: 0,
-      y: 0,
-      width,
-      height,
-      rotation: 0,
-      opacity: 1,
-      fill: colorHex(fill, "$.fills[0]"),
-      stroke: stroke === undefined ? null : colorHex(stroke, "$.strokes[0]"),
-      strokeWidth,
-      radius
-    });
+    children.push(serializeContainerSurface(node, "$", rootSurface.surface, context, {
+      idSuffix: "root-solid-background",
+      nameSuffix: "__ROOT_SOLID_BACKGROUND"
+    }));
   }
   for (let index = 0; index < node.children.length; index += 1) {
-    children.push(await serializeNode(node.children[index]!, `$.children[${index}]`, context));
+    const child = node.children[index]!;
+    if (child.visible === false) continue;
+    children.push(await serializeNode(child, `$.children[${index}]`, context));
   }
+  if (children.length === 0) invalid("$.children", "empty frames are not supported by the shared contract");
   const frame: ExportFrame = {
     nodeId: frameId,
     name: frameName,
