@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -65,8 +65,10 @@ interface StartedBridge {
 async function startBridge(
   t: test.TestContext,
   options: {
+    maxAggregateAssetBytes?: number;
+    maxAssetBytes?: number;
     maxBodyBytes?: number;
-    maxJsonParseBytes?: number;
+    maxManifestBytes?: number;
     maxLogBytes?: number;
     now?: () => number;
     requestTimeoutMs?: number;
@@ -76,7 +78,8 @@ async function startBridge(
   const now = options.now ?? Date.now;
   const auth = new AuthStore(now, randomBytes);
   const code = auth.createPairingCode();
-  const queue = new QueueStore(root);
+  const bridgeOwner = owner(process.pid, randomUUID());
+  const queue = new QueueStore(root, bridgeOwner);
   const bridge = createBridgeServer({
     auth,
     queue,
@@ -85,7 +88,11 @@ async function startBridge(
     now,
     limits: {
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
-      ...(options.maxJsonParseBytes === undefined ? {} : { maxJsonParseBytes: options.maxJsonParseBytes }),
+      ...(options.maxManifestBytes === undefined ? {} : { maxManifestBytes: options.maxManifestBytes }),
+      ...(options.maxAssetBytes === undefined ? {} : { maxAssetBytes: options.maxAssetBytes }),
+      ...(options.maxAggregateAssetBytes === undefined ? {} : {
+        maxAggregateAssetBytes: options.maxAggregateAssetBytes
+      }),
       ...(options.maxLogBytes === undefined ? {} : { maxLogBytes: options.maxLogBytes }),
       ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs })
     }
@@ -539,16 +546,16 @@ test("graceful close waits for an accepted export handler to finish", async () =
   const root = await mkdtemp(join(tmpdir(), "video001-graceful-close-"));
   const auth = new AuthStore(Date.now, randomBytes);
   const code = auth.createPairingCode();
-  const queue = new QueueStore(root);
-  const enqueue = queue.enqueue.bind(queue);
+  const queue = new QueueStore(root, owner(process.pid, randomUUID()));
+  const enqueue = queue.enqueueVerified.bind(queue);
   let markEntered: (() => void) | undefined;
   let releaseEnqueue: (() => void) | undefined;
   const entered = new Promise<void>((resolve) => { markEntered = resolve; });
   const released = new Promise<void>((resolve) => { releaseEnqueue = resolve; });
-  queue.enqueue = async (value: unknown) => {
+  queue.enqueueVerified = async (value, sources) => {
     markEntered?.();
     await released;
-    return enqueue(value);
+    return enqueue(value, sources);
   };
   const bridge = createBridgeServer({ auth, queue, host: "127.0.0.1", port: 0 });
   const address = await bridge.start();
@@ -710,7 +717,7 @@ test("pairing operational failures map to generic 500 without leaking the failur
     throw new Error(`random source unavailable ${secret}`);
   });
   const code = auth.createPairingCode();
-  const queue = new QueueStore(root);
+  const queue = new QueueStore(root, owner(process.pid, randomUUID()));
   const bridge = createBridgeServer({ auth, queue, host: "127.0.0.1", port: 0 });
   const address = await bridge.start();
   t.after(async () => bridge.close());
@@ -797,12 +804,12 @@ test("reset consumes an empty body before revoking and rejects oversized chunked
   assert.equal(auth.authenticateBearer(`Bearer ${token}`), false);
 });
 
-test("authenticated exports spool privately, parse below a hard cap, and clean temporary bodies", async (t) => {
+test("authenticated exports enforce the manifest cap and clean temporary bodies", async (t) => {
   const value = fingerprint(makeValidPackage());
   const body = JSON.stringify(value);
   const { base, code, root } = await startBridge(t, {
     maxBodyBytes: Buffer.byteLength(body) + 1_024,
-    maxJsonParseBytes: Buffer.byteLength(body) - 1
+    maxManifestBytes: Buffer.byteLength(body) - 1
   });
   const token = await pair(base, code);
 
@@ -829,10 +836,75 @@ test("authenticated exports spool privately, parse below a hard cap, and clean t
 
   assert.equal(result.status, 413);
   assert.deepEqual(result.body, {
-    error: { code: "PAYLOAD_TOO_LARGE", message: "The request body exceeds the safe JSON parsing limit" }
+    error: { code: "PAYLOAD_TOO_LARGE", message: "The request body exceeds the configured limit" }
   });
   assert.deepEqual(await readdir(join(root, "tmp")), []);
   assert.deepEqual(await readdir(join(root, "incoming")), []);
+});
+
+test("asset-heavy JSON may exceed the manifest cap without changing the vendor wire contract", async (t) => {
+  const value = makeValidPackage();
+  const assetBytes = Buffer.from("streamed asset payload ".repeat(16));
+  pngAsset(value, assetBytes);
+  fingerprint(value);
+  const body = JSON.stringify(value);
+  const encodedBytes = value.assets[0]!.dataBase64.length;
+  const manifestBytes = Buffer.byteLength(body) - encodedBytes;
+  const { base, code, root } = await startBridge(t, {
+    maxAggregateAssetBytes: assetBytes.byteLength,
+    maxAssetBytes: assetBytes.byteLength,
+    maxBodyBytes: Buffer.byteLength(body),
+    maxManifestBytes: manifestBytes
+  });
+  const token = await pair(base, code);
+
+  const response = await fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body
+  });
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await readFile(join(root, "assets", `${value.assets[0]!.hash}.png`)), assetBytes);
+  assert.deepEqual(await readdir(join(root, "tmp")), []);
+});
+
+test("decoded asset ceilings map to invalid-package responses and clean all temporaries", async (t) => {
+  const bytes = Buffer.from("decoded-limit-evidence");
+  for (const constrained of ["asset", "aggregate"] as const) {
+    const value = makeValidPackage();
+    pngAsset(value, bytes);
+    fingerprint(value);
+    const body = JSON.stringify(value);
+    const manifestBytes = Buffer.byteLength(body) - value.assets[0]!.dataBase64.length;
+    const { base, code, root } = await startBridge(t, {
+      maxAggregateAssetBytes: constrained === "aggregate" ? bytes.byteLength - 1 : bytes.byteLength,
+      maxAssetBytes: constrained === "asset" ? bytes.byteLength - 1 : bytes.byteLength,
+      maxBodyBytes: Buffer.byteLength(body),
+      maxManifestBytes: manifestBytes
+    });
+    const token = await pair(base, code);
+
+    const response = await fetch(`${base}/v1/export`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/vnd.video001.figma-ae+json"
+      },
+      body
+    });
+
+    assert.equal(response.status, 422, constrained);
+    assert.deepEqual(await response.json(), {
+      error: { code: "INVALID_PACKAGE", message: "The export package is invalid" }
+    });
+    assert.deepEqual(await readdir(join(root, "tmp")), []);
+    assert.deepEqual(await readdir(join(root, "incoming")), []);
+    assert.deepEqual(await readdir(join(root, "assets")), []);
+  }
 });
 
 test("export body processing is globally single-flight and uses a mode-0600 spool", async (t) => {
@@ -918,20 +990,20 @@ test("export body processing is globally single-flight and uses a mode-0600 spoo
 test("a queued export body deadline frees its bounded waiter", async (t) => {
   const { base, code, queue } = await startBridge(t, { requestTimeoutMs: 75 });
   const token = await pair(base, code);
-  const enqueue = queue.enqueue.bind(queue);
+  const enqueue = queue.enqueueVerified.bind(queue);
   let entered = 0;
   let markFirstEntered: (() => void) | undefined;
   let releaseFirst: (() => void) | undefined;
   const firstEntered = new Promise<void>((resolve) => { markFirstEntered = resolve; });
   const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
   t.after(() => releaseFirst?.());
-  queue.enqueue = async (value: unknown) => {
+  queue.enqueueVerified = async (value, sources) => {
     entered += 1;
     if (entered === 1) {
       markFirstEntered?.();
       await firstReleased;
     }
-    return enqueue(value);
+    return enqueue(value, sources);
   };
   const send = (label: string): Promise<Response> => {
     const value = makeValidPackage();
@@ -974,7 +1046,7 @@ test("bridge body readers use Node 20-compatible abort composition", async () =>
 test("startup retention and structured log rotation are deterministic and redacted", async (t) => {
   let now = Date.UTC(2026, 6, 22, 12);
   const root = await mkdtemp(join(tmpdir(), "video001-retention-"));
-  const queue = new QueueStore(root);
+  const queue = new QueueStore(root, owner(process.pid, randomUUID()));
   const oldQuarantine = join(root, "quarantine", "old.error.json");
   const freshQuarantine = join(root, "quarantine", "fresh.error.json");
   const oldLog = join(root, "logs", "old.log");
@@ -1039,7 +1111,7 @@ test("retention fails closed without deleting through a swapped log-directory sy
   const parent = await mkdtemp(join(tmpdir(), "video001-retention-swap-"));
   const root = join(parent, "queue");
   const outside = join(parent, "outside");
-  const queue = new QueueStore(root);
+  const queue = new QueueStore(root, owner(process.pid, randomUUID()));
   await mkdir(outside, { mode: 0o700 });
   const external = join(outside, "external.log");
   await writeFile(external, "must survive", { mode: 0o600 });
@@ -1209,11 +1281,14 @@ function owner(pid: number, instanceId: string): BridgeOwner {
 
 test("bridge lifecycle preserves a live owner's state and locks", async () => {
   const root = await mkdtemp(join(tmpdir(), "video001-live-owner-"));
+  const queue = new QueueStore(root);
   const live = owner(1111, "11111111-1111-4111-8111-111111111111");
   const lifecyclePath = join(root, ".bridge-lifecycle.json");
   const authLock = join(root, "auth.json.lock");
+  const temporary = join(queue.paths.tmp, `.http-body.${live.pid}.${live.instanceId}.${randomUUID()}.tmp`);
   await writeFile(lifecyclePath, JSON.stringify(live), { mode: 0o600 });
   await writeFile(authLock, JSON.stringify(live), { mode: 0o600 });
+  await writeFile(temporary, "live body", { mode: 0o600 });
 
   await assert.rejects(
     acquireBridgeLifecycle(root, {
@@ -1224,6 +1299,7 @@ test("bridge lifecycle preserves a live owner's state and locks", async () => {
   );
   assert.deepEqual(JSON.parse(await readFile(lifecyclePath, "utf8")), live);
   assert.deepEqual(JSON.parse(await readFile(authLock, "utf8")), live);
+  assert.equal(await readFile(temporary, "utf8"), "live body");
 });
 
 test("bridge lifecycle removes only dead-owner stale auth and enqueue locks", async () => {
@@ -1249,14 +1325,67 @@ test("bridge lifecycle removes only dead-owner stale auth and enqueue locks", as
   await assert.rejects(readFile(lifecyclePath), /ENOENT/);
 });
 
+test("dead lifecycle recovery removes only exact owner-stamped HTTP temporaries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-dead-http-temporaries-"));
+  const queue = new QueueStore(root);
+  const dead = owner(4_501, "45014501-4501-4501-8501-450145014501");
+  const next = owner(4_502, "45024502-4502-4502-8502-450245024502");
+  await writeFile(join(root, ".bridge-lifecycle.json"), JSON.stringify(dead), { mode: 0o600 });
+  const body = join(queue.paths.tmp, `.http-body.${dead.pid}.${dead.instanceId}.${randomUUID()}.tmp`);
+  const asset = join(queue.paths.tmp, `.http-asset.${dead.pid}.${dead.instanceId}.${randomUUID()}.tmp`);
+  await writeFile(body, "stale body", { mode: 0o600 });
+  await writeFile(asset, "stale asset", { mode: 0o600 });
+
+  const lifecycle = await acquireBridgeLifecycle(root, { owner: next, probeProcess: () => "dead" });
+  await assert.rejects(stat(body), /ENOENT/);
+  await assert.rejects(stat(asset), /ENOENT/);
+  await lifecycle.release();
+});
+
+test("HTTP temporary recovery fails closed for owner mismatch, malformed names, and symlinks", async () => {
+  for (const scenario of ["mismatch", "malformed", "symlink"] as const) {
+    const parent = await mkdtemp(join(tmpdir(), `video001-http-temp-${scenario}-`));
+    const root = join(parent, "root");
+    const queue = new QueueStore(root);
+    const dead = owner(4_601, "46014601-4601-4601-8601-460146014601");
+    const other = owner(4_602, "46024602-4602-4602-8602-460246024602");
+    await writeFile(join(root, ".bridge-lifecycle.json"), JSON.stringify(dead), { mode: 0o600 });
+    let temporary: string;
+    let external: string | undefined;
+    if (scenario === "mismatch") {
+      temporary = join(queue.paths.tmp, `.http-body.${other.pid}.${other.instanceId}.${randomUUID()}.tmp`);
+      await writeFile(temporary, "mismatched owner", { mode: 0o600 });
+    } else if (scenario === "malformed") {
+      temporary = join(queue.paths.tmp, ".http-asset.malformed.tmp");
+      await writeFile(temporary, "malformed owner", { mode: 0o600 });
+    } else {
+      temporary = join(queue.paths.tmp, `.http-body.${dead.pid}.${dead.instanceId}.${randomUUID()}.tmp`);
+      external = join(parent, "external-body");
+      await writeFile(external, "must survive", { mode: 0o600 });
+      await symlink(external, temporary);
+    }
+
+    await assert.rejects(
+      acquireBridgeLifecycle(root, { owner: other, probeProcess: () => "dead" }),
+      /temporary|owner|malformed|symlink|regular/i
+    );
+    assert.equal((await lstat(temporary)).isSymbolicLink(), scenario === "symlink");
+    if (external !== undefined) assert.equal(await readFile(external, "utf8"), "must survive");
+    assert.deepEqual(JSON.parse(await readFile(join(root, ".bridge-lifecycle.json"), "utf8")), dead);
+  }
+});
+
 test("bridge lifecycle fails closed for ambiguous or mismatched lock ownership", async () => {
   const root = await mkdtemp(join(tmpdir(), "video001-ambiguous-owner-"));
+  const queue = new QueueStore(root);
   const dead = owner(5555, "55555555-5555-4555-8555-555555555555");
   const other = owner(6666, "66666666-6666-4666-8666-666666666666");
   const lifecyclePath = join(root, ".bridge-lifecycle.json");
   const authLock = join(root, "auth.json.lock");
+  const temporary = join(queue.paths.tmp, `.http-asset.${dead.pid}.${dead.instanceId}.${randomUUID()}.tmp`);
   await writeFile(lifecyclePath, JSON.stringify(dead), { mode: 0o600 });
   await writeFile(authLock, JSON.stringify(other), { mode: 0o600 });
+  await writeFile(temporary, "ambiguous asset", { mode: 0o600 });
 
   await assert.rejects(
     acquireBridgeLifecycle(root, { owner: other, probeProcess: () => "ambiguous" }),
@@ -1264,12 +1393,14 @@ test("bridge lifecycle fails closed for ambiguous or mismatched lock ownership",
   );
   assert.deepEqual(JSON.parse(await readFile(lifecyclePath, "utf8")), dead);
   assert.deepEqual(JSON.parse(await readFile(authLock, "utf8")), other);
+  assert.equal(await readFile(temporary, "utf8"), "ambiguous asset");
 
   await assert.rejects(
     acquireBridgeLifecycle(root, { owner: other, probeProcess: () => "dead" }),
     /lock owner|ambiguous|mismatch/i
   );
   assert.deepEqual(JSON.parse(await readFile(authLock, "utf8")), other);
+  assert.equal(await readFile(temporary, "utf8"), "ambiguous asset");
 });
 
 test("dead-owner recovery never follows a symlinked tmp directory to delete a lock", async () => {
@@ -1316,6 +1447,10 @@ test("startup-guard recovery is explicit, owner-scoped, and dead-process-only", 
   await assert.rejects(stat(guard), /ENOENT/);
 });
 
-test("configured production limits remain 120 seconds, seven days, and ten MiB", () => {
+test("configured production package limits remain the approved streaming ceilings", () => {
   assert.equal(LIMITS.requestTimeoutMs, 120_000);
+  assert.equal(LIMITS.maxManifestBytes, 32 * 1024 * 1024);
+  assert.equal(LIMITS.maxAssetBytes, 32 * 1024 * 1024);
+  assert.equal(LIMITS.maxAggregateAssetBytes, 512 * 1024 * 1024);
+  assert.equal(LIMITS.maxBodyBytes, 768 * 1024 * 1024);
 });

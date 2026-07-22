@@ -8,19 +8,31 @@ import {
 } from "node:fs";
 import {
   access,
+  link,
   open,
   rename,
   unlink
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
+  EXTERNAL_ASSET_DATA,
   canonicalJson,
   type AssetDescriptor,
+  type ExternalAssetDescriptor,
+  type ExternalExporterPackage,
   type ExporterPackage,
-  validatePackage
+  validatePackage,
+  validatePackageWithVerifiedAssets
 } from "../shared/contract.ts";
-import { serializeBridgeOwner, type BridgeOwner } from "./ownership.ts";
+import {
+  ownedHttpTemporaryFilename,
+  parseOwnedHttpTemporaryFilename,
+  sameBridgeOwner,
+  serializeBridgeOwner,
+  type BridgeOwner
+} from "./ownership.ts";
 import { exporterPaths, type ExporterPaths } from "./paths.ts";
+import type { StreamedAssetFile } from "./streaming-package.ts";
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const PACKAGE_SUFFIX = ".video001-ae.json";
@@ -117,7 +129,17 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function writeAll(handle: Awaited<ReturnType<typeof open>>, value: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < value.byteLength) {
+    const result = await handle.write(value, offset, value.byteLength - offset, null);
+    if (result.bytesWritten === 0) throw new Error("Verified asset copy made no write progress");
+    offset += result.bytesWritten;
+  }
+}
+
 export class QueueStore {
+  readonly owner: BridgeOwner | undefined;
   readonly paths: ExporterPaths;
   private readonly directoryIdentities: DirectoryIdentity[];
   private readonly lockOwner: BridgeOwner | undefined;
@@ -137,6 +159,7 @@ export class QueueStore {
     }
     this.directoryIdentities = directories.map(captureDirectoryIdentity);
     this.lockOwner = lockOwner;
+    this.owner = lockOwner;
     const rootIdentity = this.directoryIdentities[0];
     if (
       rootIdentity === undefined ||
@@ -149,6 +172,44 @@ export class QueueStore {
   async enqueue(value: unknown): Promise<EnqueueResult> {
     this.assertDirectoryIdentities();
     const validated = validatePackage(value);
+    return this.enqueueValidated(validated, async (_index, asset) => {
+      if (!("dataBase64" in asset)) throw new Error("In-memory asset data is missing");
+      const bytes = Buffer.from(asset.dataBase64, "base64");
+      return this.writeAsset(asset.hash, bytes, asset.byteLength);
+    });
+  }
+
+  async enqueueVerified(
+    value: ExternalExporterPackage,
+    sources: readonly StreamedAssetFile[]
+  ): Promise<EnqueueResult> {
+    this.assertDirectoryIdentities();
+    if (this.lockOwner === undefined) throw new Error("Verified enqueue requires a bridge lifecycle owner");
+    if (value.assets.length !== sources.length) throw new Error("Verified asset source count does not match package assets");
+    const validationValue = {
+      ...value,
+      assets: value.assets.map((asset) => ({ ...asset, dataBase64: EXTERNAL_ASSET_DATA }))
+    };
+    const normalizedManifestBytes = Buffer.byteLength(JSON.stringify({
+      ...value,
+      assets: value.assets.map((asset) => ({ ...asset, dataBase64: "" }))
+    }));
+    const validated = validatePackageWithVerifiedAssets(
+      validationValue,
+      sources.map((source) => ({ byteLength: source.size, hash: source.hash })),
+      { bodyBytes: normalizedManifestBytes, manifestBytes: normalizedManifestBytes }
+    );
+    return this.enqueueValidated(validated, (index, asset) => {
+      const source = sources[index];
+      if (source === undefined) throw new Error("Verified asset source is missing");
+      return this.copyVerifiedAsset(source, asset);
+    });
+  }
+
+  private async enqueueValidated(
+    validated: ExporterPackage | ExternalExporterPackage,
+    materializeAsset: (index: number, asset: AssetDescriptor | ExternalAssetDescriptor) => Promise<string>
+  ): Promise<EnqueueResult> {
     assertHash(validated.contentHash);
     const filename = `${validated.contentHash}${PACKAGE_SUFFIX}`;
     const destination = join(this.paths.incoming, filename);
@@ -190,9 +251,9 @@ export class QueueStore {
       if (await pathExists(destination)) throw new QueueConflictError(validated.contentHash);
 
       const assets: QueuedAsset[] = [];
-      for (const asset of validated.assets) {
-        const bytes = Buffer.from(asset.dataBase64, "base64");
-        const path = await this.writeAsset(asset.hash, bytes, asset.byteLength);
+      for (let index = 0; index < validated.assets.length; index += 1) {
+        const asset = validated.assets[index]!;
+        const path = await materializeAsset(index, asset);
         assets.push({
           hash: asset.hash,
           mimeType: asset.mimeType,
@@ -213,6 +274,166 @@ export class QueueStore {
         throw new Error("Queue lock changed ownership before release");
       }
       await unlink(lockPath);
+    }
+  }
+
+  private async copyVerifiedAsset(
+    source: StreamedAssetFile,
+    asset: ExternalAssetDescriptor
+  ): Promise<string> {
+    this.assertDirectoryIdentities();
+    assertHash(asset.hash);
+    if (this.lockOwner === undefined) throw new Error("Verified enqueue requires a bridge lifecycle owner");
+    let filenameOwner: ReturnType<typeof parseOwnedHttpTemporaryFilename>;
+    try {
+      filenameOwner = parseOwnedHttpTemporaryFilename(basename(source.path));
+    } catch {
+      throw new Error("Verified asset source filename is not owner-stamped");
+    }
+    if (
+      source.kind !== "http-asset" ||
+      filenameOwner.kind !== "http-asset" ||
+      dirname(source.path) !== this.paths.tmp ||
+      source.size !== asset.byteLength ||
+      source.hash !== asset.hash ||
+      !sameBridgeOwner(source.owner, this.lockOwner) ||
+      !sameBridgeOwner(filenameOwner.owner, this.lockOwner)
+    ) {
+      throw new Error("Verified asset source does not match its package, owner, or temporary directory");
+    }
+
+    const destination = join(this.paths.assets, `${asset.hash}.png`);
+    const temporaryPath = join(
+      this.paths.tmp,
+      ownedHttpTemporaryFilename("http-asset", this.lockOwner, randomUUID())
+    );
+    let sourceHandle: Awaited<ReturnType<typeof open>> | undefined;
+    let temporaryHandle: Awaited<ReturnType<typeof open>> | undefined;
+    let temporaryIdentity: { device: number; inode: number } | undefined;
+    try {
+      this.assertDirectoryIdentities();
+      sourceHandle = await open(source.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const sourceBefore = await sourceHandle.stat();
+      if (
+        !sourceBefore.isFile() ||
+        sourceBefore.dev !== source.device ||
+        sourceBefore.ino !== source.inode ||
+        sourceBefore.size !== source.size
+      ) {
+        throw new Error("Verified asset source changed before queue publication");
+      }
+      temporaryHandle = await open(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
+      await temporaryHandle.chmod(0o600);
+      const temporaryDetails = await temporaryHandle.stat();
+      temporaryIdentity = { device: temporaryDetails.dev, inode: temporaryDetails.ino };
+      this.assertDirectoryIdentities();
+
+      const digest = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (position < source.size) {
+        const result = await sourceHandle.read(
+          buffer,
+          0,
+          Math.min(buffer.byteLength, source.size - position),
+          position
+        );
+        if (result.bytesRead === 0) throw new Error("Verified asset source ended before its recorded size");
+        const bytes = buffer.subarray(0, result.bytesRead);
+        digest.update(bytes);
+        await writeAll(temporaryHandle, bytes);
+        position += result.bytesRead;
+      }
+      const sourceAfter = await sourceHandle.stat();
+      if (
+        sourceAfter.dev !== source.device ||
+        sourceAfter.ino !== source.inode ||
+        sourceAfter.size !== source.size ||
+        digest.digest("hex") !== asset.hash
+      ) {
+        throw new Error("Verified asset source changed or failed its hash recheck");
+      }
+      await temporaryHandle.sync();
+      const copied = await temporaryHandle.stat();
+      if (copied.size !== asset.byteLength) throw new Error("Verified asset copy size mismatch");
+      await temporaryHandle.close();
+      temporaryHandle = undefined;
+      await sourceHandle.close();
+      sourceHandle = undefined;
+
+      this.assertDirectoryIdentities();
+      try {
+        await link(temporaryPath, destination);
+        await this.syncKnownDirectory(this.paths.assets);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (!(await this.verifyExistingAsset(destination, asset.hash, asset.byteLength))) throw error;
+      }
+      return destination;
+    } finally {
+      if (temporaryHandle !== undefined) await temporaryHandle.close();
+      if (sourceHandle !== undefined) await sourceHandle.close();
+      if (temporaryIdentity !== undefined) {
+        try {
+          this.assertDirectoryIdentities();
+          const current = lstatSync(temporaryPath);
+          if (
+            current.isFile() &&
+            current.dev === temporaryIdentity.device &&
+            current.ino === temporaryIdentity.inode
+          ) {
+            await unlink(temporaryPath);
+            await this.syncKnownDirectory(this.paths.tmp);
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
+  }
+
+  private async verifyExistingAsset(
+    path: string,
+    expectedHash: string,
+    expectedSize: number
+  ): Promise<boolean> {
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      this.assertDirectoryIdentities();
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return false;
+      if (code === "ELOOP") throw new Error("Existing asset path must not be a symbolic link");
+      throw error;
+    }
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.size !== expectedSize) {
+        throw new Error("Existing asset does not match its content address");
+      }
+      const digest = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (position < before.size) {
+        const result = await handle.read(buffer, 0, Math.min(buffer.byteLength, before.size - position), position);
+        if (result.bytesRead === 0) throw new Error("Existing asset ended before its recorded size");
+        digest.update(buffer.subarray(0, result.bytesRead));
+        position += result.bytesRead;
+      }
+      const after = await handle.stat();
+      if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size) {
+        throw new Error("Existing asset changed while being verified");
+      }
+      if (digest.digest("hex") !== expectedHash) throw new Error("Existing asset failed its content hash");
+      await handle.chmod(0o600);
+      return true;
+    } finally {
+      await handle.close();
     }
   }
 

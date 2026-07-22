@@ -17,12 +17,13 @@ import {
   rmdir,
   unlink
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS } from "../shared/limits.ts";
 import { AuthStore, type DirectorySync as AuthDirectorySync } from "./auth.ts";
 import {
   parseBridgeOwner,
+  parseOwnedHttpTemporaryFilename,
   sameBridgeOwner,
   serializeBridgeOwner,
   type BridgeOwner
@@ -241,6 +242,40 @@ async function staleLockPaths(root: string): Promise<string[]> {
   return paths;
 }
 
+async function staleHttpTemporaryPaths(root: string): Promise<string[]> {
+  const tmp = join(root, "tmp");
+  if (!(await exists(tmp))) return [];
+  const details = await lstat(tmp);
+  if (!details.isDirectory() || details.isSymbolicLink() || (details.mode & 0o077) !== 0) {
+    throw new Error("Exporter tmp path is not a private directory or is a symlink");
+  }
+  return (await readdir(tmp))
+    .filter((name) => name.startsWith(".http-body.") || name.startsWith(".http-asset."))
+    .map((name) => join(tmp, name));
+}
+
+async function validateOwnedHttpTemporaries(
+  paths: readonly string[],
+  owner: BridgeOwner
+): Promise<Array<{ device: number; inode: number; path: string }>> {
+  const result: Array<{ device: number; inode: number; path: string }> = [];
+  for (const path of paths) {
+    let parsed: ReturnType<typeof parseOwnedHttpTemporaryFilename>;
+    try {
+      parsed = parseOwnedHttpTemporaryFilename(basename(path));
+    } catch {
+      throw new Error("HTTP temporary ownership is malformed");
+    }
+    if (!sameBridgeOwner(parsed.owner, owner)) throw new Error("HTTP temporary owner mismatch");
+    const details = await lstat(path);
+    if (!details.isFile() || details.isSymbolicLink() || (details.mode & 0o077) !== 0) {
+      throw new Error("HTTP temporary is not an owner-only regular file or is a symlink");
+    }
+    result.push({ device: details.dev, inode: details.ino, path });
+  }
+  return result;
+}
+
 async function assertLocksOwned(paths: readonly string[], owner: BridgeOwner): Promise<void> {
   for (const path of paths) {
     let persisted: BridgeOwner;
@@ -277,6 +312,7 @@ export async function acquireBridgeLifecycle(
   let lifecyclePublished = false;
   try {
     const locks = await staleLockPaths(root);
+    const httpTemporaryPaths = await staleHttpTemporaryPaths(root);
     const statePath = join(root, STATE_FILE);
     const stateExists = await exists(statePath);
     if (await exists(lifecyclePath)) {
@@ -291,6 +327,7 @@ export async function acquireBridgeLifecycle(
       if (status !== "dead") throw new Error("Bridge lifecycle ownership is ambiguous");
 
       await assertLocksOwned(locks, previousOwner);
+      const ownedHttpTemporaries = await validateOwnedHttpTemporaries(httpTemporaryPaths, previousOwner);
       if (stateExists) {
         const persistedStateFile = await readNoFollow(statePath);
         const persistedState = validateState(JSON.parse(persistedStateFile.bytes) as unknown);
@@ -300,11 +337,15 @@ export async function acquireBridgeLifecycle(
         await removeOwnedFile(path, previousOwner);
         await syncDirectory(dirname(path));
       }
+      for (const temporary of ownedHttpTemporaries) {
+        await unlinkUnchanged(temporary.path, temporary.device, temporary.inode);
+      }
+      if (ownedHttpTemporaries.length > 0) await syncDirectory(join(root, "tmp"));
       if (stateExists) await removeBridgeState(root, previousOwner.pid);
       await removeOwnedFile(lifecyclePath, previousOwner);
       await syncDirectory(root);
-    } else if (locks.length > 0 || stateExists) {
-      throw new Error("Bridge locks or state have ambiguous ownership without a lifecycle marker");
+    } else if (locks.length > 0 || httpTemporaryPaths.length > 0 || stateExists) {
+      throw new Error("Bridge locks, HTTP temporaries, or state have ambiguous ownership without a lifecycle marker");
     }
 
     await writeExclusiveOwner(lifecyclePath, owner);

@@ -1,13 +1,23 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readdir, rename, unlink, type FileHandle } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { contentFingerprintInput, type ExporterPackage, validatePackage } from "../shared/contract.ts";
 import { LIMITS } from "../shared/limits.ts";
 import { PairingCodeError, type AuthStore } from "./auth.ts";
+import { ownedHttpTemporaryFilename, type BridgeOwner } from "./ownership.ts";
 import { QueueConflictError, type QueueStore } from "./queue.ts";
+import {
+  cleanupStreamedAssets,
+  fingerprintStreamingPackage,
+  readStreamingPackage,
+  StreamingPackageLimitError,
+  StreamingPackageSyntaxError,
+  StreamingPackageValidationError,
+  type OwnedTemporaryFile,
+  type StreamedAssetFile
+} from "./streaming-package.ts";
 
 const JSON_MEDIA_TYPE = "application/json";
 const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
@@ -18,15 +28,13 @@ const MAX_PAIRING_FAILURES = 5;
 const MAX_CONTROL_BODY_BYTES = 1_024;
 const MAX_CONCURRENT_EXPORT_BODY_WORK = 1;
 const MAX_QUEUED_EXPORT_BODY_WORK = 1;
-// JSON.parse materializes the complete document. Until the bridge has a streaming
-// package parser, this is therefore a whole-package cap (including embedded assets),
-// not merely the asset-free manifest limit enforced by validatePackage.
-const DEFAULT_MAX_JSON_PARSE_BYTES = LIMITS.maxManifestBytes;
 
 interface BridgeLimits {
+  maxAggregateAssetBytes: number;
+  maxAssetBytes: number;
   maxBodyBytes: number;
   maxControlBodyBytes: number;
-  maxJsonParseBytes: number;
+  maxManifestBytes: number;
   maxLogBytes: number;
   requestTimeoutMs: number;
   retentionMs: number;
@@ -58,13 +66,6 @@ interface ErrorBody {
 class BodyTooLargeError extends Error {}
 class BodyTimeoutError extends Error {}
 class BodyAbortedError extends Error {}
-
-interface SpooledBody {
-  device: number;
-  inode: number;
-  path: string;
-  size: number;
-}
 
 type GateAcquisition = (() => void) | "busy" | "shutdown" | "timeout";
 
@@ -306,7 +307,12 @@ async function streamRequestToFile(
         return;
       }
       pendingWrite = pendingWrite.then(async () => {
-        await handle.write(bytes);
+        let offset = 0;
+        while (offset < bytes.byteLength) {
+          const result = await handle.write(bytes, offset, bytes.byteLength - offset, null);
+          if (result.bytesWritten === 0) throw new Error("Export body spool write made no progress");
+          offset += result.bytesWritten;
+        }
       });
       void pendingWrite.then(
         () => {
@@ -344,15 +350,6 @@ function isPairRequest(value: unknown): value is { code: string } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return Object.keys(record).length === 1 && typeof record.code === "string" && /^\d{6}$/.test(record.code);
-}
-
-function verifyAssets(value: ExporterPackage): boolean {
-  for (const asset of value.assets) {
-    const bytes = Buffer.from(asset.dataBase64, "base64");
-    if (bytes.byteLength !== asset.byteLength) return false;
-    if (createHash("sha256").update(bytes).digest("hex") !== asset.hash) return false;
-  }
-  return true;
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -473,6 +470,7 @@ class NodeBridgeServer implements BridgeServer {
   private readonly limits: BridgeLimits;
   private readonly log: StructuredLog;
   private readonly now: () => number;
+  private readonly owner: BridgeOwner;
   private readonly port: number;
   private readonly queue: QueueStore;
   private readonly server: Server;
@@ -496,14 +494,22 @@ class NodeBridgeServer implements BridgeServer {
     }
     const configured = options.limits ?? {};
     this.limits = {
+      maxAggregateAssetBytes: validateIntegerLimit(
+        "maxAggregateAssetBytes",
+        configured.maxAggregateAssetBytes ?? LIMITS.maxAggregateAssetBytes
+      ),
+      maxAssetBytes: validateIntegerLimit(
+        "maxAssetBytes",
+        configured.maxAssetBytes ?? LIMITS.maxAssetBytes
+      ),
       maxBodyBytes: validateIntegerLimit("maxBodyBytes", configured.maxBodyBytes ?? LIMITS.maxBodyBytes),
       maxControlBodyBytes: validateIntegerLimit(
         "maxControlBodyBytes",
         configured.maxControlBodyBytes ?? MAX_CONTROL_BODY_BYTES
       ),
-      maxJsonParseBytes: validateIntegerLimit(
-        "maxJsonParseBytes",
-        configured.maxJsonParseBytes ?? DEFAULT_MAX_JSON_PARSE_BYTES
+      maxManifestBytes: validateIntegerLimit(
+        "maxManifestBytes",
+        configured.maxManifestBytes ?? LIMITS.maxManifestBytes
       ),
       maxLogBytes: validateIntegerLimit("maxLogBytes", configured.maxLogBytes ?? MAX_LOG_BYTES),
       requestTimeoutMs: validateIntegerLimit("requestTimeoutMs", configured.requestTimeoutMs ?? LIMITS.requestTimeoutMs),
@@ -514,6 +520,8 @@ class NodeBridgeServer implements BridgeServer {
     this.now = options.now ?? Date.now;
     this.port = options.port;
     this.queue = options.queue;
+    if (this.queue.owner === undefined) throw new TypeError("Bridge queue requires lifecycle ownership");
+    this.owner = this.queue.owner;
     this.log = new StructuredLog(
       this.queue.paths.logs,
       this.limits.maxLogBytes,
@@ -699,17 +707,6 @@ class NodeBridgeServer implements BridgeServer {
       terminateRequestAfterResponse(request, response);
       return;
     }
-    if (declaredBodyIsOversized(request, this.limits.maxJsonParseBytes)) {
-      this.respondError(
-        response,
-        route,
-        413,
-        "PAYLOAD_TOO_LARGE",
-        "The request body exceeds the safe JSON parsing limit"
-      );
-      terminateRequestAfterResponse(request, response);
-      return;
-    }
     const bodyDeadline = AbortSignal.timeout(this.limits.requestTimeoutMs);
     const bodyWork = await this.exportBodyGate.acquire(bodyDeadline, this.shutdownController.signal);
     if (bodyWork === "busy") {
@@ -727,62 +724,85 @@ class NodeBridgeServer implements BridgeServer {
       return;
     }
     const releaseBodyWork = bodyWork;
-    let spool: SpooledBody | undefined;
+    let spool: OwnedTemporaryFile | undefined;
+    let streamedAssets: StreamedAssetFile[] = [];
     try {
-      const spoolLimit = Math.min(this.limits.maxBodyBytes, this.limits.maxJsonParseBytes);
       spool = await this.spoolBodyOrRespond(
         request,
         response,
         route,
-        spoolLimit,
+        this.limits.maxBodyBytes,
         bodyDeadline,
-        this.limits.maxJsonParseBytes <= this.limits.maxBodyBytes
-          ? "The request body exceeds the safe JSON parsing limit"
-          : "The request body exceeds the configured limit"
+        "The request body exceeds the configured limit"
       );
       if (spool === undefined) return;
-      const body = await this.readSpooledBody(spool, this.limits.maxJsonParseBytes);
+      let parsed: Awaited<ReturnType<typeof readStreamingPackage>>;
+      try {
+        parsed = await readStreamingPackage(spool, this.queue, this.owner, {
+          limits: {
+            maxAggregateAssetBytes: this.limits.maxAggregateAssetBytes,
+            maxAssetBytes: this.limits.maxAssetBytes,
+            maxBodyBytes: this.limits.maxBodyBytes,
+            maxManifestBytes: this.limits.maxManifestBytes
+          }
+        });
+      } catch (error) {
+        await this.removeSpooledBody(spool);
+        spool = undefined;
+        if (error instanceof StreamingPackageSyntaxError) {
+          this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
+          return;
+        }
+        if (error instanceof StreamingPackageLimitError) {
+          this.respondError(response, route, 413, "PAYLOAD_TOO_LARGE", "The request body exceeds the configured limit");
+          return;
+        }
+        if (error instanceof StreamingPackageValidationError || error instanceof TypeError) {
+          this.respondError(response, route, 422, "INVALID_PACKAGE", "The export package is invalid");
+          return;
+        }
+        throw error;
+      }
+      streamedAssets = [...parsed.assets];
       await this.removeSpooledBody(spool);
       spool = undefined;
-      let parsed: unknown;
-      try {
-        parsed = parseJson(body);
-      } catch {
-        this.respondError(response, route, 400, "INVALID_JSON", "The request body must be valid JSON");
-        return;
-      }
-      let value: ExporterPackage;
-      try {
-        value = validatePackage(parsed);
-      } catch {
-        this.respondError(response, route, 422, "INVALID_PACKAGE", "The export package is invalid");
-        return;
-      }
-      const actualContentHash = createHash("sha256").update(contentFingerprintInput(value)).digest("hex");
-      if (actualContentHash !== value.contentHash) {
+      const actualContentHash = await fingerprintStreamingPackage(parsed.package, streamedAssets, this.queue);
+      if (actualContentHash !== parsed.package.contentHash) {
+        await cleanupStreamedAssets(streamedAssets, this.queue);
+        streamedAssets = [];
         this.respondError(response, route, 422, "CONTENT_HASH_MISMATCH", "The package fingerprint does not match its contents");
         return;
       }
-      if (!verifyAssets(value)) {
+      if (parsed.package.assets.some((asset, index) => asset.hash !== streamedAssets[index]?.hash)) {
+        await cleanupStreamedAssets(streamedAssets, this.queue);
+        streamedAssets = [];
         this.respondError(response, route, 422, "ASSET_HASH_MISMATCH", "An asset hash does not match its decoded bytes");
         return;
       }
       try {
-        await this.queue.enqueue(value);
+        await this.queue.enqueueVerified(parsed.package, streamedAssets);
       } catch (error) {
         if (error instanceof QueueConflictError) {
+          await cleanupStreamedAssets(streamedAssets, this.queue);
+          streamedAssets = [];
           this.respondError(response, route, 409, "QUEUE_DUPLICATE", "This package is already queued");
           return;
         }
         throw error;
       }
-      sendJson(response, 202, { status: "accepted", contentHash: value.contentHash });
+      await cleanupStreamedAssets(streamedAssets, this.queue);
+      streamedAssets = [];
+      sendJson(response, 202, { status: "accepted", contentHash: parsed.package.contentHash });
       this.log.record(route, 202);
     } finally {
       try {
-        if (spool !== undefined) await this.removeSpooledBody(spool);
+        if (streamedAssets.length > 0) await cleanupStreamedAssets(streamedAssets, this.queue);
       } finally {
-        releaseBodyWork();
+        try {
+          if (spool !== undefined) await this.removeSpooledBody(spool);
+        } finally {
+          releaseBodyWork();
+        }
       }
     }
   }
@@ -794,7 +814,7 @@ class NodeBridgeServer implements BridgeServer {
     maxBytes: number,
     timeoutSignal: AbortSignal,
     tooLargeMessage: string
-  ): Promise<SpooledBody | undefined> {
+  ): Promise<OwnedTemporaryFile | undefined> {
     try {
       return await this.spoolBody(request, maxBytes, timeoutSignal);
     } catch (error) {
@@ -817,10 +837,13 @@ class NodeBridgeServer implements BridgeServer {
     request: IncomingMessage,
     maxBytes: number,
     timeoutSignal: AbortSignal
-  ): Promise<SpooledBody> {
-    const path = join(this.queue.paths.tmp, `.http-body.${process.pid}.${randomUUID()}.tmp`);
+  ): Promise<OwnedTemporaryFile> {
+    const path = join(
+      this.queue.paths.tmp,
+      ownedHttpTemporaryFilename("http-body", this.owner, randomUUID())
+    );
     let handle: FileHandle | undefined;
-    let identity: Omit<SpooledBody, "size"> | undefined;
+    let identity: Omit<OwnedTemporaryFile, "size"> | undefined;
     try {
       this.queue.assertHealthy();
       handle = await open(
@@ -831,7 +854,13 @@ class NodeBridgeServer implements BridgeServer {
       await handle.chmod(0o600);
       const opened = await handle.stat();
       if (!opened.isFile()) throw new Error("Export body spool is not a regular file");
-      identity = { device: opened.dev, inode: opened.ino, path };
+      identity = {
+        device: opened.dev,
+        inode: opened.ino,
+        kind: "http-body",
+        owner: this.owner,
+        path
+      };
       this.queue.assertHealthy();
       const size = await streamRequestToFile(
         request,
@@ -859,7 +888,15 @@ class NodeBridgeServer implements BridgeServer {
         if (identity === undefined) {
           try {
             const opened = await handle.stat();
-            if (opened.isFile()) identity = { device: opened.dev, inode: opened.ino, path };
+            if (opened.isFile()) {
+              identity = {
+                device: opened.dev,
+                inode: opened.ino,
+                kind: "http-body",
+                owner: this.owner,
+                path
+              };
+            }
           } catch (identityError) {
             cleanupFailures.push(identityError);
             // Without a stable identity, retain the path rather than unlinking an unknown replacement.
@@ -887,42 +924,7 @@ class NodeBridgeServer implements BridgeServer {
     }
   }
 
-  private async readSpooledBody(spool: SpooledBody, maxBytes: number): Promise<Buffer> {
-    this.queue.assertHealthy();
-    const handle = await open(spool.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const details = await handle.stat();
-      if (
-        !details.isFile() ||
-        details.dev !== spool.device ||
-        details.ino !== spool.inode ||
-        details.size !== spool.size
-      ) {
-        throw new Error("Export body spool changed before parsing");
-      }
-      if (details.size > maxBytes) throw new BodyTooLargeError();
-      const bytes = Buffer.allocUnsafe(details.size);
-      let offset = 0;
-      while (offset < bytes.byteLength) {
-        const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
-        if (result.bytesRead === 0) throw new Error("Export body spool ended before its recorded size");
-        offset += result.bytesRead;
-      }
-      const afterRead = await handle.stat();
-      if (
-        afterRead.dev !== spool.device ||
-        afterRead.ino !== spool.inode ||
-        afterRead.size !== spool.size
-      ) {
-        throw new Error("Export body spool changed while being read");
-      }
-      return bytes;
-    } finally {
-      await handle.close();
-    }
-  }
-
-  private async removeSpooledBody(spool: SpooledBody): Promise<void> {
+  private async removeSpooledBody(spool: OwnedTemporaryFile): Promise<void> {
     this.queue.assertHealthy();
     let current: Awaited<ReturnType<typeof lstat>>;
     try {

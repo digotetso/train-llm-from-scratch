@@ -66,6 +66,24 @@ export interface AssetDescriptor {
   dataBase64: string;
 }
 
+export const EXTERNAL_ASSET_DATA: unique symbol = Symbol("external-asset-data");
+
+export interface VerifiedAssetEvidence {
+  byteLength: number;
+  hash: string;
+}
+
+export type ExternalAssetDescriptor = Omit<AssetDescriptor, "dataBase64">;
+
+export interface ExternalExporterPackage extends Omit<ExporterPackage, "assets"> {
+  assets: ExternalAssetDescriptor[];
+}
+
+export interface PackageByteCounts {
+  bodyBytes: number;
+  manifestBytes: number;
+}
+
 export interface ExporterPackage {
   schemaVersion: "1.0.0";
   exporterVersion: string;
@@ -348,21 +366,41 @@ function frameAt(
   };
 }
 
-function assetAt(value: unknown, path: string): AssetDescriptor {
+function assetAt(
+  value: unknown,
+  path: string,
+  verifiedEvidence?: VerifiedAssetEvidence
+): AssetDescriptor {
   const record = recordAt(value, path);
   exactKeys(record, ["hash", "mimeType", "byteLength", "dataBase64"], path);
   if (record.mimeType !== "image/png") invalid(`${path}.mimeType`, "expected image/png");
   const declaredByteLength = safeIntegerAt(record.byteLength, `${path}.byteLength`);
-  const decoded = decodedBase64Length(record.dataBase64, `${path}.dataBase64`);
-  if (declaredByteLength !== decoded.byteLength) {
-    invalid(`${path}.byteLength`, `declared ${declaredByteLength} bytes but base64 decodes to ${decoded.byteLength}`);
+  let dataBase64: string;
+  if (verifiedEvidence === undefined) {
+    const decoded = decodedBase64Length(record.dataBase64, `${path}.dataBase64`);
+    if (declaredByteLength !== decoded.byteLength) {
+      invalid(`${path}.byteLength`, `declared ${declaredByteLength} bytes but base64 decodes to ${decoded.byteLength}`);
+    }
+    dataBase64 = decoded.dataBase64;
+  } else {
+    if (record.dataBase64 !== EXTERNAL_ASSET_DATA) {
+      invalid(`${path}.dataBase64`, "expected verified external asset data");
+    }
+    if (declaredByteLength !== verifiedEvidence.byteLength) {
+      invalid(
+        `${path}.byteLength`,
+        `declared ${declaredByteLength} bytes but verified data contains ${verifiedEvidence.byteLength}`
+      );
+    }
+    hashAt(verifiedEvidence.hash, `${path}.verifiedHash`);
+    dataBase64 = "";
   }
   if (declaredByteLength > LIMITS.maxAssetBytes) invalid(`${path}.byteLength`, "asset exceeds the per-asset limit");
   return {
     hash: hashAt(record.hash, `${path}.hash`),
     mimeType: "image/png",
     byteLength: declaredByteLength,
-    dataBase64: decoded.dataBase64
+    dataBase64
   };
 }
 
@@ -379,7 +417,11 @@ function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function validatePackageInternal(value: unknown, allowEmptyContentHash: boolean): ExporterPackage {
+function validatePackageInternal(
+  value: unknown,
+  allowEmptyContentHash: boolean,
+  verifiedAssets?: { byteCounts: PackageByteCounts; evidence: readonly VerifiedAssetEvidence[] }
+): ExporterPackage {
   const record = recordAt(value, "$");
   exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "source", "target", "frames", "assets"], "$");
 
@@ -399,12 +441,17 @@ function validatePackageInternal(value: unknown, allowEmptyContentHash: boolean)
 
   const assetValues = arrayAt(record.assets, "$.assets");
   if (assetValues.length > LIMITS.maxAssets) invalid("$.assets", `exceeds the ${LIMITS.maxAssets}-asset limit`);
+  if (verifiedAssets !== undefined && verifiedAssets.evidence.length !== assetValues.length) {
+    invalid("$.assets", "verified asset evidence count does not match the asset array");
+  }
   preflightAssetByteLengths(assetValues);
 
   const nodeIds = new Set<string>();
   const rasterAssetHashes = new Set<string>();
   const frames = frameValues.map((frame, index) => frameAt(frame, `$.frames[${index}]`, nodeIds, rasterAssetHashes));
-  const assets = assetValues.map((asset, index) => assetAt(asset, `$.assets[${index}]`));
+  const assets = assetValues.map((asset, index) =>
+    assetAt(asset, `$.assets[${index}]`, verifiedAssets?.evidence[index])
+  );
 
   const assetHashes = new Set<string>();
   let aggregateAssetBytes = 0;
@@ -440,15 +487,23 @@ function validatePackageInternal(value: unknown, allowEmptyContentHash: boolean)
     assets
   };
 
-  const manifestWithoutAssetData: ExporterPackage = {
-    ...result,
-    assets: result.assets.map((asset) => ({ ...asset, dataBase64: "" }))
-  };
-  if (utf8ByteLength(JSON.stringify(manifestWithoutAssetData)) > LIMITS.maxManifestBytes) {
-    invalid("$", "manifest exceeds the manifest-byte limit");
-  }
-  if (utf8ByteLength(JSON.stringify(result)) > LIMITS.maxBodyBytes) {
-    invalid("$", "package exceeds the complete-body limit");
+  if (verifiedAssets === undefined) {
+    const manifestWithoutAssetData: ExporterPackage = {
+      ...result,
+      assets: result.assets.map((asset) => ({ ...asset, dataBase64: "" }))
+    };
+    if (utf8ByteLength(JSON.stringify(manifestWithoutAssetData)) > LIMITS.maxManifestBytes) {
+      invalid("$", "manifest exceeds the manifest-byte limit");
+    }
+    if (utf8ByteLength(JSON.stringify(result)) > LIMITS.maxBodyBytes) {
+      invalid("$", "package exceeds the complete-body limit");
+    }
+  } else {
+    const { bodyBytes, manifestBytes } = verifiedAssets.byteCounts;
+    if (!Number.isSafeInteger(manifestBytes) || manifestBytes < 0) invalid("$", "manifest byte count is invalid");
+    if (!Number.isSafeInteger(bodyBytes) || bodyBytes < manifestBytes) invalid("$", "body byte count is invalid");
+    if (manifestBytes > LIMITS.maxManifestBytes) invalid("$", "manifest exceeds the manifest-byte limit");
+    if (bodyBytes > LIMITS.maxBodyBytes) invalid("$", "package exceeds the complete-body limit");
   }
 
   return result;
@@ -456,6 +511,18 @@ function validatePackageInternal(value: unknown, allowEmptyContentHash: boolean)
 
 export function validatePackage(value: unknown): ExporterPackage {
   return validatePackageInternal(value, false);
+}
+
+export function validatePackageWithVerifiedAssets(
+  value: unknown,
+  evidence: readonly VerifiedAssetEvidence[],
+  byteCounts: PackageByteCounts
+): ExternalExporterPackage {
+  const result = validatePackageInternal(value, false, { byteCounts, evidence });
+  return {
+    ...result,
+    assets: result.assets.map(({ dataBase64: _dataBase64, ...asset }) => asset)
+  };
 }
 
 export function contentFingerprintInput(value: ExporterPackage): string {

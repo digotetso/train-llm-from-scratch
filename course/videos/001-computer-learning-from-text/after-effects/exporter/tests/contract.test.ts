@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
+  EXTERNAL_ASSET_DATA,
   canonicalJson,
   contentFingerprintInput,
   type ExporterPackage,
   type RasterNode,
   type TextNode,
-  validatePackage
+  validatePackage,
+  validatePackageWithVerifiedAssets
 } from "../src/shared/contract.ts";
 import { LIMITS } from "../src/shared/limits.ts";
 import { makeValidPackage } from "./helpers/package.ts";
@@ -267,4 +270,55 @@ test("content fingerprints change when manifest content changes", () => {
     mutate(value);
     assert.notEqual(contentFingerprintInput(value), baseline, label);
   }
+});
+
+test("verified external assets reuse package schema and reference validation", () => {
+  const value = makeValidPackage();
+  const bytes = Buffer.from("external verified png");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  value.assets.push({
+    hash,
+    mimeType: "image/png",
+    byteLength: bytes.byteLength,
+    dataBase64: bytes.toString("base64")
+  });
+  value.frames[0]!.children.push(rasterNode(hash));
+  const wireBytes = Buffer.byteLength(JSON.stringify(value));
+  const externalValue = structuredClone(value) as unknown as Record<string, unknown>;
+  const assets = externalValue.assets as Array<Record<string, unknown>>;
+  assets[0]!.dataBase64 = EXTERNAL_ASSET_DATA;
+  const byteCounts = {
+    bodyBytes: wireBytes,
+    manifestBytes: wireBytes - value.assets[0]!.dataBase64.length
+  };
+
+  const validated = validatePackageWithVerifiedAssets(
+    externalValue,
+    [{ byteLength: bytes.byteLength, hash }],
+    byteCounts
+  );
+
+  assert.deepEqual(validated.assets, [{ hash, mimeType: "image/png", byteLength: bytes.byteLength }]);
+  assert.deepEqual(validated.frames, value.frames);
+
+  const unexpected = {
+    ...externalValue,
+    source: { ...(externalValue.source as Record<string, unknown>), unexpected: true }
+  };
+  assert.throws(
+    () => validatePackageWithVerifiedAssets(unexpected, [{ byteLength: bytes.byteLength, hash }], byteCounts),
+    /unexpected|unknown field/i
+  );
+  assert.throws(
+    () => validatePackageWithVerifiedAssets(
+      externalValue,
+      [{ byteLength: bytes.byteLength + 1, hash }],
+      byteCounts
+    ),
+    /declared|length/i
+  );
+  assert.throws(
+    () => validatePackageWithVerifiedAssets(externalValue, [], byteCounts),
+    /evidence|asset/i
+  );
 });
