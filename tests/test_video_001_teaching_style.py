@@ -13,6 +13,14 @@ def section(markdown: str, heading: str) -> str:
     return content.split("\n## ", maxsplit=1)[0]
 
 
+def spoken_paragraphs(markdown: str) -> list[str]:
+    return [
+        block.strip()
+        for block in markdown.strip().split("\n\n")
+        if block.strip() and not block.strip().startswith("[")
+    ]
+
+
 def test_video_one_builds_intuition_before_technical_vocabulary():
     script = read_script()
     hook = section(script, "## 00:00 Hook")
@@ -53,6 +61,19 @@ def test_video_one_hook_and_analogy_fit_spoken_pacing_and_invite_a_prediction():
     assert "predict" in lowered_analogy
     assert "new number" in lowered_analogy
     assert "fixed agreement" in lowered_analogy
+
+
+def test_video_one_hook_and_analogy_flow_as_connected_conversation():
+    script = read_script()
+    hook = section(script, "## 00:00 Hook")
+    analogy = section(script, "## 00:45 Analogy")
+
+    assert len(spoken_paragraphs(hook)) <= 3
+    assert len(spoken_paragraphs(analogy)) <= 3
+    assert "here's the puzzle" in hook.lower()
+    assert "let's" in hook.lower()
+    assert "only takes us so far" in analogy.lower()
+    assert "\n\nFirst:" not in hook
 
 
 def test_video_one_uses_prediction_and_changed_case_as_evidence():

@@ -4,37 +4,23 @@
 
 [On screen: `cat`]
 
-When you read `cat`, you may picture an animal or remember a pet. That meaning comes from your experience.
+When you read `cat`, you may picture an animal or remember a pet. That meaning comes from your experience. You've seen AI work with text too: it can rewrite an essay, improve an email, or write code.
 
-You may have seen AI rewrite an essay, improve an email, or write code.
+But here's the puzzle. On your computer, the text box shows words, while the model underneath works by calculating with numbers. So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
 
-On your computer, the text box shows words. The model underneath works by calculating with numbers.
-
-So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
-
-By the end, you will be able to explain the difference using three letters, three numbers, and a tiny Python file.
-
-First: how can a number identify something without containing its meaning?
+By the end, you'll explain the difference with three letters, three numbers, and a tiny Python file. To get there, let's start with a smaller question: how can a number identify something without containing its meaning?
 
 ## 00:45 Analogy
 
-**Teaching analogy:** Imagine that a library gives every book a number.
+**Teaching analogy:** Imagine a library where every book has a number. It helps the librarian find the right book, while the story stays inside. That number is an **identifier**: it tells us which book, not what the story means.
 
-That number helps the librarian find the right book. The story stays inside the book.
+Text systems do something similar: agreed numbers help software tell characters apart. But the analogy only takes us so far. Here is its **limit**: a library number can point to a whole book, while text systems represent individual characters and stored forms. This bridge explains identification, not learning.
 
-That number is an **identifier**: it tells us which book, not what the story means.
-
-Text systems do something similar with written characters. Agreed numbers help software tell characters apart.
-
-Here is the analogy's **limit**: a library number may point to a whole physical book. Text systems represent individual characters and their stored forms. This bridge explains identification, not learning.
-
-Before we look at Python, make a prediction: does Python invent a new number for `A` every time, or follow a fixed agreement? Hold your answer. Let's find out.
+Now return to Python and predict: does it invent a new number for `A` every time, or follow a fixed agreement? Hold your answer, and let's find out.
 
 ## 02:00 Technical Meaning
 
-Let us name the mechanism one part at a time.
-
-For this lesson, a **character** is one item Python processes from a string, such as `C`, `a`, `t`, a space, or a question mark.
+Now that you have a prediction, let's find out what rule Python actually follows. Take `C`, `a`, and `t`. Python processes each one as a **character**—one item from a string, just like a space or a question mark.
 
 Software needs a shared agreement that distinguishes those characters. **Unicode** is that shared standard. It assigns each encoded character an integer identifier called a **code point**. Python's `ord` function reports the code point for one character:
 
@@ -46,11 +32,11 @@ ord("t")  # 116
 
 Before looking ahead, compare those calls. If we run `ord("C")` again tomorrow, should the answer improve or change? No. Python is following a fixed agreement. The number identifies `C`; it does not contain the fact that `Cat` names an animal.
 
-There is one more representation layer to distinguish. A **byte** is eight bits and can hold an unsigned value from 0 through 255. **UTF-8** is a widely used rule that represents Unicode text as one or more bytes for each code point.
+So far, we have one agreed number for each character. But when text is stored or sent, there is another layer: the **byte**. A byte is eight bits and can hold an unsigned value from 0 through 255. **UTF-8** is a widely used rule that represents Unicode text as one or more bytes for each code point.
 
 For the simple English letters in `Cat`, the code-point values and the UTF-8 byte values match. Those letters are in the ASCII range, and UTF-8 stores each one as a single byte with the same value. That is a property of this example, not a universal rule. Other characters can require several UTF-8 bytes. Video 4 will build that mechanism carefully.
 
-Now we can define the other half of our question. A **model** is a mathematical prediction system with adjustable numbers called **parameters**. It receives numeric input and produces a prediction. During training, we measure how wrong a prediction is and use that measured error to adjust the parameters. At this stage, that parameter change is what we mean by **learning**.
+We can now explain how text gets a numeric form, but that still does not explain learning. For that, we need a **model**: a mathematical prediction system with adjustable numbers called **parameters**. It receives numeric input and produces a prediction. During training, we measure how wrong that prediction is and use the error to adjust the parameters. At this stage, that parameter change is what we mean by **learning**.
 
 Now that we understand both actions, we can give the distinction a stable name. **Text representation** changes the form of the input by following fixed agreements. **Learning** changes the model's adjustable parameters using examples and measured error.
 
@@ -85,6 +71,8 @@ Real training uses a numeric error measure rather than this simple mistake count
 
 ## 06:00 Repository Walkthrough
 
+Our tiny example gives us the idea. Now let's see where the representation side appears in this project.
+
 **Source fact:** This repository does not send remote, unprocessed text straight into training. It first normalizes the text and stores the result. The relevant code lives in `matgpt/data/normalize.py` and `matgpt/data/prepare.py`.
 
 Start with this simplified excerpt from `normalize.py`:
@@ -103,7 +91,7 @@ def normalize_text(text: str) -> str:
     return text
 ```
 
-Read the changes from top to bottom. `text: str` and `-> str` communicate the expected input and output types; Python does not enforce those annotations at runtime. `str(text)` first asks Python for a string form of the input.
+Let's follow the value from top to bottom. `text: str` and `-> str` communicate the expected input and output types; Python does not enforce those annotations at runtime. `str(text)` first asks Python for a string form of the input.
 
 Next, `unicodedata.normalize("NFKC", ...)` applies a chosen Unicode normalization form. Then the `replace` calls turn different newline styles into `\n`. The list comprehension removes trailing whitespace from each line. The final `strip()` removes whitespace from the outer edges, and `return text` gives the normalized string back to the caller.
 
@@ -133,7 +121,7 @@ What changed in this walkthrough? The text became more consistent, and the recor
 
 ## 09:00 Live Mini-Lab
 
-Open `course/videos/001-computer-learning-from-text/lab.py`.
+Now let's test the same ideas ourselves. Open `course/videos/001-computer-learning-from-text/lab.py`.
 
 ```python
 text = "Cat"
@@ -171,9 +159,7 @@ Finally, return the line to `text = "Cat"` so the lab matches the documented out
 
 ## 12:00 Common Mistake
 
-The first common mistake is saying, “The number `65` is the meaning of `A`.”
-
-It is not. `65` identifies the character `A` under the Unicode agreement. `A` might be a school grade, a musical note, a blood type, or one letter in a word. Its human meaning changes with context while its code point stays the same.
+By now, two common mistakes should stand out. The first is saying, “The number `65` is the meaning of `A`.” But `65` identifies the character `A` under the Unicode agreement. `A` might be a school grade, a musical note, a blood type, or one letter in a word. Its human meaning changes with context while its code point stays the same.
 
 Try this diagnostic question: if another character system assigned a different number to `A`, would people have to change what `A` means? No. The number is a representation, not the meaning.
 
@@ -181,7 +167,7 @@ The second mistake is saying that conversion is learning. `ord` applies a fixed 
 
 ## 13:00 Recap And Exercise
 
-Let us rebuild the answer in plain language.
+We've followed the idea from human meaning to represented text and then to learning. Now let's rebuild the answer in plain language.
 
 When you read `cat`, you bring meaning from your experience. Software first handles represented text. Unicode gives characters code points, and UTF-8 represents those characters as bytes. Those fixed mappings make the text usable as data, but applying them does not teach a model anything.
 
