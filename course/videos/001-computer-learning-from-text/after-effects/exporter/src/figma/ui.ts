@@ -461,7 +461,6 @@ function startRuntime(): void {
   downloadButton.addEventListener("click", () => ui.download());
   requiredElement<HTMLButtonElement>("close-plugin").addEventListener("click", () => ui.close());
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
-    if (event.source !== parent) return;
     if (event.data === null || typeof event.data !== "object" || Array.isArray(event.data)) return;
     const envelope = event.data as UnknownRecord;
     if (Object.keys(envelope).length !== 1 || !Object.prototype.hasOwnProperty.call(envelope, "pluginMessage")) return;

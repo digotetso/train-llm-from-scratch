@@ -20,8 +20,9 @@ The Task 5 controller, UI boundary, manifest, and build pipeline were implemente
 - https://developers.figma.com/docs/plugins/api/properties/TextNode-getstyledtextsegments/
 - https://developers.figma.com/docs/plugins/api/figma/
 - https://developers.figma.com/docs/plugins/api/properties/figma-ui-postmessage/
+- https://developers.figma.com/docs/plugins/creating-ui/
 - https://developers.figma.com/docs/plugins/plugin-quickstart-guide/
 
-The installed official `@figma/plugin-typings` package is pinned to `1.131.0`. The adapter uses `absoluteTransform`, requests `fontName`, `fontSize`, and `fills` from `TextNode.getStyledTextSegments`, sends structured-clone-safe messages through `figma.ui.postMessage`, stores bridge credentials only through `figma.clientStorage`, and requests raster fallback bytes with PNG `SCALE` 1 export settings.
+The installed official `@figma/plugin-typings` package is pinned to `1.131.0`. The adapter uses `absoluteTransform`, requests `fontName`, `fontSize`, and `fills` from `TextNode.getStyledTextSegments`, sends structured-clone-safe messages through `figma.ui.postMessage`, stores bridge credentials only through `figma.clientStorage`, and requests raster fallback bytes with PNG `SCALE` 1 export settings. The iframe receives controller messages through the documented `event.data.pluginMessage` envelope without assuming a specific forwarding `event.source`; the envelope and every `ControllerToUi` payload remain exact-key validated.
 
 The development manifest and controller share the documented `http://localhost:3456` origin. The bridge server remains bound to the numeric IPv4 loopback address `127.0.0.1`; changing the client URL does not broaden the server bind interface.

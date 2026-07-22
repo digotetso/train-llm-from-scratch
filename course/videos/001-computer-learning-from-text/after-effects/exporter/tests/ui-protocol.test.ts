@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { runInNewContext } from "node:vm";
+import { createContext, runInContext, runInNewContext } from "node:vm";
 import {
   BRIDGE_BASE_URL,
   BRIDGE_TOKEN_KEY,
@@ -939,6 +939,128 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
       env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
     });
     assert.equal(replacement.status, 0, `${replacement.stdout}\n${replacement.stderr}`);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("built UI accepts Figma-forwarded controller envelopes from a non-parent source", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "video001-ui-runtime-"));
+  try {
+    const pluginIdFile = join(fixture, ".figma-plugin-id");
+    const outDir = join(fixture, "dist/figma");
+    const timingFixture = join(fixture, "figma-scenes.json");
+    copyFileSync(approvedTimingSource(), timingFixture);
+    writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
+    const script = new URL("../scripts/build.mjs", import.meta.url);
+    const result = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile,
+      "--out-dir", outDir
+    ], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const html = readFileSync(join(outDir, "ui.html"), "utf8");
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    assert.equal(scripts.length, 1, "expected one inline UI runtime");
+    const uiJavaScript = scripts[0]![1]!;
+    const listeners = new Map<string, (event: unknown) => void>();
+    const posted: unknown[] = [];
+    const elements = new Map<string, ReturnType<typeof makeElement>>();
+
+    function makeElement() {
+      return {
+        children: [] as unknown[],
+        textContent: "",
+        value: "",
+        disabled: false,
+        hidden: false,
+        addEventListener: () => undefined,
+        append: () => undefined,
+        click: () => undefined,
+        remove: () => undefined,
+        reportValidity: () => undefined,
+        setAttribute: () => undefined,
+        setCustomValidity: () => undefined,
+        replaceChildren(...children: unknown[]) {
+          this.children = children;
+        }
+      };
+    }
+
+    const document = {
+      body: makeElement(),
+      documentElement: makeElement(),
+      createElement: () => makeElement(),
+      getElementById: (id: string) => {
+        let element = elements.get(id);
+        if (element === undefined) {
+          element = makeElement();
+          elements.set(id, element);
+        }
+        return element;
+      }
+    };
+    const parentWindow = {
+      postMessage: (message: unknown) => posted.push(structuredClone(message))
+    };
+    const window = {
+      addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
+      dispatchMessage: (event: unknown) => listeners.get("message")?.(event)
+    };
+    const sandbox = {
+      Blob,
+      TextEncoder,
+      URL: {
+        createObjectURL: () => "blob:fixture",
+        revokeObjectURL: () => undefined
+      },
+      crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
+      document,
+      messageJson: "",
+      nonParentSource: {},
+      parent: parentWindow,
+      structuredClone,
+      window
+    };
+    const context = createContext(sandbox);
+    runInContext(uiJavaScript, context);
+
+    assert.deepEqual(posted, [{ pluginMessage: { type: "refresh-selection" } }]);
+    const receive = listeners.get("message");
+    assert.ok(receive, "UI runtime did not install its message listener");
+    assert.notEqual(sandbox.nonParentSource, parentWindow);
+    sandbox.messageJson = JSON.stringify({
+      pluginMessage: {
+        type: "selection",
+        generation: 1,
+        frames: [{ nodeId: "95:44", name: "S001_SH32_Repo_PreparationNotLearning", duration: 28 }]
+      }
+    });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    assert.equal(elements.get("status")?.textContent, "1 frame selected.");
+    assert.deepEqual(
+      elements.get("selection-list")?.children.map((child) => (child as { textContent: string }).textContent),
+      ["S001_SH32_Repo_PreparationNotLearning · 28 frames"]
+    );
+
+    sandbox.messageJson = JSON.stringify({
+      pluginMessage: { type: "selection", generation: 2, frames: [] },
+      unexpected: true
+    });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    assert.equal(elements.get("status")?.textContent, "1 frame selected.");
+
+    sandbox.messageJson = JSON.stringify({
+      pluginMessage: { type: "selection", generation: 2, frames: [], unexpected: true }
+    });
+    runInContext("window.dispatchMessage({ source: nonParentSource, data: JSON.parse(messageJson) })", context);
+    assert.equal(elements.get("status")?.textContent, "Plugin message rejected.");
+    assert.match(elements.get("error")?.textContent ?? "", /unknown field/i);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
