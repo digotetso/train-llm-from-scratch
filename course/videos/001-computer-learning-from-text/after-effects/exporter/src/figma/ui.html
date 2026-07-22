@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video 001 → After Effects</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 12px;
+      color: var(--figma-color-text, #f5f7fb);
+      background: var(--figma-color-bg, #11182d);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; }
+    main { display: grid; gap: 14px; }
+    header, .row, .actions { display: flex; gap: 8px; align-items: center; }
+    header { justify-content: space-between; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 16px; }
+    h2 { font-size: 12px; }
+    section {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--figma-color-border, #33405f);
+      border-radius: 8px;
+      background: var(--figma-color-bg-secondary, #17213b);
+    }
+    ul { margin: 0; padding-left: 18px; max-height: 100px; overflow: auto; }
+    label { font-weight: 600; }
+    input {
+      min-width: 0;
+      flex: 1;
+      padding: 8px;
+      border: 1px solid var(--figma-color-border, #53627f);
+      border-radius: 5px;
+      color: inherit;
+      background: var(--figma-color-bg, #11182d);
+    }
+    button {
+      min-height: 32px;
+      padding: 7px 10px;
+      border: 1px solid var(--figma-color-border, #53627f);
+      border-radius: 5px;
+      color: inherit;
+      background: var(--figma-color-bg-tertiary, #263554);
+      cursor: pointer;
+    }
+    button.primary { background: var(--figma-color-bg-brand, #0d99ff); color: #fff; border-color: transparent; }
+    button:disabled { cursor: not-allowed; opacity: 0.45; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--figma-color-border-brand, #35c7ff); outline-offset: 2px; }
+    .actions { align-items: stretch; }
+    .actions button { flex: 1; }
+    .counts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric { padding: 8px; border-radius: 5px; background: var(--figma-color-bg, #11182d); }
+    .metric strong { display: block; font-size: 18px; }
+    #status { min-height: 18px; color: var(--figma-color-text-secondary, #a8b3cf); }
+    #error { color: var(--figma-color-text-danger, #ff7369); }
+    #warning-list:empty::before, #selection-list:empty::before { content: "None"; color: var(--figma-color-text-tertiary, #78849f); }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Video 001 → After Effects</h1>
+        <p>Lesson-local exporter</p>
+      </div>
+      <button id="close-plugin" type="button" aria-label="Close plugin">Close</button>
+    </header>
+
+    <section aria-labelledby="selection-heading">
+      <div class="row">
+        <h2 id="selection-heading">Selected lesson frames</h2>
+        <button id="refresh-selection" type="button">Refresh</button>
+      </div>
+      <ul id="selection-list" aria-live="polite"></ul>
+      <button id="build-package" type="button" disabled>Build package</button>
+    </section>
+
+    <section aria-labelledby="fidelity-heading">
+      <h2 id="fidelity-heading">Fidelity summary</h2>
+      <div class="counts">
+        <div class="metric"><strong id="native-count">0</strong>Native layers</div>
+        <div class="metric"><strong id="raster-count">0</strong>Raster fallbacks</div>
+      </div>
+      <h2>Warnings</h2>
+      <ul id="warning-list"></ul>
+    </section>
+
+    <section aria-labelledby="pair-heading">
+      <h2 id="pair-heading">Pair with the local bridge</h2>
+      <form id="pair-form" class="row">
+        <label class="visually-hidden" for="pairing-code">Six-digit After Effects pairing code</label>
+        <input id="pairing-code" name="pairing-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6-digit code" aria-describedby="pair-help">
+        <button type="submit">Pair</button>
+      </form>
+      <p id="pair-help">Enter the one-time code shown in the After Effects panel.</p>
+      <p>Bridge: <span id="bridge-code">Not checked</span></p>
+    </section>
+
+    <div class="actions">
+      <button id="send-live" class="primary" type="button" disabled>Send to After Effects</button>
+      <button id="download-package" type="button" disabled>Download package</button>
+    </div>
+
+    <p id="status" role="status" aria-live="polite">Select a prepared Video 001 frame.</p>
+    <p id="error" role="alert" hidden></p>
+  </main>
+  <!-- FIGMA_PLUGIN_SCRIPT -->
+</body>
+</html>
