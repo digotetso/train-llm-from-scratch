@@ -406,6 +406,10 @@ test("both protocol boundaries reject unknown keys, invalid types, and exotic pr
   }), /status/i);
 });
 
+test("plugin protocol uses Figma's documented localhost development origin", () => {
+  assert.equal(BRIDGE_BASE_URL, "http://localhost:3456");
+});
+
 async function hashedPackage(): Promise<ExporterPackage> {
   const value = makeValidPackage();
   value.contentHash = "";
@@ -859,7 +863,7 @@ test("manifest generator rejects missing, malformed, and example IDs and emits e
       documentAccess: "dynamic-page",
       networkAccess: {
         allowedDomains: ["none"],
-        devAllowedDomains: ["http://127.0.0.1:3456"],
+        devAllowedDomains: [BRIDGE_BASE_URL],
         reasoning: "Transfers selected lesson frames to the local After Effects bridge."
       }
     });
@@ -898,6 +902,9 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     const code = readFileSync(join(outDir, "code.js"), "utf8");
     const html = readFileSync(join(outDir, "ui.html"), "utf8");
     const manifest = readFileSync(join(outDir, "manifest.json"), "utf8");
+    const parsedManifest = JSON.parse(manifest) as {
+      networkAccess: { allowedDomains: string[]; devAllowedDomains: string[] };
+    };
     assert.match(code, /95:44/);
     assert.match(code, /S001_SH32_Repo_PreparationNotLearning/);
     assert.match(code, /duration:28|"duration":28/);
@@ -912,6 +919,10 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.doesNotMatch(`${code}\n${html}`, /console\.(?:log|debug|info)\s*\(/);
     assert.doesNotMatch(`${code}\n${html}`, /1661000000000000000/);
     assert.doesNotMatch(code, /TextEncoder|crypto\.subtle|globalThis\.crypto/);
+    assert.deepEqual(parsedManifest.networkAccess.allowedDomains, ["none"]);
+    assert.deepEqual(parsedManifest.networkAccess.devAllowedDomains, [BRIDGE_BASE_URL]);
+    assert.match(code, /http:\/\/localhost:3456/);
+    assert.doesNotMatch(code, /http:\/\/127\.0\.0\.1:3456/);
     assert.match(manifest, /987654321012345678/);
     assert.equal(
       readFileSync(join(outDir, ".video001-figma-build-owned"), "utf8"),

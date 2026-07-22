@@ -13,8 +13,9 @@ import {
 } from "./serializer.ts";
 import { sha256Hex } from "../shared/sha256.ts";
 import { decodeUtf8 } from "../shared/utf8.ts";
+import { FIGMA_BRIDGE_ORIGIN } from "../shared/figma-network.mjs";
 
-export const BRIDGE_BASE_URL = "http://127.0.0.1:3456";
+export const BRIDGE_BASE_URL = FIGMA_BRIDGE_ORIGIN;
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
 export const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
 

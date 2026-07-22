@@ -3,6 +3,7 @@ import { access, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateFigmaManifest, readPluginId } from "./generate-figma-manifest.mjs";
+import { FIGMA_BRIDGE_ORIGIN } from "../src/shared/figma-network.mjs";
 
 const REQUIRED_ESBUILD_VERSION = "0.28.1";
 const EXPECTED_FILE_KEY = "fFTux3sx2AzVQtoya67f95";
@@ -258,6 +259,9 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   }
   if (/\.headers\.get\(|\.body(?:\?\.|\.)getReader\(/.test(controllerJavaScript)) {
     throw new Error("Controller bundle contains DOM Response APIs unavailable in the Figma main sandbox");
+  }
+  if (!controllerJavaScript.includes(FIGMA_BRIDGE_ORIGIN) || controllerJavaScript.includes("http://127.0.0.1:3456")) {
+    throw new Error("Controller bundle and Figma manifest development origins do not match");
   }
 
   const destinationParent = dirname(destination);

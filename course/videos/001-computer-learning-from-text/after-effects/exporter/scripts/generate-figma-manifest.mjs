@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { FIGMA_BRIDGE_ORIGIN } from "../src/shared/figma-network.mjs";
 
 const ID_PATTERN = /^[0-9]{10,30}$/;
 const DOCUMENTED_EXAMPLE_ID = "1661000000000000000";
@@ -28,7 +29,7 @@ export function figmaManifest(id) {
     documentAccess: "dynamic-page",
     networkAccess: {
       allowedDomains: ["none"],
-      devAllowedDomains: ["http://127.0.0.1:3456"],
+      devAllowedDomains: [FIGMA_BRIDGE_ORIGIN],
       reasoning: "Transfers selected lesson frames to the local After Effects bridge."
     }
   };
