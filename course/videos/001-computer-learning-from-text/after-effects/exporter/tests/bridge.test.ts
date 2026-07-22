@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import test from "node:test";
@@ -125,6 +125,37 @@ test("existing asset symlinks are rejected without touching their targets", asyn
   await assert.rejects(queue.writeAsset(hash, bytes), /regular file|symbolic link/i);
   assert.equal((await stat(external)).mode & 0o777, 0o644);
   assert.deepEqual(await readFile(external), bytes);
+});
+
+test("replacing the assets directory with a symlink fails closed", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "video001-exporter-assets-swap-"));
+  const root = join(parent, "queue");
+  const outside = join(parent, "outside");
+  const queue = new QueueStore(root);
+  await mkdir(outside, { mode: 0o700 });
+  await rename(join(root, "assets"), join(root, "assets-original"));
+  await symlink(outside, join(root, "assets"), "dir");
+  const bytes = Buffer.from("must remain inside queue root");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+
+  await assert.rejects(queue.writeAsset(hash, bytes), /directory|identity|symlink|changed/i);
+  assert.deepEqual(await readdir(outside), []);
+});
+
+test("replacing the queue root with a symlink fails closed", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "video001-exporter-root-swap-"));
+  const root = join(parent, "queue");
+  const outside = join(parent, "outside");
+  const queue = new QueueStore(root);
+  new QueueStore(outside);
+  await rename(root, join(parent, "queue-original"));
+  await symlink(outside, root, "dir");
+  const bytes = Buffer.from("must not reach replacement root");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+
+  await assert.rejects(queue.writeAsset(hash, bytes), /directory|identity|symlink|changed/i);
+  assert.deepEqual(await readdir(join(outside, "assets")), []);
+  assert.deepEqual(await readdir(join(outside, "tmp")), []);
 });
 
 test("duplicate package hashes are rejected without replacing the queued file", async () => {

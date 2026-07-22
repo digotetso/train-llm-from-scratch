@@ -3,11 +3,11 @@ import {
   chmodSync,
   constants,
   lstatSync,
-  mkdirSync
+  mkdirSync,
+  realpathSync
 } from "node:fs";
 import {
   access,
-  chmod,
   open,
   rename,
   unlink
@@ -24,6 +24,13 @@ import { exporterPaths, type ExporterPaths } from "./paths.ts";
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const PACKAGE_SUFFIX = ".video001-ae.json";
 const ERROR_SUFFIX = ".error.json";
+
+interface DirectoryIdentity {
+  path: string;
+  realPath: string;
+  device: number;
+  inode: number;
+}
 
 export interface QueuedAsset extends Omit<AssetDescriptor, "dataBase64"> {
   path: string;
@@ -70,6 +77,35 @@ function ensurePrivateDirectory(path: string): void {
   chmodSync(path, 0o700);
 }
 
+function captureDirectoryIdentity(path: string): DirectoryIdentity {
+  const details = lstatSync(path);
+  if (!details.isDirectory() || details.isSymbolicLink() || (details.mode & 0o077) !== 0) {
+    throw new Error(`Exporter directory is not private or changed identity: ${path}`);
+  }
+  return {
+    path,
+    realPath: realpathSync(path),
+    device: details.dev,
+    inode: details.ino
+  };
+}
+
+function assertDirectoryIdentity(identity: DirectoryIdentity): void {
+  let current: DirectoryIdentity;
+  try {
+    current = captureDirectoryIdentity(identity.path);
+  } catch {
+    throw new Error(`Exporter directory changed identity or became a symlink: ${identity.path}`);
+  }
+  if (
+    current.realPath !== identity.realPath ||
+    current.device !== identity.device ||
+    current.inode !== identity.inode
+  ) {
+    throw new Error(`Exporter directory changed identity: ${identity.path}`);
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -80,33 +116,35 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 export class QueueStore {
   readonly paths: ExporterPaths;
+  private readonly directoryIdentities: DirectoryIdentity[];
 
   constructor(root?: string) {
     this.paths = exporterPaths(root);
-    for (const directory of [
+    const directories = [
       this.paths.root,
       this.paths.tmp,
       this.paths.incoming,
       this.paths.quarantine,
       this.paths.assets,
       this.paths.logs
-    ]) {
+    ];
+    for (const directory of directories) {
       ensurePrivateDirectory(directory);
+    }
+    this.directoryIdentities = directories.map(captureDirectoryIdentity);
+    const rootIdentity = this.directoryIdentities[0];
+    if (
+      rootIdentity === undefined ||
+      this.directoryIdentities.slice(1).some((identity) => dirname(identity.realPath) !== rootIdentity.realPath)
+    ) {
+      throw new Error("Exporter subdirectories must resolve directly inside the canonical exporter root");
     }
   }
 
   async enqueue(value: unknown): Promise<EnqueueResult> {
+    this.assertDirectoryIdentities();
     const validated = validatePackage(value);
     assertHash(validated.contentHash);
     const filename = `${validated.contentHash}${PACKAGE_SUFFIX}`;
@@ -114,7 +152,12 @@ export class QueueStore {
     const lockPath = join(this.paths.tmp, `.${validated.contentHash}.enqueue.lock`);
     let lock: Awaited<ReturnType<typeof open>>;
     try {
-      lock = await open(lockPath, "wx", 0o600);
+      this.assertDirectoryIdentities();
+      lock = await open(
+        lockPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new QueueConflictError(validated.contentHash);
@@ -123,6 +166,7 @@ export class QueueStore {
     }
 
     try {
+      this.assertDirectoryIdentities();
       if (await pathExists(destination)) throw new QueueConflictError(validated.contentHash);
 
       const assets: QueuedAsset[] = [];
@@ -142,11 +186,13 @@ export class QueueStore {
       return { filename, path: destination, package: queuedPackage };
     } finally {
       await lock.close();
+      this.assertDirectoryIdentities();
       await unlink(lockPath);
     }
   }
 
   async writeAsset(hash: string, value: Uint8Array, expectedByteLength = value.byteLength): Promise<string> {
+    this.assertDirectoryIdentities();
     assertHash(hash);
     if (!Number.isSafeInteger(expectedByteLength) || expectedByteLength < 0) {
       throw new TypeError("Asset byte length must be a non-negative safe integer");
@@ -161,6 +207,7 @@ export class QueueStore {
     const destination = join(this.paths.assets, `${hash}.png`);
     let existingHandle: Awaited<ReturnType<typeof open>> | undefined;
     try {
+      this.assertDirectoryIdentities();
       existingHandle = await open(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -177,6 +224,7 @@ export class QueueStore {
         const existingHash = createHash("sha256").update(existing).digest("hex");
         if (existing.byteLength === expectedByteLength && existingHash === hash) {
           await existingHandle.chmod(0o600);
+          this.assertDirectoryIdentities();
           return destination;
         }
       } finally {
@@ -189,6 +237,7 @@ export class QueueStore {
   }
 
   async quarantine(contentHash: string, error: unknown): Promise<QuarantineResult> {
+    this.assertDirectoryIdentities();
     assertHash(contentHash);
     void error;
     const filename = `${contentHash}${PACKAGE_SUFFIX}`;
@@ -197,11 +246,17 @@ export class QueueStore {
     const destination = join(this.paths.quarantine, filename);
     const reportPath = join(this.paths.quarantine, reportFilename);
 
+    this.assertDirectoryIdentities();
     if (!(await pathExists(source))) throw new Error(`Queued package ${contentHash} was not found`);
-    if ((await pathExists(destination)) || (await pathExists(reportPath))) {
+    this.assertDirectoryIdentities();
+    const destinationExists = await pathExists(destination);
+    this.assertDirectoryIdentities();
+    const reportExists = await pathExists(reportPath);
+    if (destinationExists || reportExists) {
       throw new QueueConflictError(contentHash);
     }
 
+    this.assertDirectoryIdentities();
     await rename(source, destination);
     try {
       const report = {
@@ -212,8 +267,9 @@ export class QueueStore {
         }
       };
       await this.atomicWrite(reportPath, Buffer.from(canonicalJson(report), "utf8"));
-      await syncDirectory(this.paths.quarantine);
+      await this.syncKnownDirectory(this.paths.quarantine);
     } catch (writeError) {
+      this.assertDirectoryIdentities();
       await rename(destination, source);
       throw writeError;
     }
@@ -225,22 +281,48 @@ export class QueueStore {
     const temporaryPath = join(this.paths.tmp, temporaryName);
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      handle = await open(temporaryPath, "wx", 0o600);
+      this.assertDirectoryIdentities();
+      handle = await open(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
       await handle.writeFile(bytes);
       await handle.sync();
       await handle.close();
       handle = undefined;
+      this.assertDirectoryIdentities();
       await rename(temporaryPath, destination);
-      await chmod(destination, 0o600);
-      await syncDirectory(dirname(destination));
+      await this.syncKnownDirectory(dirname(destination));
     } catch (error) {
       if (handle !== undefined) await handle.close();
       try {
+        this.assertDirectoryIdentities();
         await unlink(temporaryPath);
-      } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+      } catch {
+        // Preserve the original failure and never follow a changed directory during cleanup.
       }
       throw error;
+    }
+  }
+
+  private assertDirectoryIdentities(): void {
+    for (const identity of this.directoryIdentities) assertDirectoryIdentity(identity);
+  }
+
+  private async syncKnownDirectory(path: string): Promise<void> {
+    this.assertDirectoryIdentities();
+    const identity = this.directoryIdentities.find((candidate) => candidate.path === path);
+    if (identity === undefined) throw new Error(`Refusing to fsync an unknown exporter directory: ${path}`);
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const details = await handle.stat();
+      if (!details.isDirectory() || details.dev !== identity.device || details.ino !== identity.inode) {
+        throw new Error(`Exporter directory changed identity: ${path}`);
+      }
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
   }
 }

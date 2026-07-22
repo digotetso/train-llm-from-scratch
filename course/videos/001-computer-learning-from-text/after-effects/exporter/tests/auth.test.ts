@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { closeSync, fsyncSync, openSync } from "node:fs";
+import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { AuthStore } from "../src/bridge/auth.ts";
 import { LIMITS } from "../src/shared/limits.ts";
@@ -137,4 +138,100 @@ test("a token-generation failure durably consumes the pairing code", async () =>
 
   const reopened = await AuthStore.open(statePath, () => 40_001, randomSequence(42));
   assert.throws(() => reopened.exchangePairingCode(code), /used|invalid/i);
+});
+
+test("auth state fsyncs its parent directory before token generation and method return", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-auth-durability-"));
+  const statePath = join(root, "private", "auth.json");
+  const events: string[] = [];
+  let randomCalls = 0;
+  const random = (): Buffer => {
+    randomCalls += 1;
+    if (randomCalls === 2) events.push("token-generated");
+    return Buffer.alloc(32, randomCalls);
+  };
+  const syncDirectory = (path: string): void => {
+    const descriptor = openSync(path, "r");
+    try {
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    events.push(`directory-fsynced:${path}`);
+  };
+  const auth = await AuthStore.open(statePath, () => 50_000, random, syncDirectory);
+  const code = auth.createPairingCode();
+
+  events.length = 0;
+  auth.exchangePairingCode(code);
+  assert.deepEqual(events, [
+    `directory-fsynced:${dirname(statePath)}`,
+    "token-generated",
+    `directory-fsynced:${dirname(statePath)}`
+  ]);
+
+  events.length = 0;
+  auth.revokeAll();
+  assert.deepEqual(events, [`directory-fsynced:${dirname(statePath)}`]);
+});
+
+test("two auth stores cannot exchange the same persisted pairing code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-auth-shared-code-"));
+  const statePath = join(root, "auth.json");
+  const first = await AuthStore.open(statePath, () => 60_000, randomSequence(51, 52));
+  const code = first.createPairingCode();
+  const second = await AuthStore.open(statePath, () => 60_000, randomSequence(53));
+
+  const token = first.exchangePairingCode(code);
+  assert.equal(Buffer.from(token, "base64url").byteLength, 32);
+  assert.throws(() => second.exchangePairingCode(code), /used|invalid/i);
+});
+
+test("an unowned auth lock fails closed and is not silently removed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-auth-stale-lock-"));
+  const statePath = join(root, "auth.json");
+  const auth = await AuthStore.open(statePath, () => 65_000, randomSequence(55));
+  const lockPath = `${statePath}.lock`;
+  await writeFile(lockPath, "unowned crash lock", { mode: 0o600 });
+
+  assert.throws(() => auth.createPairingCode(), /locked|lock/i);
+  assert.equal(await readFile(lockPath, "utf8"), "unowned crash lock");
+});
+
+test("revocation in one auth store cannot be rolled back by another stale store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-auth-shared-revoke-"));
+  const statePath = join(root, "auth.json");
+  const first = await AuthStore.open(statePath, () => 70_000, randomSequence(61, 62));
+  const token = first.exchangePairingCode(first.createPairingCode());
+  const stale = await AuthStore.open(statePath, () => 70_001, randomSequence(63));
+
+  first.revokeAll();
+  assert.equal(stale.authenticateBearer(`Bearer ${token}`), false);
+  const reopened = await AuthStore.open(statePath, () => 70_002, randomSequence(64));
+  assert.equal(reopened.authenticateBearer(`Bearer ${token}`), false);
+});
+
+test("pairing-code generation rejects biased uint32 values and retries", () => {
+  const values = [Buffer.alloc(32, 0xff), Buffer.alloc(32)];
+  let calls = 0;
+  const auth = new AuthStore(() => 80_000, () => {
+    const value = values[calls];
+    if (value === undefined) throw new Error("test random sequence exhausted");
+    calls += 1;
+    return value;
+  });
+
+  assert.equal(auth.createPairingCode(), "000000");
+  assert.equal(calls, 2);
+});
+
+test("revoke-all remains effective after reopening persisted state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-auth-revoke-reopen-"));
+  const statePath = join(root, "auth.json");
+  const auth = await AuthStore.open(statePath, () => 90_000, randomSequence(71, 72));
+  const token = auth.exchangePairingCode(auth.createPairingCode());
+  auth.revokeAll();
+
+  const reopened = await AuthStore.open(statePath, () => 90_001, randomSequence(73));
+  assert.equal(reopened.authenticateBearer(`Bearer ${token}`), false);
 });

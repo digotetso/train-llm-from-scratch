@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -16,6 +17,7 @@ import { LIMITS } from "../shared/limits.ts";
 
 type Clock = () => number;
 type RandomSource = (size: number) => Uint8Array;
+export type DirectorySync = (path: string) => void;
 
 interface PairingRecord {
   codeDigest: string;
@@ -110,26 +112,73 @@ function digestMatches(candidateDigest: string, persistedDigest: string): boolea
   return timingSafeEqual(Buffer.from(candidateDigest, "hex"), Buffer.from(persistedDigest, "hex"));
 }
 
+function syncDirectory(path: string): void {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readState(statePath: string): AuthState | null {
+  let descriptor: number;
+  try {
+    descriptor = openSync(statePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    return parseState(JSON.parse(readFileSync(descriptor, "utf8")) as unknown);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function acquireStateLock(lockPath: string): number {
+  try {
+    return openSync(
+      lockPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error("Authentication state is locked");
+    }
+    throw error;
+  }
+}
+
 export class AuthStore {
   private state: AuthState;
   private statePath: string | undefined;
   private readonly now: Clock;
   private readonly randomSource: RandomSource;
+  private readonly directorySync: DirectorySync;
+  private stateLockHeld = false;
 
-  constructor(now: Clock = Date.now, randomSource: RandomSource = randomBytes) {
+  constructor(
+    now: Clock = Date.now,
+    randomSource: RandomSource = randomBytes,
+    directorySync: DirectorySync = syncDirectory
+  ) {
     this.state = { version: 1, pairing: null, tokens: [] };
     this.statePath = undefined;
     this.now = now;
     this.randomSource = randomSource;
+    this.directorySync = directorySync;
   }
 
   private static fromState(
     statePath: string,
     state: AuthState,
     now: Clock,
-    randomSource: RandomSource
+    randomSource: RandomSource,
+    directorySync: DirectorySync
   ): AuthStore {
-    const store = new AuthStore(now, randomSource);
+    const store = new AuthStore(now, randomSource, directorySync);
     store.state = state;
     store.statePath = statePath;
     return store;
@@ -138,7 +187,8 @@ export class AuthStore {
   static async open(
     statePath: string,
     now: Clock = Date.now,
-    randomSource: RandomSource = randomBytes
+    randomSource: RandomSource = randomBytes,
+    directorySync: DirectorySync = syncDirectory
   ): Promise<AuthStore> {
     if (!statePath || basename(statePath) !== "auth.json") {
       throw new TypeError("Authentication state path must end in auth.json");
@@ -146,50 +196,57 @@ export class AuthStore {
     const parent = dirname(statePath);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     chmodSync(parent, 0o700);
-    const state = existsSync(statePath)
-      ? parseState(JSON.parse(readFileSync(statePath, "utf8")) as unknown)
-      : { version: 1 as const, pairing: null, tokens: [] };
-    const store = AuthStore.fromState(statePath, state, now, randomSource);
-    store.persist();
+    const store = AuthStore.fromState(
+      statePath,
+      { version: 1, pairing: null, tokens: [] },
+      now,
+      randomSource,
+      directorySync
+    );
+    store.withStateLock(() => store.persistUnlocked(), true);
     return store;
   }
 
   createPairingCode(): string {
-    let randomValue: number;
-    do {
-      const bytes = this.randomBytes();
-      randomValue = bytes.readUInt32BE(0);
-    } while (randomValue >= MAX_UNBIASED_PAIRING_VALUE);
+    return this.withStateLock(() => {
+      let randomValue: number;
+      do {
+        const bytes = this.randomBytes();
+        randomValue = bytes.readUInt32BE(0);
+      } while (randomValue >= MAX_UNBIASED_PAIRING_VALUE);
 
-    const code = String(randomValue % 1_000_000).padStart(6, "0");
-    this.state.pairing = {
-      codeDigest: digest(code),
-      createdAt: this.now(),
-      used: false
-    };
-    this.persist();
-    return code;
+      const code = String(randomValue % 1_000_000).padStart(6, "0");
+      this.state.pairing = {
+        codeDigest: digest(code),
+        createdAt: this.now(),
+        used: false
+      };
+      this.persistUnlocked();
+      return code;
+    });
   }
 
   exchangePairingCode(code: string): string {
-    const pairing = this.state.pairing;
-    if (!PAIRING_CODE_PATTERN.test(code) || pairing === null) {
-      throw new Error("Invalid pairing code");
-    }
-    if (!digestMatches(digest(code), pairing.codeDigest)) {
-      throw new Error("Invalid pairing code");
-    }
-    if (pairing.used) throw new Error("Pairing code already used");
-    if (this.now() - pairing.createdAt >= LIMITS.pairingTtlMs) {
-      throw new Error("Pairing code expired");
-    }
+    return this.withStateLock(() => {
+      const pairing = this.state.pairing;
+      if (!PAIRING_CODE_PATTERN.test(code) || pairing === null) {
+        throw new Error("Invalid pairing code");
+      }
+      if (!digestMatches(digest(code), pairing.codeDigest)) {
+        throw new Error("Invalid pairing code");
+      }
+      if (pairing.used) throw new Error("Pairing code already used");
+      if (this.now() - pairing.createdAt >= LIMITS.pairingTtlMs) {
+        throw new Error("Pairing code expired");
+      }
 
-    pairing.used = true;
-    this.persist();
-    const token = this.randomBytes().toString("base64url");
-    this.state.tokens.push({ tokenDigest: digest(token), lastUsedAt: this.now() });
-    this.persist();
-    return token;
+      pairing.used = true;
+      this.persistUnlocked();
+      const token = this.randomBytes().toString("base64url");
+      this.state.tokens.push({ tokenDigest: digest(token), lastUsedAt: this.now() });
+      this.persistUnlocked();
+      return token;
+    });
   }
 
   authenticateBearer(header: string | readonly string[] | undefined): boolean {
@@ -200,23 +257,27 @@ export class AuthStore {
 
     const decoded = Buffer.from(token, "base64url");
     if (decoded.byteLength !== 32 || decoded.toString("base64url") !== token) return false;
-    const candidateDigest = digest(token);
-    const now = this.now();
+    return this.withStateLock(() => {
+      const candidateDigest = digest(token);
+      const now = this.now();
 
-    for (const persisted of this.state.tokens) {
-      if (!digestMatches(candidateDigest, persisted.tokenDigest)) continue;
-      if (now - persisted.lastUsedAt >= LIMITS.tokenIdleTtlMs) return false;
-      persisted.lastUsedAt = now;
-      this.persist();
-      return true;
-    }
-    return false;
+      for (const persisted of this.state.tokens) {
+        if (!digestMatches(candidateDigest, persisted.tokenDigest)) continue;
+        if (now - persisted.lastUsedAt >= LIMITS.tokenIdleTtlMs) return false;
+        persisted.lastUsedAt = now;
+        this.persistUnlocked();
+        return true;
+      }
+      return false;
+    });
   }
 
   revokeAll(): void {
-    this.state.pairing = null;
-    this.state.tokens = [];
-    this.persist();
+    this.withStateLock(() => {
+      this.state.pairing = null;
+      this.state.tokens = [];
+      this.persistUnlocked();
+    });
   }
 
   private randomBytes(): Buffer {
@@ -225,8 +286,30 @@ export class AuthStore {
     return bytes;
   }
 
-  private persist(): void {
+  private withStateLock<T>(operation: () => T, allowMissingState = false): T {
+    if (this.statePath === undefined) return operation();
+    const lockPath = `${this.statePath}.lock`;
+    const lockDescriptor = acquireStateLock(lockPath);
+    this.stateLockHeld = true;
+    try {
+      const persisted = readState(this.statePath);
+      if (persisted === null) {
+        if (!allowMissingState) throw new Error("Authentication state is missing while locked");
+        this.state = { version: 1, pairing: null, tokens: [] };
+      } else {
+        this.state = persisted;
+      }
+      return operation();
+    } finally {
+      this.stateLockHeld = false;
+      closeSync(lockDescriptor);
+      unlinkSync(lockPath);
+    }
+  }
+
+  private persistUnlocked(): void {
     if (this.statePath === undefined) return;
+    if (!this.stateLockHeld) throw new Error("Authentication state must be locked before persistence");
     const parent = dirname(this.statePath);
     temporaryFileSequence += 1;
     const temporaryPath = join(
@@ -235,12 +318,17 @@ export class AuthStore {
     );
     let descriptor: number | undefined;
     try {
-      descriptor = openSync(temporaryPath, "wx", 0o600);
+      descriptor = openSync(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600
+      );
       writeFileSync(descriptor, JSON.stringify(this.state), "utf8");
       fsyncSync(descriptor);
       closeSync(descriptor);
       descriptor = undefined;
       renameSync(temporaryPath, this.statePath);
+      this.directorySync(parent);
     } catch (error) {
       if (descriptor !== undefined) closeSync(descriptor);
       if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
