@@ -126,23 +126,27 @@ export function validateControllerToUi(value: unknown): ControllerToUi {
         value: validateUnhashedPackage(record.value)
       };
     case "bridge-result":
-      exactKeys(record, ["type", "status", "code", "message"], "$");
+      exactKeys(record, ["type", "operation", "status", "code", "message"], "$");
       if (typeof record.status !== "number" || !Number.isSafeInteger(record.status) || record.status < 0 || record.status > 599) {
         invalidMessage("$.status", "expected an HTTP status from 0 to 599");
       }
       return {
         type: "bridge-result",
+        operation: generation(record.operation, "$.operation"),
         status: record.status,
         code: nonEmptyString(record.code, "$.code"),
         message: nonEmptyString(record.message, "$.message")
       };
-    case "failure":
-      exactKeys(record, ["type", "code", "message"], "$");
+    case "failure": {
+      const hasOperation = Object.prototype.hasOwnProperty.call(record, "operation");
+      exactKeys(record, hasOperation ? ["type", "operation", "code", "message"] : ["type", "code", "message"], "$");
       return {
         type: "failure",
+        ...(hasOperation ? { operation: generation(record.operation, "$.operation") } : {}),
         code: nonEmptyString(record.code, "$.code"),
         message: nonEmptyString(record.message, "$.message")
       };
+    }
     default:
       invalidMessage("$.type", `unsupported message type ${JSON.stringify(record.type)}`);
   }
@@ -189,6 +193,8 @@ export function downloadPackage(
 export function createUiController(dependencies: UiDependencies): UiController {
   let retainedPackage: ExporterPackage | undefined;
   let packageGeneration = 0;
+  let bridgeOperationGeneration = 0;
+  let activeBridgeOperation: number | undefined;
   let state: UiViewModel = {
     frames: [],
     nativeCount: 0,
@@ -291,6 +297,8 @@ export function createUiController(dependencies: UiDependencies): UiController {
         break;
       }
       case "bridge-result":
+        if (message.operation !== activeBridgeOperation) return;
+        activeBridgeOperation = undefined;
         update({
           bridgeCode: message.code,
           status: message.message,
@@ -300,6 +308,10 @@ export function createUiController(dependencies: UiDependencies): UiController {
         });
         break;
       case "failure":
+        if (message.operation !== undefined) {
+          if (message.operation !== activeBridgeOperation) return;
+          activeBridgeOperation = undefined;
+        }
         update({
           status: "The operation could not be completed.",
           error: `${message.code}: ${message.message}`,
@@ -340,6 +352,13 @@ export function createUiController(dependencies: UiDependencies): UiController {
       busy: true
     });
   };
+  const startBridgeOperation = (status: string, message: (operation: number) => UiToController): void => {
+    if (activeBridgeOperation !== undefined) return;
+    bridgeOperationGeneration += 1;
+    activeBridgeOperation = bridgeOperationGeneration;
+    update({ busy: true, status, error: "", bridgeCode: "" });
+    dependencies.postMessage(message(activeBridgeOperation));
+  };
   return {
     handleMessage,
     refresh: () => {
@@ -350,8 +369,15 @@ export function createUiController(dependencies: UiDependencies): UiController {
       invalidateForRequest("Building package…");
       dependencies.postMessage({ type: "build-package" });
     },
-    pair: (code) => dependencies.postMessage({ type: "pair", code }),
-    send: () => dependencies.postMessage({ type: "send-live" }),
+    pair: (code) => startBridgeOperation("Pairing with After Effects…", (operation) => ({
+      type: "pair",
+      operation,
+      code
+    })),
+    send: () => startBridgeOperation("Sending package to After Effects…", (operation) => ({
+      type: "send-live",
+      operation
+    })),
     download,
     close: () => dependencies.postMessage({ type: "close" })
   };

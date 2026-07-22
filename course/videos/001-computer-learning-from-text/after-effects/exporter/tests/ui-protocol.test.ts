@@ -372,13 +372,19 @@ test("controller discards a stale raster build after a newer build generation co
 
 test("both protocol boundaries reject unknown keys, invalid types, and exotic prototypes", () => {
   assert.throws(() => validateUiToController({ type: "send-live", token: "secret" }), /unknown field/i);
-  assert.throws(() => validateUiToController({ type: "pair", code: "12345" }), /pairing code/i);
+  assert.throws(() => validateUiToController({ type: "pair", operation: 1, code: "12345" }), /pairing code/i);
   const inherited = Object.create({ polluted: true }) as Record<string, unknown>;
   inherited.type = "close";
   assert.throws(() => validateUiToController(inherited), /plain object/i);
 
   assert.throws(() => validateControllerToUi({ type: "selection", frames: [], token: "secret" }), /unknown field/i);
-  assert.throws(() => validateControllerToUi({ type: "bridge-result", status: -1, code: "X", message: "bad" }), /status/i);
+  assert.throws(() => validateControllerToUi({
+    type: "bridge-result",
+    operation: 1,
+    status: -1,
+    code: "X",
+    message: "bad"
+  }), /status/i);
 });
 
 async function hashedPackage(): Promise<ExporterPackage> {
@@ -470,6 +476,32 @@ test("UI discards a stale digest after a newer selection and package generation"
   assert.equal(views.at(-1)?.packageReady, true);
 });
 
+test("UI gates bridge actions with matching operation generations and a busy state", async () => {
+  const posted: unknown[] = [];
+  const views: UiViewModel[] = [];
+  const ui = createUiController({
+    postMessage: (message) => posted.push(structuredClone(message)),
+    render: (view) => views.push(structuredClone(view)),
+    digest: (algorithm, bytes) => crypto.subtle.digest(algorithm, bytes),
+    download: () => undefined
+  });
+
+  ui.pair("123456");
+  assert.deepEqual(posted.at(-1), { type: "pair", operation: 1, code: "123456" });
+  assert.equal(views.at(-1)?.busy, true);
+  ui.send();
+  assert.equal(posted.length, 1, "a second bridge action must not be posted while pairing is active");
+
+  await ui.handleMessage({
+    type: "bridge-result",
+    operation: 1,
+    status: 200,
+    code: "PAIRED",
+    message: "Paired with After Effects."
+  });
+  assert.equal(views.at(-1)?.busy, false);
+});
+
 test("downloadPackage uses a UTF-8 vendor Blob and deterministic safe filename", async () => {
   const value = await hashedPackage();
   const captured: Array<{ blob: Blob; filename: string }> = [];
@@ -503,7 +535,7 @@ test("controller validates package-ready state, pairs and sends exact requests, 
   finalValue.contentHash = Buffer.from(digest).toString("hex");
   await controller.handleMessage({ type: "package-ready", generation: pendingMessage.generation, value: finalValue });
 
-  await controller.handleMessage({ type: "pair", code: "123456" });
+  await controller.handleMessage({ type: "pair", operation: 1, code: "123456" });
   assert.equal(harness.requests[0]?.input, `${BRIDGE_BASE_URL}/v1/pair`);
   assert.equal(harness.requests[0]?.init?.method, "POST");
   assert.deepEqual(harness.requests[0]?.init?.headers, { "Content-Type": "application/json" });
@@ -511,7 +543,7 @@ test("controller validates package-ready state, pairs and sends exact requests, 
   assert.equal(harness.storage.get(BRIDGE_TOKEN_KEY), token);
   assert.equal(JSON.stringify(harness.messages).includes(token), false);
 
-  await controller.handleMessage({ type: "send-live" });
+  await controller.handleMessage({ type: "send-live", operation: 2 });
   assert.equal(harness.requests[1]?.input, `${BRIDGE_BASE_URL}/v1/export`);
   assert.equal(harness.requests[1]?.init?.method, "POST");
   assert.deepEqual(harness.requests[1]?.init?.headers, {
@@ -522,11 +554,36 @@ test("controller validates package-ready state, pairs and sends exact requests, 
   assert.equal(harness.storage.has(BRIDGE_TOKEN_KEY), false);
   assert.deepEqual(harness.messages.at(-1), {
     type: "bridge-result",
+    operation: 2,
     status: 401,
     code: "UNAUTHORIZED",
     message: "Expired"
   });
   assert.equal(JSON.stringify(harness.messages).includes(token), false);
+});
+
+test("controller rejects a concurrent bridge action while the first request is in flight", async () => {
+  const pendingResponse = deferred<Response>();
+  const harness = hostHarness();
+  harness.host.fetch = async (input, init) => {
+    harness.requests.push({ input: String(input), ...(init === undefined ? {} : { init }) });
+    return pendingResponse.promise;
+  };
+  const controller = createController(harness.host, config);
+
+  const first = controller.handleMessage({ type: "pair", operation: 1, code: "123456" });
+  await Promise.resolve();
+  await controller.handleMessage({ type: "pair", operation: 2, code: "654321" });
+
+  assert.equal(harness.requests.length, 1);
+  assert.deepEqual(harness.messages.at(-1), {
+    type: "failure",
+    operation: 2,
+    code: "BRIDGE_BUSY",
+    message: "Wait for the active bridge operation to finish."
+  });
+  pendingResponse.resolve(new Response(JSON.stringify({ token: "A".repeat(43) }), { status: 200 }));
+  await first;
 });
 
 test("pairing accepts only the bridge's exact 200 response and canonical 32-byte base64url token", async () => {
@@ -537,7 +594,7 @@ test("pairing accepts only the bridge's exact 200 response and canonical 32-byte
     })
   ]);
   const first = createController(invalidToken.host, config);
-  await first.handleMessage({ type: "pair", code: "123456" });
+  await first.handleMessage({ type: "pair", operation: 1, code: "123456" });
   assert.equal(lastFailure(invalidToken.messages).code, "INVALID_BRIDGE_RESPONSE");
   assert.equal(invalidToken.storage.has(BRIDGE_TOKEN_KEY), false);
 
@@ -548,7 +605,7 @@ test("pairing accepts only the bridge's exact 200 response and canonical 32-byte
     })
   ]);
   const second = createController(wrongStatus.host, config);
-  await second.handleMessage({ type: "pair", code: "123456" });
+  await second.handleMessage({ type: "pair", operation: 1, code: "123456" });
   assert.equal(lastFailure(wrongStatus.messages).code, "INVALID_BRIDGE_RESPONSE");
   assert.equal(wrongStatus.storage.has(BRIDGE_TOKEN_KEY), false);
 });
@@ -571,9 +628,68 @@ test("a selection refresh invalidates the controller's previously ready package"
   const controller = await makeControllerReady(harness);
 
   await controller.handleMessage({ type: "refresh-selection" });
-  await controller.handleMessage({ type: "send-live" });
+  await controller.handleMessage({ type: "send-live", operation: 1 });
 
   assert.equal(lastFailure(harness.messages).code, "PACKAGE_NOT_READY");
+});
+
+test("send deletes only its matching rejected token before awaiting a slow 401 body", async () => {
+  const body = deferred<string>();
+  const bodyReadStarted = deferred<void>();
+  const harness = hostHarness();
+  const controller = await makeControllerReady(harness);
+  const oldToken = "A".repeat(43);
+  const replacementToken = "B".repeat(42) + "A";
+  harness.host.fetch = async (input, init) => {
+    harness.requests.push({ input: String(input), ...(init === undefined ? {} : { init }) });
+    return {
+      status: 401,
+      ok: false,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: null,
+      json: async () => JSON.parse(await body.promise),
+      text: () => {
+        bodyReadStarted.resolve(undefined);
+        return body.promise;
+      }
+    } as unknown as Response;
+  };
+
+  const send = controller.handleMessage({ type: "send-live", operation: 1 });
+  await bodyReadStarted.promise;
+  assert.equal(harness.storage.has(BRIDGE_TOKEN_KEY), false, "the rejected token must be removed before body parsing");
+  harness.storage.set(BRIDGE_TOKEN_KEY, replacementToken);
+  body.resolve(JSON.stringify({ error: { code: "UNAUTHORIZED", message: "Expired" } }));
+  await send;
+
+  assert.equal(harness.storage.get(BRIDGE_TOKEN_KEY), replacementToken);
+});
+
+test("bridge responses are size-bounded and stalled requests time out without wedging the gate", async () => {
+  const oversized = hostHarness([
+    new Response(JSON.stringify({ error: { code: "X", message: "x".repeat(20_000) } }), { status: 400 })
+  ]);
+  const oversizedController = createController(oversized.host, config);
+  await oversizedController.handleMessage({ type: "pair", operation: 1, code: "123456" });
+  assert.equal(lastFailure(oversized.messages).code, "INVALID_BRIDGE_RESPONSE");
+
+  const stalled = hostHarness();
+  Object.assign(stalled.host, { bridgeTimeoutMs: 5 });
+  let requestCount = 0;
+  stalled.host.fetch = async () => {
+    requestCount += 1;
+    if (requestCount === 1) return new Promise<Response>(() => undefined);
+    return new Response(JSON.stringify({ token: "A".repeat(43) }), { status: 200 });
+  };
+  const stalledController = createController(stalled.host, config);
+  const outcome = await Promise.race([
+    stalledController.handleMessage({ type: "pair", operation: 1, code: "123456" }).then(() => "completed"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("test-timeout"), 50))
+  ]);
+  assert.equal(outcome, "completed");
+  assert.equal(lastFailure(stalled.messages).code, "BRIDGE_TIMEOUT");
+  await stalledController.handleMessage({ type: "pair", operation: 2, code: "654321" });
+  assert.equal(requestCount, 2);
 });
 
 test("live send accepts only the bridge's exact 202 envelope for the retained content hash", async () => {
@@ -584,7 +700,7 @@ test("live send accepts only the bridge's exact 202 envelope for the retained co
     })
   ]);
   const first = await makeControllerReady(wrongStatus);
-  await first.handleMessage({ type: "send-live" });
+  await first.handleMessage({ type: "send-live", operation: 1 });
   assert.equal(lastFailure(wrongStatus.messages).code, "INVALID_BRIDGE_RESPONSE");
 
   const wrongHash = hostHarness([
@@ -594,7 +710,7 @@ test("live send accepts only the bridge's exact 202 envelope for the retained co
     })
   ]);
   const second = await makeControllerReady(wrongHash);
-  await second.handleMessage({ type: "send-live" });
+  await second.handleMessage({ type: "send-live", operation: 1 });
   assert.equal(lastFailure(wrongHash.messages).code, "INVALID_BRIDGE_RESPONSE");
 });
 
@@ -602,9 +718,10 @@ test("bridge outage reports a structured result and leaves UI manual download en
   const harness = hostHarness();
   harness.setSelection([sceneNode()]);
   const controller = createController(harness.host, config);
-  await controller.handleMessage({ type: "pair", code: "123456" });
+  await controller.handleMessage({ type: "pair", operation: 1, code: "123456" });
   assert.deepEqual(harness.messages.at(-1), {
     type: "bridge-result",
+    operation: 1,
     status: 0,
     code: "BRIDGE_UNAVAILABLE",
     message: "The local After Effects bridge is unavailable. Download the package instead."
@@ -625,6 +742,7 @@ test("bridge outage reports a structured result and leaves UI manual download en
     frames: [{ nodeId: "95:44", name: value.frames[0]!.name, duration: 28 }]
   });
   await ui.handleMessage({ type: "package-unhashed", generation: 1, value });
+  ui.pair("123456");
   await ui.handleMessage(harness.messages.at(-1));
   assert.equal(views.at(-1)?.downloadDisabled, false);
   assert.equal(views.at(-1)?.bridgeCode, "BRIDGE_UNAVAILABLE");

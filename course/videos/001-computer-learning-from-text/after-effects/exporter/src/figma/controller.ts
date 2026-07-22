@@ -12,6 +12,7 @@ import {
   type TransformMatrix
 } from "./serializer.ts";
 import { sha256Hex } from "../shared/sha256.ts";
+import { decodeUtf8, utf8ByteLength } from "../shared/utf8.ts";
 
 export const BRIDGE_BASE_URL = "http://127.0.0.1:3456";
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
@@ -22,6 +23,8 @@ const FRAME_LIKE_TYPES = new Set(["FRAME", "COMPONENT", "INSTANCE"]);
 const MAX_FRAMES = 48;
 const PAIRING_CODE_PATTERN = /^\d{6}$/;
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const DEFAULT_BRIDGE_TIMEOUT_MS = 10_000;
+const MAX_BRIDGE_RESPONSE_BYTES = 16 * 1024;
 
 export interface FrameSummary {
   nodeId: string;
@@ -32,15 +35,15 @@ export interface FrameSummary {
 export type ControllerToUi =
   | { type: "selection"; generation: number; frames: FrameSummary[] }
   | { type: "package-unhashed"; generation: number; value: ExporterPackage }
-  | { type: "bridge-result"; status: number; code: string; message: string }
-  | { type: "failure"; code: string; message: string };
+  | { type: "bridge-result"; operation: number; status: number; code: string; message: string }
+  | { type: "failure"; operation?: number; code: string; message: string };
 
 export type UiToController =
   | { type: "refresh-selection" }
   | { type: "build-package" }
   | { type: "package-ready"; generation: number; value: ExporterPackage }
-  | { type: "pair"; code: string }
-  | { type: "send-live" }
+  | { type: "pair"; operation: number; code: string }
+  | { type: "send-live"; operation: number }
   | { type: "close" };
 
 export interface EmbeddedVideo001Config {
@@ -97,6 +100,7 @@ export interface ControllerHost {
     deleteAsync(key: string): Promise<void>;
   };
   fetch(input: string, init?: RequestInit): Promise<Response>;
+  bridgeTimeoutMs?: number;
 }
 
 export interface Controller {
@@ -133,22 +137,35 @@ function exactKeys(record: UnknownRecord, keys: readonly string[], path: string)
   }
 }
 
+function operationGeneration(value: unknown, path: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    invalidMessage(path, "expected a positive safe integer");
+  }
+  return value as number;
+}
+
 export function validateUiToController(value: unknown): UiToController {
   const record = plainRecord(value, "$");
   if (typeof record.type !== "string") invalidMessage("$.type", "expected a message type");
   switch (record.type) {
     case "refresh-selection":
     case "build-package":
-    case "send-live":
     case "close":
       exactKeys(record, ["type"], "$");
       return { type: record.type };
+    case "send-live":
+      exactKeys(record, ["type", "operation"], "$");
+      return { type: "send-live", operation: operationGeneration(record.operation, "$.operation") };
     case "pair":
-      exactKeys(record, ["type", "code"], "$");
+      exactKeys(record, ["type", "operation", "code"], "$");
       if (typeof record.code !== "string" || !PAIRING_CODE_PATTERN.test(record.code)) {
         invalidMessage("$.code", "expected a six-digit pairing code");
       }
-      return { type: "pair", code: record.code };
+      return {
+        type: "pair",
+        operation: operationGeneration(record.operation, "$.operation"),
+        code: record.code
+      };
     case "package-ready":
       exactKeys(record, ["type", "generation", "value"], "$");
       if (!Number.isSafeInteger(record.generation) || (record.generation as number) < 1) {
@@ -395,10 +412,73 @@ function safeBridgeError(value: unknown, status: number): { code: string; messag
   return { code: `BRIDGE_HTTP_${status}`, message: `The local bridge returned HTTP ${status}.` };
 }
 
-async function responseJson(response: Response): Promise<unknown> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(controllerFailure("BRIDGE_TIMEOUT", "The local bridge did not respond in time."));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function responseJson(response: Response, timeoutMs: number): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0 || parsedLength > MAX_BRIDGE_RESPONSE_BYTES) {
+      throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
+    }
+  }
+
+  let bytes: Uint8Array;
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    const text = await withTimeout(response.text(), timeoutMs);
+    if (utf8ByteLength(text) > MAX_BRIDGE_RESPONSE_BYTES) {
+      throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
   try {
-    return await response.json();
-  } catch {
+    for (;;) {
+      const chunk = await withTimeout(reader.read(), timeoutMs);
+      if (chunk.done) break;
+      byteLength += chunk.value.byteLength;
+      if (byteLength > MAX_BRIDGE_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(decodeUtf8(bytes));
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error) throw error;
     return undefined;
   }
 }
@@ -414,6 +494,12 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
   let packageGeneration = 0;
   let pendingPackage: { generation: number; value: ExporterPackage } | undefined;
   let readyPackage: { generation: number; value: ExporterPackage } | undefined;
+  let activeBridgeOperation: number | undefined;
+  let lastBridgeOperation = 0;
+  const bridgeTimeoutMs = host.bridgeTimeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(bridgeTimeoutMs) || bridgeTimeoutMs < 1) {
+    throw new TypeError("bridgeTimeoutMs must be a positive safe integer");
+  }
 
   const beginPackageGeneration = (): number => {
     packageGeneration += 1;
@@ -422,9 +508,11 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     return packageGeneration;
   };
 
-  const postFailure = (error: unknown): void => {
+  const postFailure = (error: unknown, operation?: number): void => {
     const failure = failureFrom(error);
-    host.postMessage({ type: "failure", code: failure.code, message: failure.message });
+    host.postMessage(operation === undefined
+      ? { type: "failure", code: failure.code, message: failure.message }
+      : { type: "failure", operation, code: failure.code, message: failure.message });
   };
 
   const refreshSelection = async (): Promise<void> => {
@@ -526,43 +614,56 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     readyPackage = { generation, value: validated };
   };
 
-  const pair = async (code: string): Promise<void> => {
+  const pair = async (operation: number, code: string): Promise<void> => {
     let response: Response;
     try {
-      response = await host.fetch(`${BRIDGE_BASE_URL}/v1/pair`, {
+      response = await withTimeout(host.fetch(BRIDGE_BASE_URL + "/v1/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code })
-      });
-    } catch {
+      }), bridgeTimeoutMs);
+    } catch (error) {
+      if (failureFrom(error).code === "BRIDGE_TIMEOUT") throw error;
       host.postMessage({
         type: "bridge-result",
+        operation,
         status: 0,
         code: "BRIDGE_UNAVAILABLE",
         message: "The local After Effects bridge is unavailable. Download the package instead."
       });
       return;
     }
-    const body = await responseJson(response);
-    if (response.status === 401) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
+    const body = await responseJson(response, bridgeTimeoutMs);
     if (response.status === 200) {
-      const record = plainRecord(body, "$.bridge");
-      exactKeys(record, ["token"], "$.bridge");
-      if (!isCanonicalBridgeToken(record.token)) {
+      let token: unknown;
+      try {
+        const record = plainRecord(body, "$.bridge");
+        exactKeys(record, ["token"], "$.bridge");
+        token = record.token;
+      } catch {
         throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge returned an invalid pairing token.");
       }
-      await host.clientStorage.setAsync(BRIDGE_TOKEN_KEY, record.token);
-      host.postMessage({ type: "bridge-result", status: response.status, code: "PAIRED", message: "Paired with After Effects." });
+      if (!isCanonicalBridgeToken(token)) {
+        throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge returned an invalid pairing token.");
+      }
+      await host.clientStorage.setAsync(BRIDGE_TOKEN_KEY, token);
+      host.postMessage({
+        type: "bridge-result",
+        operation,
+        status: response.status,
+        code: "PAIRED",
+        message: "Paired with After Effects."
+      });
       return;
     }
     if (response.ok) {
       throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge returned an unexpected pairing status.");
     }
     const error = safeBridgeError(body, response.status);
-    host.postMessage({ type: "bridge-result", status: response.status, ...error });
+    host.postMessage({ type: "bridge-result", operation, status: response.status, ...error });
   };
 
-  const sendLive = async (): Promise<void> => {
+  const sendLive = async (operation: number): Promise<void> => {
     if (readyPackage === undefined) {
       throw controllerFailure("PACKAGE_NOT_READY", "Build and hash a package before sending it.");
     }
@@ -574,25 +675,30 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     }
     let response: Response;
     try {
-      response = await host.fetch(`${BRIDGE_BASE_URL}/v1/export`, {
+      response = await withTimeout(host.fetch(BRIDGE_BASE_URL + "/v1/export", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": EXPORT_MEDIA_TYPE
         },
         body: JSON.stringify(packageToSend)
-      });
-    } catch {
+      }), bridgeTimeoutMs);
+    } catch (error) {
+      if (failureFrom(error).code === "BRIDGE_TIMEOUT") throw error;
       host.postMessage({
         type: "bridge-result",
+        operation,
         status: 0,
         code: "BRIDGE_UNAVAILABLE",
         message: "The local After Effects bridge is unavailable. Download the package instead."
       });
       return;
     }
-    const body = await responseJson(response);
-    if (response.status === 401) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
+    if (response.status === 401) {
+      const retainedToken = await host.clientStorage.getAsync(BRIDGE_TOKEN_KEY);
+      if (retainedToken === token) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
+    }
+    const body = await responseJson(response, bridgeTimeoutMs);
     if (response.status === 202) {
       const record = plainRecord(body, "$.bridge");
       exactKeys(record, ["status", "contentHash"], "$.bridge");
@@ -604,6 +710,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       }
       host.postMessage({
         type: "bridge-result",
+        operation,
         status: response.status,
         code: "EXPORT_ACCEPTED",
         message: "The package was sent to After Effects."
@@ -614,7 +721,27 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge returned an unexpected export status.");
     }
     const error = safeBridgeError(body, response.status);
-    host.postMessage({ type: "bridge-result", status: response.status, ...error });
+    host.postMessage({ type: "bridge-result", operation, status: response.status, ...error });
+  };
+
+  const runBridgeOperation = async (operation: number, action: () => Promise<void>): Promise<void> => {
+    if (activeBridgeOperation !== undefined) {
+      postFailure(
+        controllerFailure("BRIDGE_BUSY", "Wait for the active bridge operation to finish."),
+        operation
+      );
+      return;
+    }
+    if (operation <= lastBridgeOperation) return;
+    lastBridgeOperation = operation;
+    activeBridgeOperation = operation;
+    try {
+      await action();
+    } catch (error) {
+      postFailure(error, operation);
+    } finally {
+      if (activeBridgeOperation === operation) activeBridgeOperation = undefined;
+    }
   };
 
   const handleMessage = async (value: unknown): Promise<void> => {
@@ -637,10 +764,10 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
           acceptPackage(message.generation, message.value);
           break;
         case "pair":
-          await pair(message.code);
+          await runBridgeOperation(message.operation, () => pair(message.operation, message.code));
           break;
         case "send-live":
-          await sendLive();
+          await runBridgeOperation(message.operation, () => sendLive(message.operation));
           break;
         case "close":
           host.closePlugin();
