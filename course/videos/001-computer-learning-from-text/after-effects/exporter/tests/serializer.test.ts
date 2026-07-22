@@ -393,6 +393,44 @@ test("serializes one opaque root fill as an editable full-frame background behin
   assert.deepEqual(validatePackage(packageValue).frames[0], frame);
 });
 
+test("serializes a supported root fill and border as one editable surface", async () => {
+  const rasterized: string[] = [];
+  const frame = await serializeFrame(root([
+    shape({ id: "bordered-foreground", name: "Bordered_Foreground" })
+  ], {
+    fills: [solid()],
+    strokes: [solid(0.1, 0.2, 0.3)],
+    strokeWeight: 6,
+    cornerRadius: 24,
+    blendMode: "PASS_THROUGH"
+  }), { duration: 28 }, {
+    rasterScale: 1,
+    exportRaster: async (node) => {
+      rasterized.push(node.id);
+      return rasterAsset(node.id);
+    }
+  });
+
+  assert.deepEqual(rasterized, []);
+  assert.deepEqual(frame.children[0], {
+    id: "frame-root::root-solid-background",
+    name: "S001_SH32_TestFrame__ROOT_SOLID_BACKGROUND",
+    kind: "rect",
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    rotation: 0,
+    opacity: 1,
+    fill: "#4080BF",
+    stroke: "#1A334D",
+    strokeWidth: 6,
+    radius: 24
+  });
+  assert.equal(frame.children[1]?.name, "Bordered_Foreground");
+  assert.deepEqual(frame.warnings, []);
+});
+
 test("reserves a collision-safe synthetic root background identity", async () => {
   const reservedId = "frame-root::root-solid-background";
   const frame = await serializeFrame(root([
@@ -452,7 +490,17 @@ test("rasterizes the selected frame once when its direct appearance cannot be re
     ["image fill", "fills", { fills: [{ type: "IMAGE", imageHash: "root-image" }] }],
     ["multiple fills", "fills", { fills: [solid(), solid(0.1, 0.2, 0.3)] }],
     ["transparent fill", "fills", { fills: [{ ...solid(), opacity: 0.5 }] }],
-    ["strokes", "strokes", { strokes: [solid()], strokeWeight: 2 }],
+    ["stroke without fill", "strokes", { fills: [], strokes: [solid()], strokeWeight: 2 }],
+    ["gradient stroke", "strokes", { fills: [solid()], strokes: [{ type: "GRADIENT_LINEAR" }], strokeWeight: 2 }],
+    ["image stroke", "strokes", { fills: [solid()], strokes: [{ type: "IMAGE", imageHash: "root-stroke" }], strokeWeight: 2 }],
+    ["transparent stroke", "strokes", { fills: [solid()], strokes: [{ ...solid(), opacity: 0.5 }], strokeWeight: 2 }],
+    ["multiple strokes", "strokes", { fills: [solid()], strokes: [solid(), solid()], strokeWeight: 2 }],
+    ["missing stroke weight", "strokeWeight", { fills: [solid()], strokes: [solid()] }],
+    ["negative stroke weight", "strokeWeight", { fills: [solid()], strokes: [solid()], strokeWeight: -1 }],
+    ["nonfinite stroke weight", "strokeWeight", { fills: [solid()], strokes: [solid()], strokeWeight: Number.NaN }],
+    ["mixed corner radius", "cornerRadius", { fills: [solid()], cornerRadius: "MIXED" }],
+    ["negative corner radius", "cornerRadius", { fills: [solid()], cornerRadius: -1 }],
+    ["nonfinite corner radius", "cornerRadius", { fills: [solid()], cornerRadius: Number.NaN }],
     ["effects", "effects", { effects: [{ type: "DROP_SHADOW", visible: true }] }],
     ["isMask", "isMask", { isMask: true }],
     ["blendMode", "blendMode", { blendMode: "MULTIPLY" }],

@@ -111,6 +111,18 @@ export interface FrameTiming {
 type Classification = "native" | "group" | "raster";
 type MutableMatrix = [[number, number, number], [number, number, number]];
 
+interface RootSurface {
+  fill: FigmaPaintSnapshot;
+  stroke: FigmaPaintSnapshot | undefined;
+  strokeWidth: number;
+  radius: number;
+}
+
+interface RootSurfaceClassification {
+  reason: "fills" | "strokes" | "strokeWeight" | "cornerRadius" | null;
+  surface?: RootSurface;
+}
+
 interface SerializationContext {
   rootInverse: MutableMatrix;
   options: SerializeFrameOptions;
@@ -263,17 +275,6 @@ function hasRepresentableBlendMode(node: FigmaNodeSnapshot): boolean {
     (node.blendMode === "PASS_THROUGH" && GROUP_TYPES.has(node.type));
 }
 
-function rootAppearanceReason(node: FigmaNodeSnapshot): string | null {
-  if (node.visible === false) return "visible";
-  if (node.isMask === true) return "isMask";
-  if (!hasRepresentableBlendMode(node)) return "blendMode";
-  if (visibleEffects(node).length > 0) return "effects";
-  if ((node.fills ?? []).some((paint) => paint.visible !== false) && rootSolidFill(node) === undefined) return "fills";
-  if ((node.strokes ?? []).some((paint) => paint.visible !== false)) return "strokes";
-  if (node.opacity !== undefined && node.opacity !== 1) return "opacity";
-  return null;
-}
-
 function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
   if (paint?.type !== "SOLID" || paint.visible === false || paint.color === undefined) return false;
   if (paint.opacity !== undefined && paint.opacity !== 1) return false;
@@ -281,9 +282,44 @@ function isOpaqueSolid(paint: FigmaPaintSnapshot | undefined): boolean {
   return [r, g, b].every((channel) => typeof channel === "number" && Number.isFinite(channel) && channel >= 0 && channel <= 1);
 }
 
-function rootSolidFill(node: FigmaNodeSnapshot): FigmaPaintSnapshot | undefined {
+function classifyRootSurface(node: FigmaNodeSnapshot): RootSurfaceClassification {
   const fills = node.fills ?? [];
-  return fills.length === 1 && isOpaqueSolid(fills[0]) ? fills[0] : undefined;
+  const strokes = node.strokes ?? [];
+  const hasVisibleFill = fills.some((paint) => paint.visible !== false);
+  const hasVisibleStroke = strokes.some((paint) => paint.visible !== false);
+  if (!hasVisibleFill) return { reason: hasVisibleStroke ? "strokes" : null };
+  if (fills.length !== 1 || !isOpaqueSolid(fills[0])) return { reason: "fills" };
+
+  if (strokes.length > 1) return { reason: "strokes" };
+  const candidateStroke = strokes[0];
+  const stroke = candidateStroke?.visible === false ? undefined : candidateStroke;
+  let strokeWidth = 0;
+  if (stroke !== undefined) {
+    if (!isOpaqueSolid(stroke)) return { reason: "strokes" };
+    if (typeof node.strokeWeight !== "number" || !Number.isFinite(node.strokeWeight) || node.strokeWeight < 0) {
+      return { reason: "strokeWeight" };
+    }
+    strokeWidth = node.strokeWeight;
+  }
+
+  const radius = node.cornerRadius ?? 0;
+  if (radius === "MIXED" || typeof radius !== "number" || !Number.isFinite(radius) || radius < 0) {
+    return { reason: "cornerRadius" };
+  }
+  return {
+    reason: null,
+    surface: { fill: fills[0]!, stroke, strokeWidth, radius }
+  };
+}
+
+function rootAppearanceReason(node: FigmaNodeSnapshot, surface: RootSurfaceClassification): string | null {
+  if (node.visible === false) return "visible";
+  if (node.isMask === true) return "isMask";
+  if (!hasRepresentableBlendMode(node)) return "blendMode";
+  if (visibleEffects(node).length > 0) return "effects";
+  if (surface.reason !== null) return surface.reason;
+  if (node.opacity !== undefined && node.opacity !== 1) return "opacity";
+  return null;
 }
 
 function segmentPaint(segment: StyledTextSegmentSnapshot): FigmaPaintSnapshot | undefined {
@@ -676,7 +712,8 @@ export async function serializeFrame(
   const height = positiveNumber(node.height, "$.height");
   const rootOpacity = node.opacity === undefined ? 1 : finiteNumber(node.opacity, "$.opacity");
   if (rootOpacity < 0 || rootOpacity > 1) invalid("$.opacity", "expected a number between 0 and 1");
-  const rootReason = rootAppearanceReason(node);
+  const rootSurface = classifyRootSurface(node);
+  const rootReason = rootAppearanceReason(node, rootSurface);
 
   const context: SerializationContext = {
     rootInverse,
@@ -724,8 +761,8 @@ export async function serializeFrame(
   }
 
   const children: ExportNode[] = [];
-  const solidRootFill = rootSolidFill(node);
-  if (solidRootFill !== undefined) {
+  if (rootSurface.surface !== undefined) {
+    const { fill, stroke, strokeWidth, radius } = rootSurface.surface;
     children.push({
       id: reserveSyntheticNodeId(frameId, "root-solid-background", ids),
       name: safeName(`${frameName}__ROOT_SOLID_BACKGROUND`, "$.synthetic.name"),
@@ -736,10 +773,10 @@ export async function serializeFrame(
       height,
       rotation: 0,
       opacity: 1,
-      fill: colorHex(solidRootFill, "$.fills[0]"),
-      stroke: null,
-      strokeWidth: 0,
-      radius: 0
+      fill: colorHex(fill, "$.fills[0]"),
+      stroke: stroke === undefined ? null : colorHex(stroke, "$.strokes[0]"),
+      strokeWidth,
+      radius
     });
   }
   for (let index = 0; index < node.children.length; index += 1) {
