@@ -1,6 +1,6 @@
 import { build as esbuild, version as esbuildVersion } from "esbuild";
-import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { access, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateFigmaManifest, readPluginId } from "./generate-figma-manifest.mjs";
 
@@ -11,7 +11,63 @@ const EXPECTED_PAGE_NAME = "02 Video 001 - AE Assets";
 const EXPECTED_SHOT_COUNT = 48;
 const DOCUMENTED_EXAMPLE_ID = "1661000000000000000";
 const SCRIPT_MARKER = "<!-- FIGMA_PLUGIN_SCRIPT -->";
+export const BUILD_OWNERSHIP_MARKER = ".video001-figma-build-owned";
+const BUILD_OWNERSHIP_VALUE = "video001-figma-exporter-build-v1\n";
 const rootFromScript = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function isWithin(parent, child) {
+  const path = relative(parent, child);
+  return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+}
+
+export function validateBuildDestination({ projectRoot, outDir }) {
+  const root = resolve(projectRoot);
+  const destination = resolve(outDir);
+  if (isWithin(destination, root)) {
+    throw new TypeError("Build output must not be the project root or one of its ancestors");
+  }
+  const defaultDestination = join(root, "dist", "figma");
+  if (isWithin(root, destination) && destination !== defaultDestination) {
+    throw new TypeError("Build output inside the project must be exactly dist/figma");
+  }
+  if (basename(destination) !== "figma" || basename(dirname(destination)) !== "dist") {
+    throw new TypeError("Build output must use a dedicated dist/figma directory");
+  }
+  return destination;
+}
+
+async function pathExists(path) {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function assertOwnedBuildDirectory(destination) {
+  const directory = await lstat(destination);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    throw new Error(`Build output ${destination} is not an owned regular directory`);
+  }
+  const markerPath = join(destination, BUILD_OWNERSHIP_MARKER);
+  let marker;
+  try {
+    marker = await lstat(markerPath);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      throw new Error(`Build output ${destination} has no ownership marker`);
+    }
+    throw error;
+  }
+  if (!marker.isFile() || marker.isSymbolicLink()) {
+    throw new Error(`Build output ${destination} has an invalid ownership marker`);
+  }
+  if (await readFile(markerPath, "utf8") !== BUILD_OWNERSHIP_VALUE) {
+    throw new Error(`Build output ${destination} has an invalid ownership marker`);
+  }
+}
 
 function record(value, path) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -156,8 +212,13 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
     throw new Error(`Expected esbuild ${REQUIRED_ESBUILD_VERSION}, found ${esbuildVersion}`);
   }
   const root = resolve(projectRoot ?? rootFromScript);
-  const destination = resolve(outDir ?? join(root, "dist", "figma"));
+  const destination = validateBuildDestination({
+    projectRoot: root,
+    outDir: outDir ?? join(root, "dist", "figma")
+  });
   const idFile = resolve(pluginIdFile ?? join(root, ".figma-plugin-id"));
+  const replacingExistingDestination = await pathExists(destination);
+  if (replacingExistingDestination) await assertOwnedBuildDirectory(destination);
 
   await readPluginId(idFile);
   const scenesPath = timingSourcePath(root, environment);
@@ -199,15 +260,38 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   const destinationParent = dirname(destination);
   await mkdir(destinationParent, { recursive: true });
   const temporary = await mkdtemp(join(destinationParent, ".figma-build-"));
+  const previous = `${temporary}-previous`;
+  let previousMoved = false;
+  let installed = false;
   try {
     await writeFile(join(temporary, "code.js"), controllerJavaScript, { encoding: "utf8", mode: 0o600 });
     await writeFile(join(temporary, "ui.html"), uiHtml, { encoding: "utf8", mode: 0o600 });
     await generateFigmaManifest({ root, outDir: temporary, pluginIdFile: idFile });
     await access(join(temporary, "manifest.json"));
-    await rm(destination, { recursive: true, force: true });
+    await writeFile(join(temporary, BUILD_OWNERSHIP_MARKER), BUILD_OWNERSHIP_VALUE, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    if (replacingExistingDestination) {
+      await assertOwnedBuildDirectory(destination);
+      await rename(destination, previous);
+      previousMoved = true;
+    }
     await rename(temporary, destination);
+    installed = true;
+    if (previousMoved) {
+      await assertOwnedBuildDirectory(previous);
+      await rm(previous, { recursive: true, force: false });
+      previousMoved = false;
+    }
   } catch (error) {
-    await rm(temporary, { recursive: true, force: true });
+    if (!installed) {
+      if (previousMoved && !(await pathExists(destination))) {
+        await rename(previous, destination);
+        previousMoved = false;
+      }
+      await rm(temporary, { recursive: true, force: true });
+    }
     throw error;
   }
   return { destination, scenesPath };

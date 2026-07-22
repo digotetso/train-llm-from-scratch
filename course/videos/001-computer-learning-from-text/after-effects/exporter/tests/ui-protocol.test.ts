@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -822,6 +822,85 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.doesNotMatch(`${code}\n${html}`, /1661000000000000000/);
     assert.doesNotMatch(code, /TextEncoder|crypto\.subtle|globalThis\.crypto/);
     assert.match(manifest, /987654321012345678/);
+    assert.equal(
+      readFileSync(join(outDir, ".video001-figma-build-owned"), "utf8"),
+      "video001-figma-exporter-build-v1\n"
+    );
+
+    const replacement = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile,
+      "--out-dir", outDir
+    ], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
+    });
+    assert.equal(replacement.status, 0, `${replacement.stdout}\n${replacement.stderr}`);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("build destination policy rejects the project root and its ancestors without filesystem mutation", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "video001-build-policy-"));
+  try {
+    const projectRoot = join(fixture, "project", "exporter");
+    mkdirSync(projectRoot, { recursive: true });
+    const buildScriptUrl = new URL("../scripts/build.mjs", import.meta.url);
+    const buildModule = await import(buildScriptUrl.href) as unknown as {
+      validateBuildDestination(options: { projectRoot: string; outDir: string }): string;
+    };
+    assert.equal(typeof buildModule.validateBuildDestination, "function");
+    assert.throws(
+      () => buildModule.validateBuildDestination({ projectRoot, outDir: projectRoot }),
+      /project root|ancestor/i
+    );
+    assert.throws(
+      () => buildModule.validateBuildDestination({ projectRoot, outDir: dirname(projectRoot) }),
+      /project root|ancestor/i
+    );
+    assert.throws(
+      () => buildModule.validateBuildDestination({ projectRoot, outDir: join(projectRoot, "src", "generated") }),
+      /exactly dist\/figma/i
+    );
+    assert.throws(
+      () => buildModule.validateBuildDestination({ projectRoot, outDir: join(fixture, "isolated-output") }),
+      /dedicated dist\/figma/i
+    );
+    assert.doesNotThrow(() => buildModule.validateBuildDestination({
+      projectRoot,
+      outDir: join(fixture, "isolated", "dist", "figma")
+    }));
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("build refuses an existing unowned output directory and preserves its contents", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "video001-build-unowned-"));
+  try {
+    const pluginIdFile = join(fixture, ".figma-plugin-id");
+    const outDir = join(fixture, "dist", "figma");
+    const timingFixture = join(fixture, "figma-scenes.json");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, "sentinel.txt"), "preserve me\n", "utf8");
+    copyFileSync(approvedTimingSource(), timingFixture);
+    writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
+    const script = new URL("../scripts/build.mjs", import.meta.url);
+    const result = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile,
+      "--out-dir", outDir
+    ], {
+      cwd: PROJECT_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingFixture }
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /not owned|ownership marker/i);
+    assert.equal(readFileSync(join(outDir, "sentinel.txt"), "utf8"), "preserve me\n");
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
