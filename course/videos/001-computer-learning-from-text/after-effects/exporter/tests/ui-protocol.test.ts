@@ -15,6 +15,8 @@ import {
   normalizeFigmaNode,
   validateUiToController,
   type ControllerHost,
+  type ControllerFetchOptions,
+  type ControllerFetchResponse,
   type EmbeddedVideo001Config,
   type FigmaNodeLike
 } from "../src/figma/controller.ts";
@@ -97,18 +99,35 @@ function sceneNode(overrides: Partial<FigmaNodeLike> = {}): FigmaNodeLike {
   };
 }
 
+function documentedFigmaFetchResponse(body: string, status: number): ControllerFetchResponse {
+  const bytes = Buffer.from(body, "utf8");
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return {
+    headersObject: { "content-length": String(bytes.byteLength), "content-type": "application/json" },
+    ok: status >= 200 && status < 300,
+    redirected: false,
+    status,
+    statusText: "",
+    type: "basic",
+    url: BRIDGE_BASE_URL,
+    arrayBuffer: async () => arrayBuffer,
+    text: async () => body,
+    json: async () => JSON.parse(body)
+  };
+}
+
 interface HostHarness {
   host: ControllerHost;
   messages: unknown[];
-  requests: Array<{ input: string; init?: RequestInit }>;
+  requests: Array<{ input: string; init?: ControllerFetchOptions }>;
   storage: Map<string, unknown>;
   setSelection(nodes: FigmaNodeLike[]): void;
 }
 
-function hostHarness(fetchResponses: Response[] = []): HostHarness {
+function hostHarness(fetchResponses: ControllerFetchResponse[] = []): HostHarness {
   const page = { id: "90:2", selection: [] as FigmaNodeLike[] };
   const messages: unknown[] = [];
-  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const requests: Array<{ input: string; init?: ControllerFetchOptions }> = [];
   const storage = new Map<string, unknown>();
   return {
     messages,
@@ -514,11 +533,8 @@ test("downloadPackage uses a UTF-8 vendor Blob and deterministic safe filename",
 test("controller validates package-ready state, pairs and sends exact requests, never posts a token, and clears token on 401", async () => {
   const token = "A".repeat(43);
   const harness = hostHarness([
-    new Response(JSON.stringify({ token }), { status: 200, headers: { "content-type": "application/json" } }),
-    new Response(JSON.stringify({ error: { code: "UNAUTHORIZED", message: "Expired" } }), {
-      status: 401,
-      headers: { "content-type": "application/json" }
-    })
+    documentedFigmaFetchResponse(JSON.stringify({ token }), 200),
+    documentedFigmaFetchResponse(JSON.stringify({ error: { code: "UNAUTHORIZED", message: "Expired" } }), 401)
   ]);
   harness.setSelection([sceneNode()]);
   const controller = createController(harness.host, config);
@@ -563,7 +579,7 @@ test("controller validates package-ready state, pairs and sends exact requests, 
 });
 
 test("controller rejects a concurrent bridge action while the first request is in flight", async () => {
-  const pendingResponse = deferred<Response>();
+  const pendingResponse = deferred<ControllerFetchResponse>();
   const harness = hostHarness();
   harness.host.fetch = async (input, init) => {
     harness.requests.push({ input: String(input), ...(init === undefined ? {} : { init }) });
@@ -582,16 +598,13 @@ test("controller rejects a concurrent bridge action while the first request is i
     code: "BRIDGE_BUSY",
     message: "Wait for the active bridge operation to finish."
   });
-  pendingResponse.resolve(new Response(JSON.stringify({ token: "A".repeat(43) }), { status: 200 }));
+  pendingResponse.resolve(documentedFigmaFetchResponse(JSON.stringify({ token: "A".repeat(43) }), 200));
   await first;
 });
 
 test("pairing accepts only the bridge's exact 200 response and canonical 32-byte base64url token", async () => {
   const invalidToken = hostHarness([
-    new Response(JSON.stringify({ token: "bridge-token-not-for-ui" }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })
+    documentedFigmaFetchResponse(JSON.stringify({ token: "bridge-token-not-for-ui" }), 200)
   ]);
   const first = createController(invalidToken.host, config);
   await first.handleMessage({ type: "pair", operation: 1, code: "123456" });
@@ -599,10 +612,7 @@ test("pairing accepts only the bridge's exact 200 response and canonical 32-byte
   assert.equal(invalidToken.storage.has(BRIDGE_TOKEN_KEY), false);
 
   const wrongStatus = hostHarness([
-    new Response(JSON.stringify({ token: "A".repeat(43) }), {
-      status: 201,
-      headers: { "content-type": "application/json" }
-    })
+    documentedFigmaFetchResponse(JSON.stringify({ token: "A".repeat(43) }), 201)
   ]);
   const second = createController(wrongStatus.host, config);
   await second.handleMessage({ type: "pair", operation: 1, code: "123456" });
@@ -643,16 +653,24 @@ test("send deletes only its matching rejected token before awaiting a slow 401 b
   harness.host.fetch = async (input, init) => {
     harness.requests.push({ input: String(input), ...(init === undefined ? {} : { init }) });
     return {
+      headersObject: { "content-type": "application/json" },
       status: 401,
       ok: false,
-      headers: new Headers({ "content-type": "application/json" }),
-      body: null,
+      redirected: false,
+      statusText: "Unauthorized",
+      type: "basic",
+      url: BRIDGE_BASE_URL + "/v1/export",
+      arrayBuffer: async () => {
+        bodyReadStarted.resolve(undefined);
+        const value = Buffer.from(await body.promise, "utf8");
+        return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+      },
       json: async () => JSON.parse(await body.promise),
       text: () => {
         bodyReadStarted.resolve(undefined);
         return body.promise;
       }
-    } as unknown as Response;
+    };
   };
 
   const send = controller.handleMessage({ type: "send-live", operation: 1 });
@@ -665,9 +683,80 @@ test("send deletes only its matching rejected token before awaiting a slow 401 b
   assert.equal(harness.storage.get(BRIDGE_TOKEN_KEY), replacementToken);
 });
 
+test("pair 401 clears only the token snapshot present at request start before body parsing", async () => {
+  const oldToken = "A".repeat(43);
+  const replacementToken = "B".repeat(42) + "A";
+  const responseBody = JSON.stringify({ error: { code: "UNAUTHORIZED", message: "Rejected" } });
+  const responseBytes = Buffer.from(responseBody, "utf8");
+  const makeSlow401 = () => {
+    const bodyReadStarted = deferred<void>();
+    const releaseBody = deferred<void>();
+    const response: ControllerFetchResponse = {
+      headersObject: { "content-length": String(responseBytes.byteLength) },
+      ok: false,
+      redirected: false,
+      status: 401,
+      statusText: "Unauthorized",
+      type: "basic",
+      url: BRIDGE_BASE_URL + "/v1/pair",
+      arrayBuffer: async () => {
+        bodyReadStarted.resolve(undefined);
+        await releaseBody.promise;
+        return responseBytes.buffer.slice(
+          responseBytes.byteOffset,
+          responseBytes.byteOffset + responseBytes.byteLength
+        );
+      },
+      text: async () => {
+        bodyReadStarted.resolve(undefined);
+        await releaseBody.promise;
+        return responseBody;
+      },
+      json: async () => JSON.parse(responseBody)
+    };
+    return { bodyReadStarted, releaseBody, response };
+  };
+
+  const unchanged = hostHarness();
+  unchanged.storage.set(BRIDGE_TOKEN_KEY, oldToken);
+  const firstResponse = makeSlow401();
+  unchanged.host.fetch = async () => firstResponse.response;
+  const firstController = createController(unchanged.host, config);
+  const firstPair = firstController.handleMessage({ type: "pair", operation: 1, code: "123456" });
+  await firstResponse.bodyReadStarted.promise;
+  try {
+    assert.equal(unchanged.storage.has(BRIDGE_TOKEN_KEY), false);
+  } finally {
+    firstResponse.releaseBody.resolve(undefined);
+  }
+  await firstPair;
+
+  const replaced = hostHarness();
+  replaced.storage.set(BRIDGE_TOKEN_KEY, oldToken);
+  const secondResponse = makeSlow401();
+  const fetchResponse = deferred<ControllerFetchResponse>();
+  const fetchStarted = deferred<void>();
+  replaced.host.fetch = async () => {
+    fetchStarted.resolve(undefined);
+    return fetchResponse.promise;
+  };
+  const secondController = createController(replaced.host, config);
+  const secondPair = secondController.handleMessage({ type: "pair", operation: 1, code: "123456" });
+  await fetchStarted.promise;
+  replaced.storage.set(BRIDGE_TOKEN_KEY, replacementToken);
+  fetchResponse.resolve(secondResponse.response);
+  await secondResponse.bodyReadStarted.promise;
+  try {
+    assert.equal(replaced.storage.get(BRIDGE_TOKEN_KEY), replacementToken);
+  } finally {
+    secondResponse.releaseBody.resolve(undefined);
+  }
+  await secondPair;
+});
+
 test("bridge responses are size-bounded and stalled requests time out without wedging the gate", async () => {
   const oversized = hostHarness([
-    new Response(JSON.stringify({ error: { code: "X", message: "x".repeat(20_000) } }), { status: 400 })
+    documentedFigmaFetchResponse(JSON.stringify({ error: { code: "X", message: "x".repeat(20_000) } }), 400)
   ]);
   const oversizedController = createController(oversized.host, config);
   await oversizedController.handleMessage({ type: "pair", operation: 1, code: "123456" });
@@ -678,8 +767,8 @@ test("bridge responses are size-bounded and stalled requests time out without we
   let requestCount = 0;
   stalled.host.fetch = async () => {
     requestCount += 1;
-    if (requestCount === 1) return new Promise<Response>(() => undefined);
-    return new Response(JSON.stringify({ token: "A".repeat(43) }), { status: 200 });
+    if (requestCount === 1) return new Promise<ControllerFetchResponse>(() => undefined);
+    return documentedFigmaFetchResponse(JSON.stringify({ token: "A".repeat(43) }), 200);
   };
   const stalledController = createController(stalled.host, config);
   const outcome = await Promise.race([
@@ -694,20 +783,14 @@ test("bridge responses are size-bounded and stalled requests time out without we
 
 test("live send accepts only the bridge's exact 202 envelope for the retained content hash", async () => {
   const wrongStatus = hostHarness([
-    new Response(JSON.stringify({ status: "accepted", contentHash: "a".repeat(64) }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })
+    documentedFigmaFetchResponse(JSON.stringify({ status: "accepted", contentHash: "a".repeat(64) }), 200)
   ]);
   const first = await makeControllerReady(wrongStatus);
   await first.handleMessage({ type: "send-live", operation: 1 });
   assert.equal(lastFailure(wrongStatus.messages).code, "INVALID_BRIDGE_RESPONSE");
 
   const wrongHash = hostHarness([
-    new Response(JSON.stringify({ status: "accepted", contentHash: "b".repeat(64) }), {
-      status: 202,
-      headers: { "content-type": "application/json" }
-    })
+    documentedFigmaFetchResponse(JSON.stringify({ status: "accepted", contentHash: "b".repeat(64) }), 202)
   ]);
   const second = await makeControllerReady(wrongHash);
   await second.handleMessage({ type: "send-live", operation: 1 });
@@ -785,6 +868,14 @@ test("manifest generator rejects missing, malformed, and example IDs and emits e
   }
 });
 
+test("controller-specific typecheck excludes DOM ambient types", () => {
+  const result = spawnSync("npm", ["run", "typecheck:controller"], {
+    cwd: PROJECT_ROOT,
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, result.stdout + "\n" + result.stderr);
+});
+
 test("isolated build embeds exact timings and separates browser-only APIs from the controller bundle", () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-build-"));
   try {
@@ -814,7 +905,7 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
     assert.match(html, /Download package/);
     assert.doesNotMatch(
       `${code}\n${html}`,
-      /node:(?:fs|path|crypto|http|https|net|tls|child_process)|require\(|process\.|Buffer\b|child_process/
+      /node:(?:fs|path|crypto|http|https|net|tls|child_process)|require\(|process\.|(?<![A-Za-z])Buffer\b|child_process/
     );
     assert.doesNotMatch(html, /https?:\/\//);
     assert.doesNotMatch(html, /clientStorage|Authorization|Bearer\s/);
@@ -927,12 +1018,32 @@ test("controller bundle builds a root-opacity raster package with only documente
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     const code = readFileSync(join(outDir, "code.js"), "utf8");
     const messages: unknown[] = [];
+    const fetchRequests: Array<{ input: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = [];
+    const pluginStorage = new Map<string, unknown>();
     const currentPage = { id: "90:2", selection: [] as unknown[] };
     const sandbox = {
       __html__: "<!doctype html><title>fixture</title>",
       crypto: undefined,
       TextEncoder: undefined,
-      fetch: async () => { throw new Error("network not expected"); },
+      TextDecoder: undefined,
+      Response: undefined,
+      Headers: undefined,
+      ReadableStream: undefined,
+      pluginMessageJson: "",
+      fetch: async (
+        input: string,
+        init?: { method?: string; headers?: Record<string, string>; body?: string }
+      ) => {
+        fetchRequests.push({ input, ...(init === undefined ? {} : { init }) });
+        if (input.endsWith("/v1/pair")) {
+          return documentedFigmaFetchResponse(JSON.stringify({ token: "A".repeat(43) }), 200);
+        }
+        const sent = JSON.parse(String(init?.body)) as ExporterPackage;
+        return documentedFigmaFetchResponse(JSON.stringify({
+          status: "accepted",
+          contentHash: sent.contentHash
+        }), 202);
+      },
       setTimeout,
       clearTimeout,
       figma: {
@@ -947,9 +1058,9 @@ test("controller bundle builds a root-opacity raster package with only documente
           postMessage: (message: unknown) => messages.push(structuredClone(message))
         },
         clientStorage: {
-          getAsync: async () => undefined,
-          setAsync: async () => undefined,
-          deleteAsync: async () => undefined
+          getAsync: async (key: string) => pluginStorage.get(key),
+          setAsync: async (key: string, value: unknown) => { pluginStorage.set(key, value); },
+          deleteAsync: async (key: string) => { pluginStorage.delete(key); }
         }
       }
     };
@@ -985,8 +1096,43 @@ test("controller bundle builds a root-opacity raster package with only documente
     }
     const packageMessage = messages.find((message) =>
       typeof message === "object" && message !== null && "type" in message && message.type === "package-unhashed"
-    );
+    ) as { type: "package-unhashed"; generation: number; value: ExporterPackage } | undefined;
     assert.ok(packageMessage, JSON.stringify(messages));
+    assert.doesNotMatch(code, /\.headers\.get\(|\.body(?:\?\.|\.)getReader\(/);
+
+    const readyValue = structuredClone(packageMessage.value);
+    readyValue.contentHash = createHash("sha256")
+      .update(contentFingerprintInput(readyValue), "utf8")
+      .digest("hex");
+    sandbox.pluginMessageJson = JSON.stringify({
+      type: "package-ready",
+      generation: packageMessage.generation,
+      value: readyValue
+    });
+    runInNewContext("figma.ui.onmessage(JSON.parse(pluginMessageJson))", sandbox);
+    runInNewContext('figma.ui.onmessage({ type: "pair", operation: 1, code: "123456" })', sandbox);
+    for (let attempt = 0; attempt < 20 && !messages.some((message) =>
+      typeof message === "object" && message !== null && "code" in message && message.code === "PAIRED"
+    ); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.ok(messages.some((message) =>
+      typeof message === "object" && message !== null && "code" in message && message.code === "PAIRED"
+    ), JSON.stringify(messages));
+
+    runInNewContext('figma.ui.onmessage({ type: "send-live", operation: 2 })', sandbox);
+    for (let attempt = 0; attempt < 20 && !messages.some((message) =>
+      typeof message === "object" && message !== null && "code" in message && message.code === "EXPORT_ACCEPTED"
+    ); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.ok(messages.some((message) =>
+      typeof message === "object" && message !== null && "code" in message && message.code === "EXPORT_ACCEPTED"
+    ), JSON.stringify(messages));
+    assert.deepEqual(fetchRequests.map(({ input }) => input), [
+      BRIDGE_BASE_URL + "/v1/pair",
+      BRIDGE_BASE_URL + "/v1/export"
+    ]);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

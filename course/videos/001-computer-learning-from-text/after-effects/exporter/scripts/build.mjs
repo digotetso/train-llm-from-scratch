@@ -256,6 +256,9 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   if (/TextEncoder|crypto\.subtle|globalThis\.crypto/.test(controllerJavaScript)) {
     throw new Error("Controller bundle contains browser-only UTF-8 or Web Crypto APIs");
   }
+  if (/\.headers\.get\(|\.body(?:\?\.|\.)getReader\(/.test(controllerJavaScript)) {
+    throw new Error("Controller bundle contains DOM Response APIs unavailable in the Figma main sandbox");
+  }
 
   const destinationParent = dirname(destination);
   await mkdir(destinationParent, { recursive: true });

@@ -12,7 +12,7 @@ import {
   type TransformMatrix
 } from "./serializer.ts";
 import { sha256Hex } from "../shared/sha256.ts";
-import { decodeUtf8, utf8ByteLength } from "../shared/utf8.ts";
+import { decodeUtf8 } from "../shared/utf8.ts";
 
 export const BRIDGE_BASE_URL = "http://127.0.0.1:3456";
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
@@ -87,6 +87,33 @@ export interface ControllerPage {
   selection: FigmaNodeLike[] | readonly FigmaNodeLike[];
 }
 
+export interface ControllerFetchOptions {
+  method?: string;
+  headers?: { [name: string]: string };
+  headersObject?: { [name: string]: string };
+  body?: Uint8Array | string;
+  credentials?: string;
+  cache?: string;
+  redirect?: string;
+  referrer?: string;
+  integrity?: string;
+}
+
+export interface ControllerFetchResponse {
+  headersObject: { [name: string]: string };
+  ok: boolean;
+  redirected: boolean;
+  status: number;
+  statusText: string;
+  type: string;
+  url: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+}
+
+type FigmaSandboxFetch = (url: string, options?: FetchOptions) => Promise<FetchResponse>;
+
 export interface ControllerHost {
   fileKey: string | undefined;
   getCurrentPage(): ControllerPage;
@@ -99,7 +126,7 @@ export interface ControllerHost {
     setAsync(key: string, value: unknown): Promise<void>;
     deleteAsync(key: string): Promise<void>;
   };
-  fetch(input: string, init?: RequestInit): Promise<Response>;
+  fetch(input: string, init?: ControllerFetchOptions): Promise<ControllerFetchResponse>;
   bridgeTimeoutMs?: number;
 }
 
@@ -430,50 +457,32 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function responseJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null) {
+function responseHeader(response: ControllerFetchResponse, name: string): string | undefined {
+  const expected = name.toLowerCase();
+  for (const key of Object.keys(response.headersObject)) {
+    if (key.toLowerCase() === expected) return response.headersObject[key];
+  }
+  return undefined;
+}
+
+async function responseJson(response: ControllerFetchResponse, timeoutMs: number): Promise<unknown> {
+  const declaredLength = responseHeader(response, "content-length");
+  if (declaredLength !== undefined) {
     const parsedLength = Number(declaredLength);
     if (!Number.isSafeInteger(parsedLength) || parsedLength < 0 || parsedLength > MAX_BRIDGE_RESPONSE_BYTES) {
       throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
     }
   }
 
+  const buffer = await withTimeout(response.arrayBuffer(), timeoutMs);
   let bytes: Uint8Array;
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    const text = await withTimeout(response.text(), timeoutMs);
-    if (utf8ByteLength(text) > MAX_BRIDGE_RESPONSE_BYTES) {
-      throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
-    }
-    try {
-      return JSON.parse(text);
-    } catch {
-      return undefined;
-    }
-  }
-
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
   try {
-    for (;;) {
-      const chunk = await withTimeout(reader.read(), timeoutMs);
-      if (chunk.done) break;
-      byteLength += chunk.value.byteLength;
-      if (byteLength > MAX_BRIDGE_RESPONSE_BYTES) {
-        await reader.cancel();
-        throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
-      }
-      chunks.push(chunk.value);
-    }
-  } finally {
-    reader.releaseLock();
+    bytes = new Uint8Array(buffer);
+  } catch {
+    throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge returned an invalid response body.");
   }
-  bytes = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
+  if (bytes.byteLength > MAX_BRIDGE_RESPONSE_BYTES) {
+    throw controllerFailure("INVALID_BRIDGE_RESPONSE", "The bridge response exceeded the allowed size.");
   }
   try {
     return JSON.parse(decodeUtf8(bytes));
@@ -614,8 +623,15 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     readyPackage = { generation, value: validated };
   };
 
+  const deleteStoredTokenIfUnchanged = async (tokenSnapshot: unknown): Promise<void> => {
+    if (tokenSnapshot === undefined) return;
+    const retainedToken = await host.clientStorage.getAsync(BRIDGE_TOKEN_KEY);
+    if (retainedToken === tokenSnapshot) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
+  };
+
   const pair = async (operation: number, code: string): Promise<void> => {
-    let response: Response;
+    const tokenAtRequestStart = await host.clientStorage.getAsync(BRIDGE_TOKEN_KEY);
+    let response: ControllerFetchResponse;
     try {
       response = await withTimeout(host.fetch(BRIDGE_BASE_URL + "/v1/pair", {
         method: "POST",
@@ -633,6 +649,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       });
       return;
     }
+    if (response.status === 401) await deleteStoredTokenIfUnchanged(tokenAtRequestStart);
     const body = await responseJson(response, bridgeTimeoutMs);
     if (response.status === 200) {
       let token: unknown;
@@ -673,7 +690,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       if (token !== undefined) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
       throw controllerFailure("NOT_PAIRED", "Pair with the local After Effects bridge before sending.");
     }
-    let response: Response;
+    let response: ControllerFetchResponse;
     try {
       response = await withTimeout(host.fetch(BRIDGE_BASE_URL + "/v1/export", {
         method: "POST",
@@ -694,10 +711,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       });
       return;
     }
-    if (response.status === 401) {
-      const retainedToken = await host.clientStorage.getAsync(BRIDGE_TOKEN_KEY);
-      if (retainedToken === token) await host.clientStorage.deleteAsync(BRIDGE_TOKEN_KEY);
-    }
+    if (response.status === 401) await deleteStoredTokenIfUnchanged(token);
     const body = await responseJson(response, bridgeTimeoutMs);
     if (response.status === 202) {
       const record = plainRecord(body, "$.bridge");
@@ -799,7 +813,7 @@ function startRuntime(): void {
     closePlugin: () => figma.closePlugin(),
     now: () => new Date(),
     clientStorage: figma.clientStorage,
-    fetch: (input, init) => fetch(input, init)
+    fetch: (input, init) => (fetch as unknown as FigmaSandboxFetch)(input, init)
   }, __VIDEO001_CONFIG__);
   figma.ui.onmessage = (message: unknown) => {
     void controller.handleMessage(message);

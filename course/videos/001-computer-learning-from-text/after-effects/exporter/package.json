@@ -7,6 +7,7 @@
   "scripts": {
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:controller": "tsc --project tsconfig.controller.json --noEmit",
     "build": "node scripts/build.mjs"
   },
   "devDependencies": {
