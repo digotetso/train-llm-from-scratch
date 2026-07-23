@@ -602,7 +602,8 @@ function validateAeProjectItem(rawItem, expectedIndex, label) {
     "height",
     "duration",
     "frameRate",
-    "layerCount"
+    "layerCount",
+    "contentFingerprint"
   ], label);
   if (item.index !== expectedIndex) {
     throw new Error(label + " index must preserve the After Effects project order");
@@ -627,6 +628,9 @@ function validateAeProjectItem(rawItem, expectedIndex, label) {
     ) {
       throw new Error(label + " comp metrics must be present");
     }
+    object(item.contentFingerprint, label + " comp content fingerprint");
+  } else if (item.contentFingerprint !== null) {
+    throw new Error(label + " non-comp content fingerprint must be null");
   }
   return item;
 }

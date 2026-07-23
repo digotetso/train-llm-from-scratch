@@ -359,6 +359,186 @@ var Video001MotionProvenance = (function () {
         );
     }
 
+    function findExpectedInstalledFontFace(postScriptName) {
+        var matches;
+        var index;
+        if (!app.fonts || !app.fonts.getFontsByPostScriptName) {
+            throw new Error("After Effects font lookup is unavailable");
+        }
+        try {
+            matches = app.fonts.getFontsByPostScriptName(postScriptName);
+        } catch (fontLookupError) {
+            return null;
+        }
+        if (matches) {
+            for (index = 0; index < matches.length; index += 1) {
+                if (!matches[index].isSubstitute) {
+                    return matches[index];
+                }
+            }
+        }
+        return null;
+    }
+
+    function findExpectedGlyphFallback(runText) {
+        var groups = app.fonts.allFonts;
+        var installed = [];
+        var familyIndex;
+        var styleIndex;
+        var index;
+        for (familyIndex = 0; familyIndex < groups.length; familyIndex += 1) {
+            for (styleIndex = 0; styleIndex < groups[familyIndex].length; styleIndex += 1) {
+                if (
+                    !groups[familyIndex][styleIndex].isSubstitute &&
+                    String(groups[familyIndex][styleIndex].postScriptName || "").length > 0
+                ) {
+                    installed[installed.length] = groups[familyIndex][styleIndex];
+                }
+            }
+        }
+        installed.sort(function (left, right) {
+            var leftName = String(left.postScriptName);
+            var rightName = String(right.postScriptName);
+            return leftName < rightName
+                ? -1
+                : leftName > rightName
+                    ? 1
+                    : 0;
+        });
+        for (index = 0; index < installed.length; index += 1) {
+            if (fontHasGlyphs(installed[index], runText)) {
+                return installed[index];
+            }
+        }
+        return null;
+    }
+
+    function nextTextIndex(text, index, end) {
+        var first = text.charCodeAt(index);
+        var second;
+        if (first >= 55296 && first <= 56319 && index + 1 < end) {
+            second = text.charCodeAt(index + 1);
+            if (second >= 56320 && second <= 57343) {
+                return index + 2;
+            }
+        }
+        return index + 1;
+    }
+
+    function sameResolvedFont(left, right) {
+        return (
+            left.postScriptName === right.postScriptName &&
+            left.fauxBold === right.fauxBold
+        );
+    }
+
+    function copyRunRange(run, start, end) {
+        return {
+            start: start,
+            end: end,
+            fontFamily: run.fontFamily,
+            fontStyle: run.fontStyle,
+            fontSize: run.fontSize,
+            color: run.color
+        };
+    }
+
+    function appendExpectedResolvedSegment(result, run, resolved, start, end) {
+        var lastIndex = result.runs.length - 1;
+        if (
+            lastIndex >= 0 &&
+            result.runs[lastIndex].end === start &&
+            sameResolvedFont(result.resolvedRuns[lastIndex], resolved)
+        ) {
+            result.runs[lastIndex].end = end;
+            return;
+        }
+        result.runs[result.runs.length] = copyRunRange(run, start, end);
+        result.resolvedRuns[result.resolvedRuns.length] = resolved;
+    }
+
+    function resolveExpectedRunSegments(run, node) {
+        var candidates = fontCandidates(run);
+        var intendedFont = null;
+        var intendedPostScriptName = "";
+        var intendedResolved;
+        var fallbackFont;
+        var fallbackResolved;
+        var result = { runs: [], resolvedRuns: [] };
+        var cursor;
+        var next;
+        var glyph;
+        var index;
+        for (index = 0; index < candidates.length - 1; index += 1) {
+            intendedFont = findExpectedInstalledFontFace(candidates[index]);
+            if (intendedFont !== null) {
+                intendedPostScriptName = intendedFont.postScriptName;
+                break;
+            }
+        }
+        if (intendedFont === null) {
+            result.runs[0] = copyRunRange(run, run.start, run.end);
+            result.resolvedRuns[0] = resolveExpectedRunFont(
+                run,
+                node.text.substring(run.start, run.end).replace(
+                    new RegExp("[\\r\\n]", "g"),
+                    ""
+                )
+            );
+            return result;
+        }
+        intendedResolved = {
+            postScriptName: intendedPostScriptName,
+            fauxBold: false
+        };
+        cursor = run.start;
+        while (cursor < run.end) {
+            next = nextTextIndex(node.text, cursor, run.end);
+            glyph = node.text.substring(cursor, next);
+            if (
+                glyph === "\r" ||
+                glyph === "\n" ||
+                fontHasGlyphs(intendedFont, glyph)
+            ) {
+                appendExpectedResolvedSegment(
+                    result,
+                    run,
+                    intendedResolved,
+                    cursor,
+                    next
+                );
+            } else {
+                fallbackFont = findExpectedInstalledFontFace("Inter-Regular");
+                if (
+                    fallbackFont === null ||
+                    !fontHasGlyphs(fallbackFont, glyph)
+                ) {
+                    fallbackFont = findExpectedGlyphFallback(glyph);
+                }
+                if (fallbackFont === null) {
+                    throw new Error("No installed font can render trusted text");
+                }
+                fallbackResolved = {
+                    postScriptName: String(fallbackFont.postScriptName),
+                    fauxBold:
+                        new RegExp("(?:bold|black|heavy|demi)", "i").test(
+                            String(run.fontStyle || "")
+                        ) &&
+                        !fontObjectHasBoldStyle(fallbackFont)
+                };
+                appendExpectedResolvedSegment(
+                    result,
+                    run,
+                    fallbackResolved,
+                    cursor,
+                    next
+                );
+            }
+            cursor = next;
+        }
+        return result;
+    }
+
     function resolveExpectedRunFont(run, runText) {
         var candidates = fontCandidates(run);
         var matches;
@@ -957,26 +1137,42 @@ var Video001MotionProvenance = (function () {
             layer.name + " Source Text"
         );
         var documentValue = sourceText.value;
-        var dominantRun = node.runs.length === 0
+        var sourceRuns = node.runs.length === 0
             ? {
                 fontSize: Math.max(1, node.paragraph.lineHeightPx),
                 color: "#FFFFFF"
             }
-            : node.runs[0];
+            : null;
+        var runs = node.runs.length === 0
+            ? [{
+                start: 0,
+                end: node.text.length,
+                fontFamily: "Inter",
+                fontStyle: "Regular",
+                fontSize: sourceRuns.fontSize,
+                color: sourceRuns.color
+            }]
+            : node.runs;
+        var expandedRuns = [];
+        var resolvedSegments;
+        var dominantRun = runs[0];
         var index;
         var length;
-        var dominantLength = node.runs.length === 0 ? 0 : -1;
+        var dominantLength = -1;
         var dominantIndex = 0;
         var dominantFont;
         var expectedJustification;
-        if (node.runs.length > 1) {
-            for (index = 0; index < node.runs.length; index += 1) {
-                length = node.runs[index].end - node.runs[index].start;
-                if (length > dominantLength) {
-                    dominantRun = node.runs[index];
-                    dominantIndex = index;
-                    dominantLength = length;
-                }
+        for (index = 0; index < runs.length; index += 1) {
+            resolvedSegments = resolveExpectedRunSegments(runs[index], node);
+            expandedRuns = expandedRuns.concat(resolvedSegments.runs);
+        }
+        runs = expandedRuns;
+        for (index = 0; index < runs.length; index += 1) {
+            length = runs[index].end - runs[index].start;
+            if (length > dominantLength) {
+                dominantRun = runs[index];
+                dominantIndex = index;
+                dominantLength = length;
             }
         }
         if (documentValue.text !== node.text) {
@@ -1050,7 +1246,7 @@ var Video001MotionProvenance = (function () {
         validateTextRuns(
             textProperties,
             documentValue,
-            node.runs,
+            runs,
             dominantIndex,
             dominantRun,
             dominantFont,

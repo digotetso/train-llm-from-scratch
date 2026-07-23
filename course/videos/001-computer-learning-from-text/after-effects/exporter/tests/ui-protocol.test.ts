@@ -1556,7 +1556,8 @@ function writeSyntheticFullLessonEvidence(root: string) {
       height: 1080,
       duration: 840,
       frameRate: 30,
-      layerCount: 48
+      layerCount: 48,
+      contentFingerprint: { layers: [{ comment: "master source", propertyTree: "master-v1" }] }
     },
     ...timing.shots.map((shot, index) => ({
       index: index + 2,
@@ -1567,7 +1568,8 @@ function writeSyntheticFullLessonEvidence(root: string) {
       height: 1080,
       duration: shot.duration,
       frameRate: 30,
-      layerCount: 1
+      layerCount: 1,
+      contentFingerprint: { layers: [{ comment: "shot source", propertyTree: shot.figmaNodeId }] }
     })),
     ...Array.from({ length: 226 }, (_, index) => ({
       index: index + 50,
@@ -1578,7 +1580,8 @@ function writeSyntheticFullLessonEvidence(root: string) {
       height: null,
       duration: null,
       frameRate: null,
-      layerCount: null
+      layerCount: null,
+      contentFingerprint: null
     }))
   ];
   const duplicateResult = {
@@ -2058,6 +2061,25 @@ for (const [label, mutate, expected] of [
     }
   });
 }
+
+test("full-lesson evidence rejects a duplicate resend that changes comp contents without changing item metadata", () => {
+  const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-content-fingerprint-"));
+  try {
+    const fixture = writeSyntheticFullLessonEvidence(root);
+    const accepted = runFullLessonEvidence(root, "--write");
+    assert.equal(accepted.status, 0, accepted.stdout + "\n" + accepted.stderr);
+
+    const value = JSON.parse(readFileSync(fixture.paths.duplicateResult, "utf8"));
+    value.after.items[0].contentFingerprint.layers[0].propertyTree = "master-v2";
+    writeFileSync(fixture.paths.duplicateResult, JSON.stringify(value, null, 2) + "\n", "utf8");
+
+    const rejected = runFullLessonEvidence(root, "--write");
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stdout + "\n" + rejected.stderr, /duplicate|fingerprint|content|unchanged/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("full-lesson evidence rejects a consistently restamped root-local alternate timing", () => {
   const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-alternate-timing-"));

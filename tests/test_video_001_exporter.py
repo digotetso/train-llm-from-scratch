@@ -316,6 +316,9 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
             "duration": 840,
             "frameRate": 30,
             "layerCount": 48,
+            "contentFingerprint": {
+                "layers": [{"comment": "master source", "propertyTree": "master-v1"}],
+            },
         },
         *[
             {
@@ -328,6 +331,11 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                 "duration": shot["duration"],
                 "frameRate": 30,
                 "layerCount": 1,
+                "contentFingerprint": {
+                    "layers": [
+                        {"comment": "shot source", "propertyTree": shot["figmaNodeId"]}
+                    ],
+                },
             }
             for index, shot in enumerate(timing["shots"])
         ],
@@ -342,6 +350,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                 "duration": None,
                 "frameRate": None,
                 "layerCount": None,
+                "contentFingerprint": None,
             }
             for index in range(226)
         ],

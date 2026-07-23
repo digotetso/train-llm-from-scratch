@@ -481,7 +481,14 @@ test("visual provenance rejects changed Source Text and static transforms", () =
       extractFunction(source, "textFont"),
       extractFunction(source, "fontHasGlyphs"),
       extractFunction(source, "fontObjectHasBoldStyle"),
+      extractFunction(source, "findExpectedInstalledFontFace"),
+      extractFunction(source, "findExpectedGlyphFallback"),
+      extractFunction(source, "nextTextIndex"),
+      extractFunction(source, "sameResolvedFont"),
+      extractFunction(source, "copyRunRange"),
+      extractFunction(source, "appendExpectedResolvedSegment"),
       extractFunction(source, "resolveExpectedRunFont"),
+      extractFunction(source, "resolveExpectedRunSegments"),
       extractFunction(source, "assertRunFont"),
       extractFunction(source, "sameColor"),
       extractFunction(source, "validateTextRuns"),
@@ -571,6 +578,171 @@ test("visual provenance rejects changed Source Text and static transforms", () =
   assert.throws(
     () => context.verify?.(layer, node, null),
     /default text style/
+  );
+});
+
+test("assertCompMatchesFrame accepts a partial-glyph fallback with its surrounding requested font", () => {
+  const source = readFileSync(visualProvenanceUrl, "utf8");
+  class CompItemMock {}
+  class AVLayerMock {}
+  const sora = {
+    postScriptName: "Sora-SemiBold",
+    styleName: "SemiBold",
+    isSubstitute: false,
+    hasGlyphsFor(value: string) {
+      return value !== "→" && value.indexOf("→") === -1;
+    },
+  };
+  const inter = {
+    postScriptName: "Inter-Regular",
+    styleName: "Regular",
+    isSubstitute: false,
+    hasGlyphsFor: () => true,
+  };
+  const context = {
+    CompItem: CompItemMock,
+    AVLayer: AVLayerMock,
+    ParagraphJustification: {
+      LEFT_JUSTIFY: "LEFT",
+      CENTER_JUSTIFY: "CENTER",
+      RIGHT_JUSTIFY: "RIGHT",
+    },
+    app: {
+      fonts: {
+        allFonts: [[sora], [inter]],
+        getFontsByPostScriptName(name: string) {
+          if (name === "Sora-SemiBold") return [sora];
+          if (name === "Inter-Regular") return [inter];
+          return [];
+        },
+      },
+    },
+    verify: undefined as undefined | ((...values: unknown[]) => unknown),
+  };
+  vm.runInNewContext(
+    source + "\nverify = Video001MotionProvenance.assertCompMatchesFrame;",
+    context
+  );
+  assert.ok(context.verify);
+
+  const documentValue = {
+    text: "A → 65",
+    boxTextSize: [200, 40],
+    boxTextPos: [0, 0],
+    font: "Sora-SemiBold",
+    fontSize: 32,
+    fillColor: [1, 1, 1],
+    leading: 32,
+    tracking: 0,
+    applyFill: true,
+    applyStroke: false,
+    autoLeading: false,
+    fauxBold: false,
+    fauxItalic: false,
+    allCaps: false,
+    smallCaps: false,
+    superscript: false,
+    subscript: false,
+    baselineShift: 0,
+    horizontalScale: 100,
+    verticalScale: 100,
+    tsume: 0,
+    noBreak: false,
+    autoHyphenate: false,
+    hangingRoman: false,
+    startIndent: 0,
+    endIndent: 0,
+    firstLineIndent: 0,
+    spaceBefore: 0,
+    spaceAfter: 0,
+    justification: "LEFT",
+    characterRange(start: number, end: number) {
+      if (start === 2 && end === 3) {
+        return { font: "Inter-Regular", fauxBold: true };
+      }
+      return { font: "Sora-SemiBold", fauxBold: false };
+    },
+  };
+  const animatorProperties = makeGroup("ADBE Text Animator Properties", [
+    makeLeaf("ADBE Text Fill Color", [1, 1, 1]),
+  ]);
+  const selector = makeGroup("ADBE Text Selector", [
+    makeGroup("ADBE Text Range Advanced", [
+      makeLeaf("ADBE Text Range Units", 2),
+    ]),
+    makeLeaf("ADBE Text Index Start", 2),
+    makeLeaf("ADBE Text Index End", 3),
+  ]);
+  const animator = Object.assign(
+    makeGroup("ADBE Text Animator", [
+      animatorProperties,
+      makeGroup("ADBE Text Selectors", [selector]),
+    ]),
+    { name: "Video001 mixed run 2-3" }
+  );
+  const textProperties = makeGroup("ADBE Text Properties", [
+    makeLeaf("ADBE Text Document", documentValue),
+    makeGroup("ADBE Text Animators", [animator]),
+  ]);
+  const transform = transformGroup({ anchor: [100, 20], position: [110, 40] });
+  const layer = {
+    index: 1,
+    name: "DATA_Mapping",
+    comment: "Figma native text mapping-label",
+    enabled: true,
+    locked: false,
+    startTime: 0,
+    inPoint: 0,
+    outPoint: 8,
+    stretch: 100,
+    source: null,
+    property(matchName: string) {
+      if (matchName === "ADBE Text Properties") return textProperties;
+      if (matchName === "ADBE Transform Group") return transform;
+      return null;
+    },
+  };
+  const comp = {
+    name: "SHOT_v001",
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    duration: 8,
+    numLayers: 1,
+    layer() {
+      return layer;
+    },
+  };
+  const frame = {
+    nodeId: "frame-id",
+    name: "SHOT",
+    duration: 8,
+    children: [{
+      id: "mapping-label",
+      name: "DATA_Mapping",
+      kind: "text",
+      x: 10,
+      y: 20,
+      width: 200,
+      height: 40,
+      rotation: 0,
+      opacity: 1,
+      text: "A → 65",
+      textBox: { width: 200, height: 40 },
+      paragraph: { align: "LEFT", lineHeightPx: 32, letterSpacingPx: 0 },
+      runs: [{
+        start: 0,
+        end: 6,
+        fontFamily: "Sora",
+        fontStyle: "SemiBold",
+        fontSize: 32,
+        color: "#FFFFFF",
+      }],
+    }],
+  };
+
+  assert.doesNotThrow(() =>
+    context.verify?.(comp, frame, { target: { width: 1920, height: 1080, fps: 30 } }, null, null)
   );
 });
 

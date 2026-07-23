@@ -256,6 +256,150 @@
         return "other";
     }
 
+    function normalizePropertyValue(value) {
+        var result = [];
+        var fields = [
+            "text", "font", "fontSize", "fillColor", "leading", "tracking",
+            "fauxBold", "fauxItalic", "applyFill", "applyStroke", "justification",
+            "vertices", "inTangents", "outTangents", "closed"
+        ];
+        var objectValue;
+        var index;
+        if (
+            value === null ||
+            typeof value === "string" ||
+            typeof value === "number" ||
+            typeof value === "boolean"
+        ) {
+            return value;
+        }
+        if (value instanceof Array) {
+            for (index = 0; index < value.length; index += 1) {
+                result[index] = normalizePropertyValue(value[index]);
+            }
+            return result;
+        }
+        if (typeof value !== "object") {
+            return String(value);
+        }
+        objectValue = { type: String(value) };
+        for (index = 0; index < fields.length; index += 1) {
+            if (value[fields[index]] !== undefined) {
+                objectValue[fields[index]] = normalizePropertyValue(
+                    value[fields[index]]
+                );
+            }
+        }
+        return objectValue;
+    }
+
+    function propertyFingerprint(property) {
+        var children = [];
+        var keys = [];
+        var index;
+        if (property === null || property === undefined) {
+            return null;
+        }
+        for (index = 1; index <= property.numKeys; index += 1) {
+            keys[keys.length] = {
+                time: property.keyTime(index),
+                value: normalizePropertyValue(property.keyValue(index))
+            };
+        }
+        for (index = 1; index <= property.numProperties; index += 1) {
+            children[children.length] = propertyFingerprint(property.property(index));
+        }
+        return {
+            name: String(property.name || ""),
+            matchName: String(property.matchName || ""),
+            value: children.length === 0
+                ? normalizePropertyValue(property.value)
+                : null,
+            expression: property.canSetExpression
+                ? String(property.expression || "")
+                : "",
+            expressionEnabled: property.canSetExpression
+                ? property.expressionEnabled === true
+                : false,
+            keys: keys,
+            children: children
+        };
+    }
+
+    function projectItemIndex(item) {
+        var index;
+        for (index = 1; index <= app.project.numItems; index += 1) {
+            if (app.project.item(index) === item) {
+                return index;
+            }
+        }
+        return null;
+    }
+
+    function sourceFingerprint(source) {
+        var mainSource;
+        var file;
+        if (source === null || source === undefined) {
+            return null;
+        }
+        mainSource = source.mainSource;
+        file = mainSource === null || mainSource === undefined
+            ? null
+            : mainSource.file;
+        return {
+            itemIndex: projectItemIndex(source),
+            kind: itemKind(source),
+            name: String(source.name || ""),
+            comment: String(source.comment || ""),
+            width: source.width === undefined ? null : source.width,
+            height: source.height === undefined ? null : source.height,
+            duration: source.duration === undefined ? null : source.duration,
+            frameRate: source.frameRate === undefined ? null : source.frameRate,
+            pixelAspect: source.pixelAspect === undefined ? null : source.pixelAspect,
+            fileName: file === null || file === undefined ? null : String(file.name),
+            fileLength: file === null || file === undefined ? null : file.length,
+            hasAlpha: mainSource === null || mainSource === undefined
+                ? null
+                : mainSource.hasAlpha === true,
+            alphaMode: mainSource === null || mainSource === undefined
+                ? null
+                : String(mainSource.alphaMode),
+            invertAlpha: mainSource === null || mainSource === undefined
+                ? null
+                : mainSource.invertAlpha === true
+        };
+    }
+
+    function layerFingerprint(layer) {
+        return {
+            index: layer.index,
+            name: String(layer.name),
+            comment: String(layer.comment || ""),
+            enabled: layer.enabled === true,
+            locked: layer.locked === true,
+            solo: layer.solo === true,
+            shy: layer.shy === true,
+            guideLayer: layer.guideLayer === true,
+            adjustmentLayer: layer.adjustmentLayer === true,
+            threeDLayer: layer.threeDLayer === true,
+            startTime: layer.startTime,
+            inPoint: layer.inPoint,
+            outPoint: layer.outPoint,
+            stretch: layer.stretch,
+            source: sourceFingerprint(layer.source),
+            properties: propertyFingerprint(layer)
+        };
+    }
+
+    function compContentFingerprint(comp) {
+        var layers = [];
+        var index;
+        for (index = 1; index <= comp.numLayers; index += 1) {
+            layers[layers.length] = layerFingerprint(comp.layer(index));
+        }
+        return { layers: layers };
+    }
+
     function itemRecord(item, index) {
         var kind = itemKind(item);
         var record = {
@@ -271,7 +415,8 @@
             height: null,
             duration: null,
             frameRate: null,
-            layerCount: null
+            layerCount: null,
+            contentFingerprint: null
         };
         if (kind === "comp") {
             record.width = item.width;
@@ -279,6 +424,7 @@
             record.duration = item.duration;
             record.frameRate = item.frameRate;
             record.layerCount = item.numLayers;
+            record.contentFingerprint = compContentFingerprint(item);
         } else if (kind === "footage") {
             record.width = item.width;
             record.height = item.height;
