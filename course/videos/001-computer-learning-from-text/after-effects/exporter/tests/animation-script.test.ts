@@ -673,6 +673,56 @@ function captureItemRecordHarness() {
   };
 }
 
+test("capture TextDocument normalization guards unavailable stroke and point-text getters", () => {
+  const sourceUrl = new URL(
+    "../src/ae/capture-full-lesson-duplicate-evidence.jsx",
+    import.meta.url
+  );
+  const source = readFileSync(sourceUrl, "utf8");
+  const context = {
+    normalize: undefined as undefined | ((value: unknown) => Record<string, unknown>),
+  };
+  vm.runInNewContext(
+    `${extractFunction(source, "normalizePropertyValue")}\nnormalize = normalizePropertyValue;`,
+    context
+  );
+  assert.ok(context.normalize);
+  const textDocument: Record<string, unknown> = {
+    text: "cat",
+    font: "Inter-Regular",
+    fontSize: 20,
+    applyStroke: false,
+    pointText: true,
+  };
+  Object.defineProperties(textDocument, {
+    strokeColor: {
+      get() {
+        throw new Error("stroke color is unavailable when stroke is disabled");
+      },
+    },
+    boxTextSize: {
+      get() {
+        throw new Error("box size is unavailable for point text");
+      },
+    },
+    boxTextPos: {
+      get() {
+        throw new Error("box position is unavailable for point text");
+      },
+    },
+  });
+
+  const first = context.normalize(textDocument);
+  const second = context.normalize(textDocument);
+  assert.deepEqual(first, second);
+  assert.equal(first.strokeColor, "[unavailable]");
+  assert.equal(first.boxTextSize, "[unavailable]");
+  assert.equal(first.boxTextPos, "[unavailable]");
+
+  textDocument.fontSize = 21;
+  assert.notDeepEqual(context.normalize(textDocument), first);
+});
+
 test("duplicate capture fingerprint changes when the master comp comment changes", () => {
   const documentValue = { text: "cat", boxTextSize: [100, 20] };
   const harness = captureItemRecordHarness();

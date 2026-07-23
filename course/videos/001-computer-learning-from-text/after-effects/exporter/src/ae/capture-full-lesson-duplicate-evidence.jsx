@@ -265,12 +265,17 @@
             "strokeOverFill", "justification", "leading", "autoLeading",
             "tracking", "baselineShift", "horizontalScale", "verticalScale",
             "tsume", "noBreak", "autoHyphenate", "hangingRoman", "startIndent",
-            "endIndent", "firstLineIndent", "spaceBefore", "spaceAfter", "boxText",
-            "boxTextSize", "boxTextPos", "pointText", "vertices", "inTangents",
+            "endIndent", "firstLineIndent", "spaceBefore", "spaceAfter", "pointText",
+            "boxText", "boxTextSize", "boxTextPos", "vertices", "inTangents",
             "outTangents", "closed"
         ];
         var objectValue;
         var index;
+        var propertyName;
+        var propertyValue;
+        var isTextDocument = false;
+        var isStrokeProperty;
+        var isBoxProperty;
         if (
             value === null ||
             typeof value === "string" ||
@@ -290,10 +295,39 @@
         }
         objectValue = { type: String(value) };
         for (index = 0; index < fields.length; index += 1) {
-            if (value[fields[index]] !== undefined) {
-                objectValue[fields[index]] = normalizePropertyValue(
-                    value[fields[index]]
-                );
+            propertyName = fields[index];
+            isStrokeProperty = propertyName === "strokeColor" ||
+                propertyName === "strokeWidth" ||
+                propertyName === "strokeOverFill";
+            isBoxProperty = propertyName === "boxText" ||
+                propertyName === "boxTextSize" ||
+                propertyName === "boxTextPos";
+            if (
+                isTextDocument &&
+                isStrokeProperty &&
+                objectValue.applyStroke !== true
+            ) {
+                objectValue[propertyName] = "[unavailable]";
+            } else if (
+                isTextDocument &&
+                isBoxProperty &&
+                objectValue.pointText === true
+            ) {
+                objectValue[propertyName] = "[unavailable]";
+            } else {
+                try {
+                    propertyValue = value[propertyName];
+                    if (propertyValue !== undefined) {
+                        objectValue[propertyName] = normalizePropertyValue(
+                            propertyValue
+                        );
+                        if (propertyName === "text") {
+                            isTextDocument = true;
+                        }
+                    }
+                } catch (unavailableTextProperty) {
+                    objectValue[propertyName] = "[unavailable]";
+                }
             }
         }
         return objectValue;
