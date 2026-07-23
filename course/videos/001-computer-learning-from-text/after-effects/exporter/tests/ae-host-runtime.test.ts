@@ -125,7 +125,15 @@ class CompItemMock extends FolderItemMock {
     return this.timelineLayers[index - 1]!;
   }
 }
-class FootageItemMock extends FolderItemMock {}
+class FootageItemMock extends FolderItemMock {
+  pixelAspect = 1.5;
+  mainSource = {
+    isStill: true,
+    hasAlpha: true,
+    alphaMode: "PREMULTIPLIED",
+    invertAlpha: true,
+  };
+}
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -157,6 +165,7 @@ function instrumentImporter(source: string): string {
             addRunAnimator: addRunAnimator,
             applyResolvedFont: applyResolvedFont,
             resolveRunFont: resolveRunFont,
+            configureRasterFootage: configureRasterFootage,
             setLayerGeometry: setLayerGeometry,
             isQueuedPackageFile: isQueuedPackageFile,
             parseJson: function (value) { return JSON.parse(value); }
@@ -178,11 +187,13 @@ function makeImporterHarness(
   const systemCommands: string[] = [];
   const fontsByPostScriptName = new Map<string, Array<{
     postScriptName: string;
+    styleName?: string;
     hasGlyphsFor(value: string): boolean;
     isSubstitute?: boolean;
   }>>();
   const fontGroups: Array<Array<{
     postScriptName: string;
+    styleName?: string;
     hasGlyphsFor(value: string): boolean;
     isSubstitute?: boolean;
   }>> = [];
@@ -359,6 +370,11 @@ function makeImporterHarness(
       RIGHT_JUSTIFY: 2,
       LEFT_JUSTIFY: 3
     },
+    AlphaMode: {
+      IGNORE: "IGNORE",
+      STRAIGHT: "STRAIGHT",
+      PREMULTIPLIED: "PREMULTIPLIED"
+    },
     Video001ExporterCore: {
       scaleRect(rect: { x: number; y: number; width: number; height: number }) {
         return { ...rect };
@@ -424,6 +440,7 @@ function makeImporterHarness(
       addRunAnimator(layer: unknown, run: { start: number; end: number; color: string; fontSize: number }, dominant: { fontSize: number }, scaleY: number): void;
       applyResolvedFont(documentValue: { fontObject: unknown; fauxBold: boolean }, resolved: { fontObject: unknown; fauxBold: boolean }): void;
       resolveRunFont(run: { start: number; end: number; fontFamily: string; fontStyle: string }, node: { id: string; name: string; text: string }, state: { missingFonts: string[]; fallbacks: unknown[]; warnings: string[] }): { fontObject: unknown; postScriptName: string; fauxBold: boolean };
+      configureRasterFootage(footage: FootageItemMock): void;
       setLayerGeometry(layer: unknown, rect: { x: number; y: number; width: number; height: number }, rotation: number, opacity: number, boxTextPos?: number[]): void;
       parseJson(value: string): unknown;
     };
@@ -544,6 +561,17 @@ function makeFullLessonPackage(harness: ReturnType<typeof makeImporterHarness>) 
   }));
   return { timing, value };
 }
+
+test("raster imports receive deterministic still-image interpretation", () => {
+  const harness = makeImporterHarness();
+  const footage = new FootageItemMock("raster.png");
+
+  harness.importer.__test.configureRasterFootage(footage);
+
+  assert.equal(footage.pixelAspect, 1);
+  assert.equal(footage.mainSource.alphaMode, "STRAIGHT");
+  assert.equal(footage.mainSource.invertAlpha, false);
+});
 
 test("retains canonical timing order and seconds metadata for full-lesson assembly", () => {
   const harness = makeImporterHarness();
@@ -809,6 +837,56 @@ test("font resolution rejects an installed font that cannot render the exact run
   }]);
 });
 
+test("font resolution treats compact PostScript spelling as an intended alias", () => {
+  const harness = makeImporterHarness();
+  const jetBrainsMono = {
+    postScriptName: "JetBrainsMono-Medium",
+    styleName: "Medium",
+    hasGlyphsFor() { return true; }
+  };
+  harness.fontsByPostScriptName.set("JetBrainsMono-Medium", [jetBrainsMono]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 4, fontFamily: "JetBrains Mono", fontStyle: "Medium" },
+    { id: "code-label", name: "CODE_Value", text: "0x41" },
+    state
+  );
+
+  assert.equal(result.fontObject, jetBrainsMono);
+  assert.equal(result.postScriptName, "JetBrainsMono-Medium");
+  assert.deepEqual(state.missingFonts, []);
+  assert.deepEqual(state.fallbacks, []);
+  assert.deepEqual(state.warnings, []);
+});
+
+test("font resolution checks every installed font sharing a PostScript name", () => {
+  const harness = makeImporterHarness();
+  const incomplete = {
+    postScriptName: "Sora-SemiBold",
+    styleName: "SemiBold",
+    hasGlyphsFor() { return false; }
+  };
+  const complete = {
+    postScriptName: "Sora-SemiBold",
+    styleName: "SemiBold",
+    hasGlyphsFor(value: string) { return value === "cat"; }
+  };
+  harness.fontsByPostScriptName.set("Sora-SemiBold", [incomplete, complete]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 3, fontFamily: "Sora", fontStyle: "SemiBold" },
+    { id: "title", name: "TXT_Title", text: "cat" },
+    state
+  );
+
+  assert.equal(result.fontObject, complete);
+  assert.equal(result.postScriptName, "Sora-SemiBold");
+  assert.deepEqual(state.missingFonts, []);
+  assert.deepEqual(state.fallbacks, []);
+});
+
 test("font resolution deterministically discovers an installed font for glyphs outside named fallbacks", () => {
   const harness = makeImporterHarness();
   const soraBold = {
@@ -929,6 +1007,32 @@ test("font substitution preserves bold emphasis without bolding ordinary Inter t
   assert.equal(ordinaryInter.postScriptName, "Inter-Regular");
   assert.equal(ordinaryDocument.fontObject, interRegular);
   assert.equal(ordinaryDocument.fauxBold, false);
+});
+
+test("font substitution does not faux-bold an already-bold replacement face", () => {
+  const harness = makeImporterHarness();
+  harness.fontsByPostScriptName.set("Sora-SemiBold", [{
+    postScriptName: "Sora-SemiBold",
+    styleName: "SemiBold",
+    hasGlyphsFor() { return false; }
+  }]);
+  const adobeBold = {
+    postScriptName: "AdobeCleanHanSC-Bold",
+    styleName: "Bold",
+    hasGlyphsFor(value: string) { return value === "Ｃａｔ"; }
+  };
+  harness.fontGroups.push([adobeBold]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 3, fontFamily: "Sora", fontStyle: "SemiBold" },
+    { id: "fullwidth-cat", name: "TXT_FullwidthCat", text: "Ｃａｔ" },
+    state
+  );
+
+  assert.equal(result.postScriptName, "AdobeCleanHanSC-Bold");
+  assert.equal(result.fauxBold, false);
+  assert.deepEqual(state.missingFonts, ["Sora-SemiBold"]);
 });
 
 function mixedTextHostRecorder() {
@@ -1137,6 +1241,60 @@ test("addText keeps a bold fallback dominant while restoring the ordinary Inter 
     font: (range.fontObject as { postScriptName: string }).postScriptName,
     fauxBold: range.fauxBold
   })), [{ start: 5, end: 9, font: "Inter-Regular", fauxBold: false }]);
+  assert.equal(host.state.layerCount, 1);
+  assert.equal(host.state.nativeCount, 1);
+});
+
+test("addText preserves the requested face around unsupported glyphs", () => {
+  const harness = makeImporterHarness();
+  const host = mixedTextHostRecorder();
+  const soraSemiBold = {
+    postScriptName: "Sora-SemiBold",
+    styleName: "SemiBold",
+    hasGlyphsFor(value: string) { return value !== "→"; }
+  };
+  const interRegular = {
+    postScriptName: "Inter-Regular",
+    styleName: "Regular",
+    hasGlyphsFor() { return true; }
+  };
+  harness.fontsByPostScriptName.set("Sora-SemiBold", [soraSemiBold]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [interRegular]);
+
+  harness.importer.__test.addText(host.comp, {
+    id: "mapping-label",
+    name: "DATA_Mapping",
+    x: 10,
+    y: 20,
+    rotation: 0,
+    opacity: 1,
+    text: "A → 65",
+    textBox: { width: 200, height: 40 },
+    paragraph: { align: "LEFT", lineHeightPx: 32, letterSpacingPx: 0 },
+    runs: [
+      { start: 0, end: 6, fontFamily: "Sora", fontStyle: "SemiBold", fontSize: 32, color: "#FFFFFF" }
+    ]
+  }, host.context);
+
+  assert.equal(host.documentValue.fontObject, soraSemiBold);
+  assert.equal(host.documentValue.fauxBold, false);
+  assert.deepEqual(host.ranges.map((range) => ({
+    start: range.start,
+    end: range.end,
+    font: (range.fontObject as { postScriptName: string }).postScriptName,
+    fauxBold: range.fauxBold
+  })), [{ start: 2, end: 3, font: "Inter-Regular", fauxBold: true }]);
+  assert.deepEqual(host.state.missingFonts, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(host.state.fallbacks)), [{
+    type: "font-substitution",
+    nodeId: "mapping-label",
+    nodeName: "DATA_Mapping",
+    property: "font",
+    start: 2,
+    end: 3,
+    requested: "Sora-SemiBold",
+    replacement: "Inter-Regular"
+  }]);
   assert.equal(host.state.layerCount, 1);
   assert.equal(host.state.nativeCount, 1);
 });

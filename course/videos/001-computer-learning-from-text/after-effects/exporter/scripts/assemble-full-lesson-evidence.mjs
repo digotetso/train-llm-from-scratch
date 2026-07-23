@@ -50,6 +50,8 @@ const rawPaths = {
   package: path.join(rawDirectory, "full-lesson-package.video001-ae.json"),
   importReport: path.join(rawDirectory, "full-lesson-import-report.json"),
   aeAudit: path.join(rawDirectory, "full-lesson-ae-audit.json"),
+  duplicateResult: path.join(rawDirectory, "full-lesson-duplicate-result.json"),
+  postResendAudit: path.join(rawDirectory, "full-lesson-post-resend-audit.json"),
   liveSession: path.join(rawDirectory, "full-lesson-live-session.json"),
   bridgeLog: path.join(rawDirectory, "full-lesson-bridge-log.jsonl")
 };
@@ -589,6 +591,210 @@ function validateLiveEvidence({
   }
 }
 
+function validateAeProjectItem(rawItem, expectedIndex, label) {
+  const item = object(rawItem, label);
+  exactKeys(item, [
+    "index",
+    "name",
+    "kind",
+    "parentName",
+    "width",
+    "height",
+    "duration",
+    "frameRate",
+    "layerCount"
+  ], label);
+  if (item.index !== expectedIndex) {
+    throw new Error(label + " index must preserve the After Effects project order");
+  }
+  string(item.name, label + " name");
+  if (!["comp", "footage", "folder", "other"].includes(item.kind)) {
+    throw new Error(label + " kind is invalid");
+  }
+  if (typeof item.parentName !== "string") {
+    throw new Error(label + " parent name must be a string");
+  }
+  for (const field of ["width", "height", "duration", "frameRate", "layerCount"]) {
+    if (item[field] !== null) finiteNumber(item[field], label + " " + field);
+  }
+  if (item.kind === "comp") {
+    if (
+      item.width === null ||
+      item.height === null ||
+      item.duration === null ||
+      item.frameRate === null ||
+      item.layerCount === null
+    ) {
+      throw new Error(label + " comp metrics must be present");
+    }
+  }
+  return item;
+}
+
+function validateAeProjectSnapshot(rawSnapshot, label) {
+  const snapshot = object(rawSnapshot, label);
+  exactKeys(snapshot, [
+    "itemCount",
+    "queueCount",
+    "v002Count",
+    "masterV001Count",
+    "shotV001Count",
+    "items"
+  ], label);
+  for (const field of [
+    "itemCount",
+    "queueCount",
+    "v002Count",
+    "masterV001Count",
+    "shotV001Count"
+  ]) {
+    if (!Number.isSafeInteger(snapshot[field]) || snapshot[field] < 0) {
+      throw new Error(label + " " + field + " must be a nonnegative safe integer");
+    }
+  }
+  const items = array(snapshot.items, label + " items").map((item, index) =>
+    validateAeProjectItem(item, index + 1, label + " item " + String(index + 1))
+  );
+  if (items.length !== snapshot.itemCount) {
+    throw new Error(label + " item count does not match its item inventory");
+  }
+  const masterV001Count = items.filter((item) =>
+    item.name === "VIDEO001_MASTER_v001"
+  ).length;
+  const shotV001Count = items.filter((item) =>
+    /^S001_SH[0-9]{2}_.+_v001$/.test(item.name)
+  ).length;
+  const v002Count = items.filter((item) =>
+    /_v002$/.test(item.name)
+  ).length;
+  if (
+    snapshot.masterV001Count !== masterV001Count ||
+    snapshot.shotV001Count !== shotV001Count ||
+    snapshot.v002Count !== v002Count
+  ) {
+    throw new Error(label + " versioned item counts do not match its item inventory");
+  }
+  return snapshot;
+}
+
+function validateAeDuplicateEvidence({
+  duplicateResult,
+  postResendAudit,
+  liveSession,
+  expectedHash
+}) {
+  const figma = object(liveSession.figma, "Live Figma evidence");
+  const unchangedResend = object(figma.unchangedResend, "Live Figma unchanged resend");
+  const duplicateRequestId = string(
+    unchangedResend.requestId,
+    "Live Figma unchanged resend request ID"
+  );
+  const afterEffects = object(liveSession.afterEffects, "Live After Effects evidence");
+  const aggregateDuplicate = object(
+    afterEffects.duplicate,
+    "Live After Effects duplicate resend"
+  );
+
+  exactKeys(duplicateResult, [
+    "evidenceSchemaVersion",
+    "generator",
+    "capturedAt",
+    "sessionId",
+    "requestId",
+    "contentHash",
+    "projectPath",
+    "importResult",
+    "before",
+    "after"
+  ], "AE duplicate-result evidence");
+  if (
+    duplicateResult.evidenceSchemaVersion !== 1 ||
+    typeof duplicateResult.capturedAt !== "string" ||
+    !Number.isFinite(Date.parse(duplicateResult.capturedAt)) ||
+    duplicateResult.sessionId !== liveSession.sessionId ||
+    duplicateResult.requestId !== duplicateRequestId ||
+    duplicateResult.contentHash !== expectedHash ||
+    duplicateResult.projectPath !== "/private/tmp/Video001-Exporter-Full-Lesson.aep"
+  ) {
+    throw new Error("AE duplicate-result evidence has the wrong session, request identity, hash, path, or schema");
+  }
+  string(duplicateResult.generator, "AE duplicate-result generator");
+  const importResult = object(
+    duplicateResult.importResult,
+    "AE duplicate-result import result"
+  );
+  exactKeys(importResult, ["status", "report"], "AE duplicate-result import result");
+  if (importResult.status !== "DUPLICATE_CONTENT" || importResult.report !== null) {
+    throw new Error("AE duplicate-result evidence must be a DUPLICATE_CONTENT no-op");
+  }
+  const before = validateAeProjectSnapshot(
+    duplicateResult.before,
+    "AE duplicate-result before snapshot"
+  );
+  const after = validateAeProjectSnapshot(
+    duplicateResult.after,
+    "AE duplicate-result after snapshot"
+  );
+  if (
+    before.queueCount !== 1 ||
+    after.queueCount !== 0 ||
+    canonicalJson(before.items) !== canonicalJson(after.items) ||
+    before.itemCount !== after.itemCount ||
+    before.v002Count !== 0 ||
+    after.v002Count !== 0 ||
+    after.masterV001Count !== 1 ||
+    after.shotV001Count !== 48
+  ) {
+    throw new Error("AE duplicate-result snapshots do not prove an unchanged queue no-op");
+  }
+
+  exactKeys(postResendAudit, [
+    "evidenceSchemaVersion",
+    "generator",
+    "capturedAt",
+    "sessionId",
+    "requestId",
+    "contentHash",
+    "projectPath",
+    "snapshot"
+  ], "AE post-resend audit");
+  if (
+    postResendAudit.evidenceSchemaVersion !== 1 ||
+    typeof postResendAudit.capturedAt !== "string" ||
+    !Number.isFinite(Date.parse(postResendAudit.capturedAt)) ||
+    postResendAudit.sessionId !== liveSession.sessionId ||
+    postResendAudit.requestId !== duplicateRequestId ||
+    postResendAudit.contentHash !== expectedHash ||
+    postResendAudit.projectPath !== "/private/tmp/Video001-Exporter-Full-Lesson.aep"
+  ) {
+    throw new Error("AE post-resend audit has the wrong session, request identity, hash, path, or schema");
+  }
+  string(postResendAudit.generator, "AE post-resend audit generator");
+  const postSnapshot = validateAeProjectSnapshot(
+    postResendAudit.snapshot,
+    "AE post-resend snapshot"
+  );
+  if (canonicalJson(postSnapshot) !== canonicalJson(after)) {
+    throw new Error("AE post-resend snapshot differs from the duplicate-result after snapshot");
+  }
+
+  if (
+    aggregateDuplicate.status !== importResult.status ||
+    aggregateDuplicate.requestId !== duplicateRequestId ||
+    aggregateDuplicate.contentHash !== expectedHash ||
+    aggregateDuplicate.itemCountBefore !== before.itemCount ||
+    aggregateDuplicate.itemCountAfter !== after.itemCount ||
+    aggregateDuplicate.queueCountBefore !== before.queueCount ||
+    aggregateDuplicate.queueCountAfter !== after.queueCount ||
+    aggregateDuplicate.v002Before !== before.v002Count ||
+    aggregateDuplicate.v002After !== after.v002Count ||
+    aggregateDuplicate.masterV001Count !== after.masterV001Count ||
+    aggregateDuplicate.shotV001Count !== after.shotV001Count
+  ) {
+    throw new Error("Live aggregate duplicate fields do not match AE-authored duplicate evidence");
+  }
+}
+
 function hierarchyDurationsExact(hierarchyValue, duration, fps, label) {
   const hierarchy = object(hierarchyValue, label);
   if (hierarchy.warning !== undefined) {
@@ -613,6 +819,14 @@ function derive() {
   const packageValue = object(readJson(rawPaths.package, "full-lesson package"), "Full-lesson package");
   const importReport = object(readJson(rawPaths.importReport, "full-lesson import report"), "Import report");
   const aeAudit = object(readJson(rawPaths.aeAudit, "full-lesson AE audit"), "AE audit");
+  const duplicateResult = object(
+    readJson(rawPaths.duplicateResult, "full-lesson AE duplicate result"),
+    "AE duplicate-result evidence"
+  );
+  const postResendAudit = object(
+    readJson(rawPaths.postResendAudit, "full-lesson AE post-resend audit"),
+    "AE post-resend audit"
+  );
   const liveSession = object(readJson(rawPaths.liveSession, "full-lesson live session"), "Live session");
   const bridgeEvents = readEvidenceFile(
     rawPaths.bridgeLog,
@@ -966,11 +1180,19 @@ function derive() {
 
   requireTiedHash(liveSession, computedHash, "Live session");
   requireTiedHash(bridgeEvents, computedHash, "Bridge log");
+  requireTiedHash(duplicateResult, computedHash, "AE duplicate-result evidence");
+  requireTiedHash(postResendAudit, computedHash, "AE post-resend audit");
   validateLiveEvidence({
     liveSession,
     bridgeEvents,
     expectedHash: computedHash,
     importedMasterName
+  });
+  validateAeDuplicateEvidence({
+    duplicateResult,
+    postResendAudit,
+    liveSession,
+    expectedHash: computedHash
   });
 
   const derivedAudit = {
@@ -980,6 +1202,8 @@ function derive() {
     packageSha256: sha256File(rawPaths.package),
     importReportSha256: sha256File(rawPaths.importReport),
     aeAuditSha256: sha256File(rawPaths.aeAudit),
+    duplicateResultSha256: sha256File(rawPaths.duplicateResult),
+    postResendAuditSha256: sha256File(rawPaths.postResendAudit),
     source: packageValue.source,
     target: packageValue.target,
     itemCountBefore: aeAudit.itemCountBefore,
@@ -1014,6 +1238,8 @@ const manifestRelativePaths = [
   "evidence/full-lesson/raw/full-lesson-package.video001-ae.json",
   "evidence/full-lesson/raw/full-lesson-import-report.json",
   "evidence/full-lesson/raw/full-lesson-ae-audit.json",
+  "evidence/full-lesson/raw/full-lesson-duplicate-result.json",
+  "evidence/full-lesson/raw/full-lesson-post-resend-audit.json",
   "evidence/full-lesson/raw/full-lesson-live-session.json",
   "evidence/full-lesson/raw/full-lesson-bridge-log.jsonl",
   "evidence/full-lesson/audit.json",

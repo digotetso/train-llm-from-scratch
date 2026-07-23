@@ -671,15 +671,41 @@ var Video001ExporterImporter = (function (core) {
         return values;
     }
 
-    function findFontByPostScriptName(postScriptName) {
+    function findFontByPostScriptName(postScriptName, runText) {
         var matches;
+        var index;
         if (!app.fonts || !app.fonts.getFontsByPostScriptName) {
             throw new Error("After Effects font lookup is unavailable");
         }
         try {
             matches = app.fonts.getFontsByPostScriptName(postScriptName);
-            if (matches && matches.length > 0) {
-                return matches[0];
+            if (matches) {
+                for (index = 0; index < matches.length; index += 1) {
+                    if (!matches[index].isSubstitute && fontHasGlyphs(matches[index], runText)) {
+                        return matches[index];
+                    }
+                }
+            }
+        } catch (fontLookupError) {
+            return null;
+        }
+        return null;
+    }
+
+    function findInstalledFontFace(postScriptName) {
+        var matches;
+        var index;
+        if (!app.fonts || !app.fonts.getFontsByPostScriptName) {
+            throw new Error("After Effects font lookup is unavailable");
+        }
+        try {
+            matches = app.fonts.getFontsByPostScriptName(postScriptName);
+            if (matches) {
+                for (index = 0; index < matches.length; index += 1) {
+                    if (!matches[index].isSubstitute) {
+                        return matches[index];
+                    }
+                }
             }
         } catch (fontLookupError) {
             return null;
@@ -746,17 +772,26 @@ var Video001ExporterImporter = (function (core) {
         return null;
     }
 
+    function fontObjectHasBoldStyle(fontObject) {
+        var styleIdentity = String(fontObject.styleName || "") + " " +
+            String(fontObject.postScriptName || "");
+        return new RegExp("(?:bold|black|heavy|demi)", "i").test(styleIdentity);
+    }
+
     function resolveRunFont(run, node, state) {
         var candidates = fontCandidates(run);
         var requested = candidates[0];
         var runText = node.text.substring(run.start, run.end).replace(new RegExp("[\\r\\n]", "g"), "");
         var fontObject = null;
         var replacement = "";
+        var intendedAlias = false;
+        var isSubstitution;
         var index;
         for (index = 0; index < candidates.length; index += 1) {
-            fontObject = findFontByPostScriptName(candidates[index]);
-            if (fontObject !== null && fontHasGlyphs(fontObject, runText)) {
+            fontObject = findFontByPostScriptName(candidates[index], runText);
+            if (fontObject !== null) {
                 replacement = fontObject.postScriptName;
+                intendedAlias = index < candidates.length - 1;
                 break;
             }
             fontObject = null;
@@ -772,7 +807,8 @@ var Video001ExporterImporter = (function (core) {
                 "No installed font can render " + requested + " text on " + node.name
             );
         }
-        if (replacement !== requested) {
+        isSubstitution = !intendedAlias;
+        if (isSubstitution) {
             appendUnique(state.missingFonts, requested);
             appendFallback(state, {
                 type: "font-substitution",
@@ -790,14 +826,170 @@ var Video001ExporterImporter = (function (core) {
             fontObject: fontObject,
             postScriptName: replacement,
             requested: requested,
-            fauxBold: replacement !== requested &&
-                new RegExp("(?:bold|black|heavy)", "i").test(String(run.fontStyle || ""))
+            fauxBold: isSubstitution &&
+                new RegExp("(?:bold|black|heavy|demi)", "i").test(String(run.fontStyle || "")) &&
+                !fontObjectHasBoldStyle(fontObject)
         };
     }
 
     function applyResolvedFont(documentValue, resolved) {
         documentValue.fontObject = resolved.fontObject;
         documentValue.fauxBold = resolved.fauxBold;
+    }
+
+    function nextTextIndex(text, index, end) {
+        var first = text.charCodeAt(index);
+        var second;
+        if (first >= 55296 && first <= 56319 && index + 1 < end) {
+            second = text.charCodeAt(index + 1);
+            if (second >= 56320 && second <= 57343) {
+                return index + 2;
+            }
+        }
+        return index + 1;
+    }
+
+    function sameResolvedFont(left, right) {
+        return (
+            left.postScriptName === right.postScriptName &&
+            left.fauxBold === right.fauxBold
+        );
+    }
+
+    function copyRunRange(run, start, end) {
+        return {
+            start: start,
+            end: end,
+            fontFamily: run.fontFamily,
+            fontStyle: run.fontStyle,
+            fontSize: run.fontSize,
+            color: run.color
+        };
+    }
+
+    function appendResolvedSegment(result, run, resolved, start, end) {
+        var lastIndex = result.runs.length - 1;
+        if (
+            lastIndex >= 0 &&
+            result.runs[lastIndex].end === start &&
+            sameResolvedFont(result.resolvedRuns[lastIndex], resolved)
+        ) {
+            result.runs[lastIndex].end = end;
+            return;
+        }
+        result.runs[result.runs.length] = copyRunRange(run, start, end);
+        result.resolvedRuns[result.resolvedRuns.length] = resolved;
+    }
+
+    function resolveRunSegments(run, node, state) {
+        var candidates = fontCandidates(run);
+        var requested = candidates[0];
+        var intendedFont = null;
+        var intendedPostScriptName = "";
+        var intendedResolved;
+        var fallbackFont;
+        var fallbackResolved;
+        var result = { runs: [], resolvedRuns: [] };
+        var cursor;
+        var next;
+        var glyph;
+        var index;
+        var segment;
+
+        for (index = 0; index < candidates.length - 1; index += 1) {
+            intendedFont = findInstalledFontFace(candidates[index]);
+            if (intendedFont !== null) {
+                intendedPostScriptName = intendedFont.postScriptName;
+                break;
+            }
+        }
+        if (intendedFont === null) {
+            result.runs[0] = copyRunRange(run, run.start, run.end);
+            result.resolvedRuns[0] = resolveRunFont(run, node, state);
+            return result;
+        }
+
+        intendedResolved = {
+            fontObject: intendedFont,
+            postScriptName: intendedPostScriptName,
+            requested: requested,
+            fauxBold: false
+        };
+        cursor = run.start;
+        while (cursor < run.end) {
+            next = nextTextIndex(node.text, cursor, run.end);
+            glyph = node.text.substring(cursor, next);
+            if (
+                glyph === "\r" ||
+                glyph === "\n" ||
+                fontHasGlyphs(intendedFont, glyph)
+            ) {
+                appendResolvedSegment(
+                    result,
+                    run,
+                    intendedResolved,
+                    cursor,
+                    next
+                );
+            } else {
+                fallbackFont = findFontByPostScriptName(
+                    FALLBACK_FONT,
+                    glyph
+                );
+                if (fallbackFont === null) {
+                    fallbackFont = findInstalledGlyphFallback(glyph);
+                }
+                if (fallbackFont === null) {
+                    throw new Error(
+                        "No installed font can render " + requested +
+                        " text on " + node.name
+                    );
+                }
+                fallbackResolved = {
+                    fontObject: fallbackFont,
+                    postScriptName: fallbackFont.postScriptName,
+                    requested: requested,
+                    fauxBold:
+                        new RegExp("(?:bold|black|heavy|demi)", "i").test(
+                            String(run.fontStyle || "")
+                        ) &&
+                        !fontObjectHasBoldStyle(fallbackFont)
+                };
+                appendResolvedSegment(
+                    result,
+                    run,
+                    fallbackResolved,
+                    cursor,
+                    next
+                );
+            }
+            cursor = next;
+        }
+        for (index = 0; index < result.runs.length; index += 1) {
+            if (
+                result.resolvedRuns[index].postScriptName !==
+                intendedPostScriptName
+            ) {
+                segment = result.runs[index];
+                appendFallback(state, {
+                    type: "font-substitution",
+                    nodeId: node.id,
+                    nodeName: node.name,
+                    property: "font",
+                    start: segment.start,
+                    end: segment.end,
+                    requested: requested,
+                    replacement:
+                        result.resolvedRuns[index].postScriptName
+                });
+                state.warnings[state.warnings.length] =
+                    "Substituted unsupported " + requested +
+                    " glyphs with " +
+                    result.resolvedRuns[index].postScriptName +
+                    " on " + node.name;
+            }
+        }
+        return result;
     }
 
     function dominantRunIndex(runs) {
@@ -898,9 +1090,11 @@ var Video001ExporterImporter = (function (core) {
         var scaleY = context.target.height / context.frame.height;
         var runs = node.runs;
         var syntheticRun;
+        var expandedRuns = [];
         var dominantIndex;
         var dominantRun;
         var resolvedRuns = [];
+        var resolvedSegments;
         var dominantResolved;
         var layer;
         var source;
@@ -919,11 +1113,20 @@ var Video001ExporterImporter = (function (core) {
             };
             runs = [syntheticRun];
         }
+        for (index = 0; index < runs.length; index += 1) {
+            resolvedSegments = resolveRunSegments(
+                runs[index],
+                node,
+                context.state
+            );
+            expandedRuns = expandedRuns.concat(resolvedSegments.runs);
+            resolvedRuns = resolvedRuns.concat(
+                resolvedSegments.resolvedRuns
+            );
+        }
+        runs = expandedRuns;
         dominantIndex = dominantRunIndex(runs);
         dominantRun = runs[dominantIndex];
-        for (index = 0; index < runs.length; index += 1) {
-            resolvedRuns[index] = resolveRunFont(runs[index], node, context.state);
-        }
         dominantResolved = resolvedRuns[dominantIndex];
 
         layer = comp.layers.addBoxText([textBox.width, textBox.height]);
@@ -935,11 +1138,38 @@ var Video001ExporterImporter = (function (core) {
         documentValue.resetParagraphStyle();
         documentValue.text = node.text;
         applyResolvedFont(documentValue, dominantResolved);
+        documentValue.fauxItalic = false;
+        if (
+            typeof FontCapsOption !== "undefined" &&
+            documentValue.fontCapsOption !== undefined
+        ) {
+            documentValue.fontCapsOption =
+                FontCapsOption.FONT_NORMAL_CAPS;
+        }
+        if (
+            typeof FontBaselineOption !== "undefined" &&
+            documentValue.fontBaselineOption !== undefined
+        ) {
+            documentValue.fontBaselineOption =
+                FontBaselineOption.FONT_NORMAL_BASELINE;
+        }
         documentValue.fontSize = dominantRun.fontSize * scaleY;
         documentValue.applyFill = true;
         documentValue.fillColor = hexToRgb(dominantRun.color);
         documentValue.applyStroke = false;
+        documentValue.baselineShift = 0;
+        documentValue.horizontalScale = 100;
+        documentValue.verticalScale = 100;
+        documentValue.tsume = 0;
+        documentValue.noBreak = false;
         documentValue.autoLeading = false;
+        documentValue.autoHyphenate = false;
+        documentValue.hangingRoman = false;
+        documentValue.startIndent = 0;
+        documentValue.endIndent = 0;
+        documentValue.firstLineIndent = 0;
+        documentValue.spaceBefore = 0;
+        documentValue.spaceAfter = 0;
         documentValue.leading = node.paragraph.lineHeightPx * scaleY;
         documentValue.tracking = dominantRun.fontSize === 0 ? 0 : node.paragraph.letterSpacingPx * 1000 / dominantRun.fontSize;
         if (node.paragraph.align === "CENTER") {
@@ -986,6 +1216,9 @@ var Video001ExporterImporter = (function (core) {
             stroke.property("ADBE Vector Stroke Color").setValue(hexToRgb(node.stroke));
             stroke.property("ADBE Vector Stroke Width").setValue(node.strokeWidth * scale);
             stroke.property("ADBE Vector Stroke Opacity").setValue(100);
+            stroke.property("ADBE Vector Stroke Line Cap").setValue(1);
+            stroke.property("ADBE Vector Stroke Line Join").setValue(1);
+            stroke.property("ADBE Vector Stroke Miter Limit").setValue(4);
         }
     }
 
@@ -1014,6 +1247,38 @@ var Video001ExporterImporter = (function (core) {
         return layer;
     }
 
+    function configureRasterFootage(footage) {
+        var source = footage.mainSource;
+        if (
+            source === null ||
+            source === undefined ||
+            source.isStill !== true
+        ) {
+            throw new Error(
+                "Raster fallback must import as deterministic still footage"
+            );
+        }
+        footage.pixelAspect = 1;
+        if (source.hasAlpha === true) {
+            source.alphaMode = AlphaMode.STRAIGHT;
+            source.invertAlpha = false;
+        }
+        if (
+            footage.pixelAspect !== 1 ||
+            (
+                source.hasAlpha === true &&
+                (
+                    source.alphaMode !== AlphaMode.STRAIGHT ||
+                    source.invertAlpha !== false
+                )
+            )
+        ) {
+            throw new Error(
+                "Cannot apply deterministic raster interpretation"
+            );
+        }
+    }
+
     function addRaster(comp, node, context) {
         var asset = context.packageObject.assetByHash[node.assetHash];
         var options = new ImportOptions(asset.file);
@@ -1021,6 +1286,7 @@ var Video001ExporterImporter = (function (core) {
         var rect = core.scaleRect(node, context.frame.width, context.frame.height, context.target.width, context.target.height);
         var layer;
         var transform;
+        configureRasterFootage(footage);
         footage.parentFolder = context.versionFolder;
         layer = comp.layers.add(footage);
         layer.name = core.sanitizeAeName(node.name);

@@ -1546,16 +1546,94 @@ function writeSyntheticFullLessonEvidence(root: string) {
     warnings: audit.warnings,
     elapsedMs: 1
   };
+  const projectItems = [
+    {
+      index: 1,
+      name: "VIDEO001_MASTER_v001",
+      kind: "comp",
+      parentName: "01_Exporter_Imports",
+      width: 1920,
+      height: 1080,
+      duration: 840,
+      frameRate: 30,
+      layerCount: 48
+    },
+    ...timing.shots.map((shot, index) => ({
+      index: index + 2,
+      name: shot.name + "_v001",
+      kind: "comp",
+      parentName: "01_Exporter_Imports",
+      width: 1920,
+      height: 1080,
+      duration: shot.duration,
+      frameRate: 30,
+      layerCount: 1
+    })),
+    ...Array.from({ length: 226 }, (_, index) => ({
+      index: index + 50,
+      name: "Synthetic supporting item " + String(index + 1),
+      kind: "folder",
+      parentName: "",
+      width: null,
+      height: null,
+      duration: null,
+      frameRate: null,
+      layerCount: null
+    }))
+  ];
+  const duplicateResult = {
+    evidenceSchemaVersion: 1,
+    generator: "After Effects synthetic test fixture",
+    capturedAt: "2026-07-23T00:01:01.000Z",
+    sessionId,
+    requestId: duplicateRequestId,
+    contentHash: hash,
+    projectPath: "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+    importResult: {
+      status: "DUPLICATE_CONTENT",
+      report: null
+    },
+    before: {
+      itemCount: 275,
+      queueCount: 1,
+      v002Count: 0,
+      masterV001Count: 1,
+      shotV001Count: 48,
+      items: projectItems
+    },
+    after: {
+      itemCount: 275,
+      queueCount: 0,
+      v002Count: 0,
+      masterV001Count: 1,
+      shotV001Count: 48,
+      items: projectItems
+    }
+  };
+  const postResendAudit = {
+    evidenceSchemaVersion: 1,
+    generator: "After Effects synthetic test fixture",
+    capturedAt: "2026-07-23T00:01:02.000Z",
+    sessionId,
+    requestId: duplicateRequestId,
+    contentHash: hash,
+    projectPath: "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+    snapshot: duplicateResult.after
+  };
   const paths = {
     package: join(rawDir, "full-lesson-package.video001-ae.json"),
     importReport: join(rawDir, "full-lesson-import-report.json"),
     audit: join(rawDir, "full-lesson-ae-audit.json"),
     session: join(rawDir, "full-lesson-live-session.json"),
-    bridge: join(rawDir, "full-lesson-bridge-log.jsonl")
+    bridge: join(rawDir, "full-lesson-bridge-log.jsonl"),
+    duplicateResult: join(rawDir, "full-lesson-duplicate-result.json"),
+    postResendAudit: join(rawDir, "full-lesson-post-resend-audit.json")
   };
   writeFileSync(paths.package, JSON.stringify(packageValue, null, 2) + "\n", "utf8");
   writeFileSync(paths.importReport, JSON.stringify(importReport, null, 2) + "\n", "utf8");
   writeFileSync(paths.audit, JSON.stringify(audit, null, 2) + "\n", "utf8");
+  writeFileSync(paths.duplicateResult, JSON.stringify(duplicateResult, null, 2) + "\n", "utf8");
+  writeFileSync(paths.postResendAudit, JSON.stringify(postResendAudit, null, 2) + "\n", "utf8");
   writeFileSync(paths.session, JSON.stringify({
     fixture: "synthetic-test-only",
     sessionId,
@@ -1940,6 +2018,19 @@ for (const [label, mutate, expected] of [
     value.afterEffects.duplicate.itemCountAfter += 1;
     writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /duplicate|item count|unchanged/i],
+  ["missing AE-authored duplicate-result evidence", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    rmSync(fixture.paths.duplicateResult);
+  }, /duplicate.*result|evidence|ENOENT/i],
+  ["an AE-authored duplicate result with the wrong request identity", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.duplicateResult, "utf8"));
+    value.requestId = "33333333-3333-4333-8333-333333333333";
+    writeFileSync(fixture.paths.duplicateResult, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /duplicate|request|identity/i],
+  ["a post-resend AE snapshot that differs from the duplicate result", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.postResendAudit, "utf8"));
+    value.snapshot.items[0].name = "VIDEO001_MASTER_v002";
+    writeFileSync(fixture.paths.postResendAudit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /post-resend|snapshot|duplicate|unchanged/i],
   ["a non-disposable project path", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
     value.afterEffects.projectPath = "/private/tmp/Some-Other-Project.aep";

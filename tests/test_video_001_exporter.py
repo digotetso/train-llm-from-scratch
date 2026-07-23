@@ -17,6 +17,9 @@ IMPORTER_PATH = AE_SOURCE_DIR / "importer.jsxinc"
 PANEL_PATH = AE_SOURCE_DIR / "panel.jsx"
 AUDIT_PATH = AE_SOURCE_DIR / "audit-export.jsx"
 FULL_LESSON_AUDIT_SOURCE_PATH = AE_SOURCE_DIR / "audit-full-lesson.jsx"
+DUPLICATE_EVIDENCE_CAPTURE_PATH = (
+    AE_SOURCE_DIR / "capture-full-lesson-duplicate-evidence.jsx"
+)
 HOST_RUNTIME_TEST_PATH = EXPORTER_DIR / "tests/ae-host-runtime.test.ts"
 SHOT_32_AUDIT_PATH = EXPORTER_DIR / "evidence/shot-32-audit.json"
 SHOT_32_COMPARISON_PATH = EXPORTER_DIR / "evidence/shot-32-comparison.json"
@@ -31,6 +34,13 @@ RELEASE_TEST_PATH = EXPORTER_DIR / "tests/release.test.ts"
 RELEASE_BUILD_PATH = EXPORTER_DIR / "scripts/build-release.mjs"
 RELEASE_VERIFY_PATH = EXPORTER_DIR / "scripts/verify-release.mjs"
 README_PATH = EXPORTER_DIR / "README.md"
+ANIMATION_ROOT = EXPORTER_DIR.parent
+ANIMATE_FULL_LESSON_PATH = ANIMATION_ROOT / "scripts/animate-full-lesson.jsx"
+AUDIT_ANIMATED_LESSON_PATH = ANIMATION_ROOT / "scripts/audit-animated-full-lesson.jsx"
+MOTION_PROVENANCE_PATH = (
+    ANIMATION_ROOT / "scripts/lib/video001-motion-provenance.jsxinc"
+)
+MOTION_SPEC_PATH = ANIMATION_ROOT / "docs/video-001-motion-spec.md"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -295,10 +305,92 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
         "warnings": audit["warnings"],
         "elapsedMs": 1,
     }
+    project_items = [
+        {
+            "index": 1,
+            "name": "VIDEO001_MASTER_v001",
+            "kind": "comp",
+            "parentName": "01_Exporter_Imports",
+            "width": 1920,
+            "height": 1080,
+            "duration": 840,
+            "frameRate": 30,
+            "layerCount": 48,
+        },
+        *[
+            {
+                "index": index + 2,
+                "name": f'{shot["name"]}_v001',
+                "kind": "comp",
+                "parentName": "01_Exporter_Imports",
+                "width": 1920,
+                "height": 1080,
+                "duration": shot["duration"],
+                "frameRate": 30,
+                "layerCount": 1,
+            }
+            for index, shot in enumerate(timing["shots"])
+        ],
+        *[
+            {
+                "index": index + 50,
+                "name": f"Synthetic supporting item {index + 1}",
+                "kind": "folder",
+                "parentName": "",
+                "width": None,
+                "height": None,
+                "duration": None,
+                "frameRate": None,
+                "layerCount": None,
+            }
+            for index in range(226)
+        ],
+    ]
+    duplicate_result = {
+        "evidenceSchemaVersion": 1,
+        "generator": "After Effects synthetic test fixture",
+        "capturedAt": "2026-07-23T00:01:01.000Z",
+        "sessionId": session_id,
+        "requestId": duplicate_request_id,
+        "contentHash": content_hash,
+        "projectPath": "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+        "importResult": {
+            "status": "DUPLICATE_CONTENT",
+            "report": None,
+        },
+        "before": {
+            "itemCount": 275,
+            "queueCount": 1,
+            "v002Count": 0,
+            "masterV001Count": 1,
+            "shotV001Count": 48,
+            "items": project_items,
+        },
+        "after": {
+            "itemCount": 275,
+            "queueCount": 0,
+            "v002Count": 0,
+            "masterV001Count": 1,
+            "shotV001Count": 48,
+            "items": project_items,
+        },
+    }
+    post_resend_audit = {
+        "evidenceSchemaVersion": 1,
+        "generator": "After Effects synthetic test fixture",
+        "capturedAt": "2026-07-23T00:01:02.000Z",
+        "sessionId": session_id,
+        "requestId": duplicate_request_id,
+        "contentHash": content_hash,
+        "projectPath": "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+        "snapshot": duplicate_result["after"],
+    }
     files = {
         "full-lesson-package.video001-ae.json": package,
         "full-lesson-import-report.json": import_report,
         "full-lesson-ae-audit.json": audit,
+        "full-lesson-duplicate-result.json": duplicate_result,
+        "full-lesson-post-resend-audit.json": post_resend_audit,
         "full-lesson-live-session.json": {
             "fixture": "synthetic-test-only",
             "status": "COMPLETE",
@@ -466,6 +558,32 @@ def test_full_lesson_evidence_verifier_rejects_falsified_master_out_point(tmp_pa
     assert "deterministic assembler output" in (
         falsified.stdout + falsified.stderr
     )
+
+
+def test_full_lesson_evidence_requires_ae_authored_duplicate_proof(tmp_path):
+    synthetic_root = tmp_path / "synthetic-source"
+    write_synthetic_full_lesson_evidence_tree(synthetic_root)
+    duplicate_result = (
+        synthetic_root
+        / "evidence/full-lesson/raw/full-lesson-duplicate-result.json"
+    )
+    duplicate_result.unlink()
+
+    rejected = subprocess.run(
+        [
+            "node",
+            str(FULL_LESSON_ASSEMBLER_PATH),
+            "--write",
+            "--root",
+            str(synthetic_root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert rejected.returncode != 0
+    assert "duplicate" in (rejected.stdout + rejected.stderr).lower()
 
 
 def test_full_lesson_evidence_rejects_raw_symlink_escape(tmp_path):
@@ -1220,6 +1338,162 @@ def test_full_lesson_master_is_canonical_transactional_and_auditable():
         "records timing only for precomp layers",
     ]:
         assert behavior in harness
+
+
+def test_live_duplicate_evidence_capture_is_guarded_and_ae_authored():
+    source = DUPLICATE_EVIDENCE_CAPTURE_PATH.read_text(encoding="utf-8")
+
+    for required in [
+        "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+        "/private/tmp/video001-full-lesson-duplicate-witness.json",
+        "Video001ExporterImporter.importPackageFile",
+        'result.status !== "DUPLICATE_CONTENT"',
+        "before.itemCount !== after.itemCount",
+        "!sameJson(before.items, after.items)",
+        "full-lesson-duplicate-result.json",
+        "full-lesson-post-resend-audit.json",
+        'generator: "After Effects " + String(app.version)',
+        "file.alias === true",
+        "file.parent.fsName !== rawDirectory.fsName",
+        "Raw evidence ancestor chain",
+        "cursor.fsName !== exporterRoot.fsName",
+        "temporaryEvidenceFile",
+        ".rename(",
+    ]:
+        assert required in source
+    for prohibited in [
+        "app.project.items.add",
+        "app.project.save",
+        "app.project.close",
+        "allowDuplicate: true",
+    ]:
+        assert prohibited not in source
+
+
+def test_animated_lesson_delivery_is_guarded_layered_and_auditable():
+    assert MOTION_SPEC_PATH.is_file()
+    assert ANIMATE_FULL_LESSON_PATH.is_file()
+    assert AUDIT_ANIMATED_LESSON_PATH.is_file()
+    assert MOTION_PROVENANCE_PATH.is_file()
+
+    animation = ANIMATE_FULL_LESSON_PATH.read_text(encoding="utf-8")
+    audit = AUDIT_ANIMATED_LESSON_PATH.read_text(encoding="utf-8")
+    provenance = MOTION_PROVENANCE_PATH.read_text(encoding="utf-8")
+    motion_spec = MOTION_SPEC_PATH.read_text(encoding="utf-8")
+
+    for required in [
+        "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+        "VIDEO001_MASTER_v001",
+        "VIDEO001_ANIMATED_MASTER_v001",
+        "_ANIM_v001",
+        "transitionFrames: 12",
+        "staggerSeconds: 0.06",
+        "maxTravelPx: 24",
+        "entryScalePercent: 96",
+        "maxOvershootPercent: 102",
+        "duplicate()",
+        "setValueAtTime",
+        "KeyframeEase",
+        "app.beginUndoGroup",
+        "app.endUndoGroup",
+        "video-001-figma-exported-source-import.aep",
+        "video-001-figma-exported-animated.aep",
+        "property.propertyValueType === PropertyValueType.TwoD",
+        "property.propertyValueType === PropertyValueType.ThreeD",
+        "rollbackBuild",
+        "projectRestored",
+        "restoreRelinkedAssets",
+        "writeJsonAtomically",
+        "expectedOutputRoot",
+        "assertSafeOutputAncestors",
+        "trustedPackageSha256",
+        "sourceVisualSha256",
+        "assertCompMatchesFrame",
+    ]:
+        assert required in animation
+    assert animation.index("app.project.save(animatedAep)") < animation.index(
+        "writeJsonAtomically(reportFile"
+    )
+    source_save = animation.index("app.project.save(sourceAep)")
+    source_track = animation.index("] = sourceAep;")
+    source_failure = animation.index(
+        'throw new Error("Source-import AEP was not saved completely")'
+    )
+    assert source_track < source_save < source_failure
+    animated_save = animation.index("app.project.save(animatedAep)")
+    animated_track = animation.index("] = animatedAep;")
+    animated_failure = animation.index(
+        'throw new Error("Animated AEP was not saved completely")'
+    )
+    assert animated_track < animated_save < animated_failure
+    assert "finally" in animation[animation.index("function animateShot"):animation.index(
+        "function buildAnimatedMaster"
+    )]
+    for prohibited in [
+        "VIDEO001_MASTER_v001.remove",
+        "app.project.close",
+        "CloseOptions.DO_NOT_SAVE_CHANGES",
+        "writeUtf8(reportFile",
+    ]:
+        assert prohibited not in animation
+    for required in [
+        "48",
+        "840",
+        "25200",
+        "VIDEO001_ANIMATED_MASTER_v001",
+        "projectStateUnchanged",
+        "maxTravelPx",
+        "maxOvershootPercent",
+        "sourceMasterUnchanged",
+        "canonicalJson(property.keyValue(1))",
+        "canonicalJson(entry.scale.start)",
+        "canonicalJson(property.keyValue(2))",
+        "canonicalJson(entry.scale.overshoot)",
+        "entry.scale.overshootTime",
+        "discoverExpectedRevealLayers",
+        "selectExpectedHero",
+        "assertExactAnimatedLayerCoverage",
+        "assertNoUnexpectedAnimation",
+        "keyInInterpolationType",
+        "keyOutInterpolationType",
+        "keyInTemporalEase",
+        "keyOutTemporalEase",
+        "contentHashFromMaster",
+        "assertSafeOutputAncestors",
+        "trustedPackageSha256",
+        "sourceVisualSha256",
+        "assertCompMatchesFrame",
+    ]:
+        assert required in audit
+    for prohibited in [
+        ".setValue(",
+        ".setValueAtTime(",
+        ".remove(",
+        "app.project.save",
+        "app.beginUndoGroup",
+    ]:
+        assert prohibited not in audit
+    for required in [
+        "Source Text",
+        "ADBE Vector Fill Color",
+        "ADBE Vector Rect Size",
+        "static position",
+        "Animated-layer source differs",
+        "propertyTreeFingerprint",
+        "sha256Utf8",
+    ]:
+        assert required in provenance
+    for phrase in [
+        "12 frames",
+        "60 ms",
+        "24 px",
+        "96%",
+        "102%",
+        "48 shot",
+        "14-minute",
+        "No voice-over",
+    ]:
+        assert phrase in motion_spec
 
 
 def test_manual_raster_assets_are_verified_before_content_addressed_import():
