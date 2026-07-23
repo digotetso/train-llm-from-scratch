@@ -423,6 +423,31 @@ class StructuredLog {
     });
   }
 
+  recordExportAccepted(value: {
+    contentHash: string;
+    method: "POST";
+    remoteAddress: "127.0.0.1";
+    remoteFamily: "IPv4";
+    requestId: string;
+    route: "export";
+  }): void {
+    const line = Buffer.from(`${JSON.stringify({
+      timestamp: new Date(this.now()).toISOString(),
+      event: "export_accepted",
+      requestId: value.requestId,
+      method: value.method,
+      route: value.route,
+      status: 202,
+      remoteAddress: value.remoteAddress,
+      remoteFamily: value.remoteFamily,
+      authenticated: true,
+      contentHash: value.contentHash
+    })}\n`, "utf8");
+    this.chain = this.chain.then(() => this.write(line)).catch((error: unknown) => {
+      this.failure = error;
+    });
+  }
+
   async flush(): Promise<void> {
     await this.chain;
     if (this.failure !== undefined) throw new Error("Bridge log write failed", { cause: this.failure });
@@ -723,6 +748,21 @@ class NodeBridgeServer implements BridgeServer {
       this.respondError(response, route, 401, "UNAUTHORIZED", "A valid bearer token is required");
       return;
     }
+    if (
+      request.method !== "POST" ||
+      request.socket.remoteAddress !== "127.0.0.1" ||
+      request.socket.remoteFamily !== "IPv4"
+    ) {
+      this.respondError(
+        response,
+        route,
+        403,
+        "LOOPBACK_REQUIRED",
+        "The export request must use authenticated IPv4 loopback"
+      );
+      return;
+    }
+    const requestId = randomUUID();
     if (declaredBodyIsOversized(request, this.limits.maxBodyBytes)) {
       this.respondError(response, route, 413, "PAYLOAD_TOO_LARGE", "The request body exceeds the configured limit");
       terminateRequestAfterResponse(request, response);
@@ -845,6 +885,14 @@ class NodeBridgeServer implements BridgeServer {
       await cleanupStreamedAssets(streamedAssets, this.queue, work);
       streamedAssets = [];
       sendJson(response, 202, { status: "accepted", contentHash: parsed.package.contentHash });
+      this.log.recordExportAccepted({
+        requestId,
+        method: "POST",
+        route,
+        remoteAddress: "127.0.0.1",
+        remoteFamily: "IPv4",
+        contentHash: parsed.package.contentHash
+      });
       this.log.record(route, 202);
     } catch (error) {
       if (error instanceof BridgeWorkDeadlineError || error instanceof BridgeWorkShutdownError) {

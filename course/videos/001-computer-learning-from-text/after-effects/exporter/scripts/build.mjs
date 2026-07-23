@@ -272,13 +272,21 @@ function assertExtendScriptBundle(value, label) {
   }
 }
 
-function assertReadOnlyAudit(value, label) {
+export function validateReadOnlyAuditSource(value, label = "After Effects audit") {
   for (const [description, pattern] of [
-    ["property setter", /\.setValue\s*\(/],
+    ["composition creation", /\.items\.add(?:Comp|Folder)\s*\(/],
+    ["layer creation", /\.layers\.add(?:Shape|Text|Solid|Null|Camera|Light)?\s*\(/],
+    ["property creation", /\.addProperty\s*\(/],
+    ["property setter", /\.setValue(?:AtTime)?\s*\(/],
     ["item removal", /\.remove\s*\(/],
     ["project save", /app\.project\.save/],
     ["project close", /app\.project\.close/],
-    ["undo group mutation", /app\.(?:beginUndoGroup|endUndoGroup)/]
+    ["undo group mutation", /app\.(?:beginUndoGroup|endUndoGroup)/],
+    ["command execution", /app\.executeCommand\s*\(/],
+    [
+      "direct After Effects property assignment",
+      /(?:\bapp\.project|\b(?!(?:report|result|snapshot|itemSnapshot|layerSnapshot)\b)[$A-Za-z_][$A-Za-z0-9_]*)\.(?:name|comment|parentFolder|startTime|inPoint|outPoint|duration|frameRate|width|height|enabled|value|opacity|position|scale|rotation)\s*(?:\+=|-=|\*=|\/=|=(?!=))/
+    ]
   ]) {
     if (pattern.test(value)) throw new Error(`${label} contains prohibited ${description}`);
   }
@@ -330,7 +338,7 @@ export async function buildAfterEffects({ projectRoot, environment = process.env
   assertExtendScriptBundle(panel, "After Effects panel");
   assertExtendScriptBundle(audit, "After Effects audit");
   assertExtendScriptBundle(fullLessonAudit, "After Effects full-lesson audit");
-  assertReadOnlyAudit(fullLessonAudit, "After Effects full-lesson audit");
+  validateReadOnlyAuditSource(fullLessonAudit, "After Effects full-lesson audit");
   await mkdir(destination, { recursive: true });
   await writeFile(join(destination, "Video001-Figma-AE-Exporter.jsx"), panel, { encoding: "utf8", mode: 0o600 });
   await writeFile(join(destination, "audit-export.jsx"), audit, { encoding: "utf8", mode: 0o600 });

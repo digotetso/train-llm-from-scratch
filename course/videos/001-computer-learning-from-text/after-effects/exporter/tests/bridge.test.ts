@@ -407,6 +407,86 @@ test("bridge binds to IPv4 loopback and implements the authenticated export life
   assert.equal(auth.authenticateBearer(`Bearer ${token}`), false);
 });
 
+test("accepted exports log unique redacted request evidence bound to loopback and content hash", async (t) => {
+  const { base, bridge, code, root } = await startBridge(t);
+  const first = fingerprint(makeValidPackage());
+  const second = makeValidPackage();
+  second.frames[0]!.children[0]!.opacity = 0.5;
+  fingerprint(second);
+  const unauthorizedSecret = `Bearer ${"z".repeat(43)}`;
+  const unauthorized = await fetch(`${base}/v1/export`, {
+    method: "POST",
+    headers: {
+      authorization: unauthorizedSecret,
+      "content-type": "application/vnd.video001.figma-ae+json"
+    },
+    body: JSON.stringify(first)
+  });
+  assert.equal(unauthorized.status, 401);
+
+  const token = await pair(base, code);
+  const authorization = `Bearer ${token}`;
+
+  for (const value of [first, second]) {
+    const response = await fetch(`${base}/v1/export`, {
+      method: "POST",
+      headers: {
+        authorization,
+        "content-type": "application/vnd.video001.figma-ae+json"
+      },
+      body: JSON.stringify(value)
+    });
+    assert.equal(response.status, 202);
+  }
+
+  await bridge.flushLogs();
+  const events = (await readFile(join(root, "logs", "bridge.log"), "utf8"))
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const accepted = events.filter((event) => event.event === "export_accepted");
+  assert.equal(accepted.length, 2);
+  assert.equal(new Set(accepted.map((event) => event.requestId)).size, 2);
+  assert.deepEqual(accepted.map((event) => ({
+    method: event.method,
+    route: event.route,
+    status: event.status,
+    remoteAddress: event.remoteAddress,
+    remoteFamily: event.remoteFamily,
+    authenticated: event.authenticated,
+    contentHash: event.contentHash
+  })), [first, second].map((value) => ({
+    method: "POST",
+    route: "export",
+    status: 202,
+    remoteAddress: "127.0.0.1",
+    remoteFamily: "IPv4",
+    authenticated: true,
+    contentHash: value.contentHash
+  })));
+  for (const event of accepted) {
+    assert.match(String(event.requestId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.deepEqual(Object.keys(event).sort(), [
+      "authenticated",
+      "contentHash",
+      "event",
+      "method",
+      "remoteAddress",
+      "remoteFamily",
+      "requestId",
+      "route",
+      "status",
+      "timestamp"
+    ]);
+  }
+  const logText = JSON.stringify(events);
+  assert.equal(logText.includes(token), false);
+  assert.equal(logText.includes(unauthorizedSecret), false);
+  assert.equal(logText.includes("authorization"), false);
+  assert.equal(logText.includes("pairing"), false);
+  assert.equal(logText.includes("dataBase64"), false);
+});
+
 test("bridge rejects non-loopback hosts and ports outside the TCP range", async () => {
   const root = await mkdtemp(join(tmpdir(), "video001-host-"));
   const auth = new AuthStore();

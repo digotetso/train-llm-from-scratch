@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -1395,6 +1404,12 @@ function writeSyntheticFullLessonEvidence(root: string) {
     JSON.stringify(timing, null, 2) + "\n",
     "utf8"
   );
+  const rasterDataBase64 = "iVBORw0KGgo=";
+  const rasterHash = createHash("sha256")
+    .update(Buffer.from(rasterDataBase64, "base64"))
+    .digest("hex");
+  const sessionId = "full-lesson-session-synthetic-001";
+  const requestId = "11111111-1111-4111-8111-111111111111";
   const packageValue = {
     schemaVersion: "2.0.0",
     exporterVersion: "0.1.0",
@@ -1440,7 +1455,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
         height: 100,
         rotation: 0,
         opacity: 1,
-        assetHash: "b".repeat(64)
+        assetHash: rasterHash
       }] : [])],
       warnings: index === 30 ? [{
         nodeId: shot.figmaNodeId + "::raster",
@@ -1450,10 +1465,10 @@ function writeSyntheticFullLessonEvidence(root: string) {
       }] : []
     })),
     assets: [{
-      hash: "b".repeat(64),
+      hash: rasterHash,
       mimeType: "image/png",
       byteLength: 8,
-      dataBase64: "iVBORw0KGgo="
+      dataBase64: rasterDataBase64
     }]
   };
   packageValue.contentHash = createHash("sha256")
@@ -1498,7 +1513,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
       rasterCount: index === 30 ? 1 : 0,
       rasterFallbacks: index === 30 ? [{
         nodeId: shot.figmaNodeId + "::raster",
-        assetHash: "b".repeat(64)
+        assetHash: rasterHash
       }] : [],
       hierarchy: {
         name: shot.name + "_v001",
@@ -1547,15 +1562,57 @@ function writeSyntheticFullLessonEvidence(root: string) {
   writeFileSync(paths.audit, JSON.stringify(audit, null, 2) + "\n", "utf8");
   writeFileSync(paths.session, JSON.stringify({
     fixture: "synthetic-test-only",
+    sessionId,
+    requestId,
     contentHash: hash,
-    status: "COMPLETE"
+    status: "COMPLETE",
+    figma: {
+      build: {
+        status: "PACKAGE_READY",
+        shotCount: 48,
+        durationSeconds: 840,
+        contentHash: hash
+      },
+      export: {
+        sessionId,
+        requestId,
+        method: "POST",
+        route: "export",
+        status: 202,
+        code: "EXPORT_ACCEPTED",
+        contentHash: hash
+      }
+    },
+    bridge: {
+      requestId,
+      contentHash: hash
+    },
+    afterEffects: {
+      import: {
+        status: "IMPORTED",
+        sessionId,
+        requestId,
+        contentHash: hash,
+        createdCompCount: 48,
+        createdMasterCompName: "VIDEO001_MASTER_v001"
+      },
+      queueCountAfterImport: 0,
+      projectPath: "/private/tmp/Video001-Exporter-Full-Lesson.aep"
+    }
   }, null, 2) + "\n", "utf8");
   writeFileSync(paths.bridge, JSON.stringify({
-    fixture: "synthetic-test-only",
-    event: "package-accepted",
+    timestamp: "2026-07-23T00:00:00.000Z",
+    event: "export_accepted",
+    requestId,
+    method: "POST",
+    route: "export",
+    status: 202,
+    remoteAddress: "127.0.0.1",
+    remoteFamily: "IPv4",
+    authenticated: true,
     contentHash: hash
   }) + "\n", "utf8");
-  return { timing, packageValue, audit, paths };
+  return { timing, packageValue, audit, paths, rasterHash, sessionId, requestId };
 }
 
 function runFullLessonEvidence(root: string, mode: "--write" | "--verify") {
@@ -1570,6 +1627,46 @@ function restampSyntheticPackage(value: Record<string, unknown>) {
   value.contentHash = createHash("sha256").update(
     canonicalJsonForEvidence({ ...value, exportedAt: "", contentHash: "" }), "utf8"
   ).digest("hex");
+}
+
+function replaceEvidenceContentHashes(value: unknown, hash: string): void {
+  if (Array.isArray(value)) {
+    for (const child of value) replaceEvidenceContentHashes(child, hash);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "contentHash") {
+      (value as Record<string, unknown>)[key] = hash;
+    } else {
+      replaceEvidenceContentHashes(child, hash);
+    }
+  }
+}
+
+function restampAndRetieSyntheticEvidence(
+  fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>,
+  packageValue: Record<string, unknown>
+): string {
+  restampSyntheticPackage(packageValue);
+  const hash = packageValue.contentHash as string;
+  writeFileSync(fixture.paths.package, JSON.stringify(packageValue, null, 2) + "\n", "utf8");
+  for (const filePath of [fixture.paths.importReport, fixture.paths.audit, fixture.paths.session]) {
+    const value = JSON.parse(readFileSync(filePath, "utf8"));
+    replaceEvidenceContentHashes(value, hash);
+    writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }
+  const bridgeEvents = readFileSync(fixture.paths.bridge, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  replaceEvidenceContentHashes(bridgeEvents, hash);
+  writeFileSync(
+    fixture.paths.bridge,
+    bridgeEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    "utf8"
+  );
+  return hash;
 }
 
 test("full-lesson evidence is independently derived and deterministic from synthetic raw proof", () => {
@@ -1689,6 +1786,87 @@ for (const [label, mutate, expected] of [
     }];
     writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /raster fallback|raster/i],
+  ["raster asset bytes that do not match the declared hash", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.assets[0].dataBase64 = "iVBORw0KGgs=";
+    restampAndRetieSyntheticEvidence(fixture, value);
+  }, /asset|hash|raster/i],
+  ["audited raster hash mismatch", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.shots[30].rasterFallbacks[0].assetHash = "a".repeat(64);
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /asset hash|raster/i],
+  ["a v000 shot comp", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const importReport = JSON.parse(readFileSync(fixture.paths.importReport, "utf8"));
+    const audit = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    const v000 = fixture.timing.shots[0]!.name + "_v000";
+    importReport.createdCompNames[0] = v000;
+    audit.master.layers[0].name = v000;
+    audit.master.layers[0].sourceComp = v000;
+    audit.shots[0].name = v000;
+    writeFileSync(fixture.paths.importReport, JSON.stringify(importReport, null, 2) + "\n", "utf8");
+    writeFileSync(fixture.paths.audit, JSON.stringify(audit, null, 2) + "\n", "utf8");
+  }, /v000|version|source comp/i],
+  ["a failed live session", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.status = "FAILED";
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /session|complete/i],
+  ["the wrong export route", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.route = "pair";
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /route|export/i],
+  ["the wrong export method", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.method = "GET";
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /method|POST|export/i],
+  ["the wrong accepted export status", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.status = 200;
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /status|202|accepted/i],
+  ["a non-loopback bridge host", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.remoteAddress = "0.0.0.0";
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /127\.0\.0\.1|loopback|host/i],
+  ["a non-IPv4 bridge family", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.remoteFamily = "IPv6";
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /IPv4|loopback/i],
+  ["an unauthenticated bridge export", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.authenticated = false;
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /authenticated|authentication/i],
+  ["a mismatched bridge session identity", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
+    value.requestId = "different-request";
+    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+  }, /request|identity/i],
+  ["a failed After Effects import", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.afterEffects.import.status = "FAILED";
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /import|imported/i],
+  ["the wrong imported master identity", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.afterEffects.import.createdMasterCompName = "VIDEO001_MASTER_v002";
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /import|master|identity/i],
+  ["a non-empty After Effects queue", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.afterEffects.queueCountAfterImport = 1;
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /queue|drained/i],
+  ["a non-disposable project path", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.afterEffects.projectPath = "/private/tmp/Some-Other-Project.aep";
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /project path|Video001-Exporter-Full-Lesson\.aep/i],
   ["credential disclosure", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     writeFileSync(fixture.paths.bridge, '{"authorization":"Bearer ' + "A".repeat(43) + '"}\n', "utf8");
   }, /credential|authorization|secret/i],
@@ -1711,6 +1889,129 @@ for (const [label, mutate, expected] of [
     }
   });
 }
+
+test("full-lesson evidence rejects a consistently restamped root-local alternate timing", () => {
+  const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-alternate-timing-"));
+  try {
+    const fixture = writeSyntheticFullLessonEvidence(root);
+    const timingPath = join(root, "config/video001-figma-scenes.json");
+    const timing = JSON.parse(readFileSync(timingPath, "utf8"));
+    timing.shots[0].name += "_Alternate";
+    writeFileSync(timingPath, JSON.stringify(timing, null, 2) + "\n", "utf8");
+
+    const packageValue = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    packageValue.frames[0].name = timing.shots[0].name;
+    const importReport = JSON.parse(readFileSync(fixture.paths.importReport, "utf8"));
+    const audit = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    const alternateComp = timing.shots[0].name + "_v001";
+    importReport.createdCompNames[0] = alternateComp;
+    audit.master.layers[0].name = alternateComp;
+    audit.master.layers[0].sourceComp = alternateComp;
+    audit.shots[0].configuredName = timing.shots[0].name;
+    audit.shots[0].name = alternateComp;
+    writeFileSync(fixture.paths.importReport, JSON.stringify(importReport, null, 2) + "\n", "utf8");
+    writeFileSync(fixture.paths.audit, JSON.stringify(audit, null, 2) + "\n", "utf8");
+    restampAndRetieSyntheticEvidence(fixture, packageValue);
+
+    const result = runFullLessonEvidence(root, "--write");
+    assert.notEqual(result.status, 0, result.stdout + "\n" + result.stderr);
+    assert.match(result.stdout + "\n" + result.stderr, /canonical timing|byte-identical|trusted/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const credentialKey of ["apiKey", "credential", "bridgeToken", "pairing_code"]) {
+  test("full-lesson evidence structurally rejects credential key " + credentialKey, () => {
+    const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-credential-"));
+    const secretValue = "DO_NOT_ECHO_THIS_SECRET_VALUE";
+    try {
+      const fixture = writeSyntheticFullLessonEvidence(root);
+      const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+      value.metadata = { [credentialKey]: secretValue };
+      writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+      const result = runFullLessonEvidence(root, "--write");
+      const output = result.stdout + "\n" + result.stderr;
+      assert.notEqual(result.status, 0, output);
+      assert.match(output, /credential|secret|prohibited/i);
+      assert.equal(output.includes(secretValue), false, "diagnostics disclosed the credential value");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("full-lesson evidence rejects raw file and raw-directory symlink escapes", () => {
+  for (const escape of ["file", "directory"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-read-symlink-"));
+    try {
+      const fixture = writeSyntheticFullLessonEvidence(root);
+      if (escape === "file") {
+        const outside = join(root, "outside-package.json");
+        renameSync(fixture.paths.package, outside);
+        symlinkSync(outside, fixture.paths.package);
+      } else {
+        const rawDir = dirname(fixture.paths.package);
+        const outside = join(root, "outside-raw");
+        renameSync(rawDir, outside);
+        symlinkSync(outside, rawDir, "dir");
+      }
+      const result = runFullLessonEvidence(root, "--write");
+      assert.notEqual(result.status, 0, result.stdout + "\n" + result.stderr);
+      assert.match(result.stdout + "\n" + result.stderr, /symlink|containment|regular file|evidence root/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("full-lesson evidence refuses an existing derived-output symlink without touching its target", () => {
+  const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-write-symlink-"));
+  try {
+    writeSyntheticFullLessonEvidence(root);
+    const outside = join(root, "outside-audit.json");
+    const sentinel = "must remain unchanged\n";
+    writeFileSync(outside, sentinel, "utf8");
+    symlinkSync(outside, join(root, "evidence/full-lesson/audit.json"));
+    const result = runFullLessonEvidence(root, "--write");
+    assert.notEqual(result.status, 0, result.stdout + "\n" + result.stderr);
+    assert.match(result.stdout + "\n" + result.stderr, /symlink|output|regular file/i);
+    assert.equal(readFileSync(outside, "utf8"), sentinel);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("full-lesson audit build validator rejects AE mutation primitives and allows local reports", async () => {
+  const buildModule = await import(new URL("../scripts/build.mjs", import.meta.url).href) as unknown as {
+    validateReadOnlyAuditSource(value: string, label?: string): void;
+  };
+  assert.equal(typeof buildModule.validateReadOnlyAuditSource, "function");
+  for (const mutation of [
+    "app.project.items.addComp('bad', 1, 1, 1, 1, 30);",
+    "comp.layers.add(source);",
+    "contents.addProperty('ADBE Vector Shape - Rect');",
+    "property.setValue(1);",
+    "property.setValueAtTime(0, 1);",
+    "app.project.save();",
+    "app.project.close();",
+    "item.remove();",
+    "app.beginUndoGroup('bad');",
+    "layer.startTime = 1;",
+    "shotLayer.outPoint = 2;",
+    "comp.duration = 1;"
+  ]) {
+    assert.throws(
+      () => buildModule.validateReadOnlyAuditSource(mutation, "mutation fixture"),
+      /prohibited|mutation|read.only/i,
+      mutation
+    );
+  }
+  assert.doesNotThrow(() => buildModule.validateReadOnlyAuditSource(
+    "var report = {}; report.master = master; report.name = master.name; report.itemCountAfter = itemCountAfter;",
+    "local report fixture"
+  ));
+});
 
 function canonicalJsonForEvidence(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);

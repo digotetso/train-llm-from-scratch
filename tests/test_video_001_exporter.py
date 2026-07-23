@@ -105,6 +105,10 @@ def stable_v001_audit(audit):
 
 def write_synthetic_full_lesson_evidence_tree(root: Path):
     timing = load_json(EXPORTER_DIR / "config/video001-figma-scenes.json")
+    raster_data_base64 = "iVBORw0KGgo="
+    raster_hash = hashlib.sha256(b"\x89PNG\r\n\x1a\n").hexdigest()
+    session_id = "full-lesson-session-synthetic-001"
+    request_id = "11111111-1111-4111-8111-111111111111"
     raw_dir = root / "evidence/full-lesson/raw"
     raw_dir.mkdir(parents=True)
     config_dir = root / "config"
@@ -163,7 +167,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                                 "height": 100,
                                 "rotation": 0,
                                 "opacity": 1,
-                                "assetHash": "b" * 64,
+                                "assetHash": raster_hash,
                             }
                         ]
                         if shot["index"] == 31
@@ -187,10 +191,10 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
         ],
         "assets": [
             {
-                "hash": "b" * 64,
+                "hash": raster_hash,
                 "mimeType": "image/png",
                 "byteLength": 8,
-                "dataBase64": "iVBORw0KGgo=",
+                "dataBase64": raster_data_base64,
             }
         ],
     }
@@ -244,7 +248,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                     [
                         {
                             "nodeId": f'{shot["figmaNodeId"]}::raster',
-                            "assetHash": "b" * 64,
+                            "assetHash": raster_hash,
                         }
                     ]
                     if shot["index"] == 31
@@ -300,7 +304,42 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
         "full-lesson-live-session.json": {
             "fixture": "synthetic-test-only",
             "status": "COMPLETE",
+            "sessionId": session_id,
+            "requestId": request_id,
             "contentHash": content_hash,
+            "figma": {
+                "build": {
+                    "status": "PACKAGE_READY",
+                    "shotCount": 48,
+                    "durationSeconds": 840,
+                    "contentHash": content_hash,
+                },
+                "export": {
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "method": "POST",
+                    "route": "export",
+                    "status": 202,
+                    "code": "EXPORT_ACCEPTED",
+                    "contentHash": content_hash,
+                },
+            },
+            "bridge": {
+                "requestId": request_id,
+                "contentHash": content_hash,
+            },
+            "afterEffects": {
+                "import": {
+                    "status": "IMPORTED",
+                    "sessionId": session_id,
+                    "requestId": request_id,
+                    "contentHash": content_hash,
+                    "createdCompCount": 48,
+                    "createdMasterCompName": "VIDEO001_MASTER_v001",
+                },
+                "queueCountAfterImport": 0,
+                "projectPath": "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+            },
         },
     }
     for name, value in files.items():
@@ -311,8 +350,15 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
     (raw_dir / "full-lesson-bridge-log.jsonl").write_text(
         json.dumps(
             {
-                "fixture": "synthetic-test-only",
-                "event": "package-accepted",
+                "timestamp": "2026-07-23T00:00:00.000Z",
+                "event": "export_accepted",
+                "requestId": request_id,
+                "method": "POST",
+                "route": "export",
+                "status": 202,
+                "remoteAddress": "127.0.0.1",
+                "remoteFamily": "IPv4",
+                "authenticated": True,
                 "contentHash": content_hash,
             },
             ensure_ascii=False,
@@ -393,6 +439,72 @@ def test_full_lesson_evidence_verifier_rejects_falsified_master_out_point(tmp_pa
     assert "deterministic assembler output" in (
         falsified.stdout + falsified.stderr
     )
+
+
+def test_full_lesson_evidence_rejects_raw_symlink_escape(tmp_path):
+    root = tmp_path / "synthetic-source"
+    write_synthetic_full_lesson_evidence_tree(root)
+    package_path = (
+        root
+        / "evidence/full-lesson/raw/full-lesson-package.video001-ae.json"
+    )
+    outside_path = tmp_path / "outside-package.json"
+    package_path.rename(outside_path)
+    package_path.symlink_to(outside_path)
+
+    result = subprocess.run(
+        [
+            "node",
+            str(FULL_LESSON_ASSEMBLER_PATH),
+            "--write",
+            "--root",
+            str(root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert re.search(
+        r"symlink|containment|regular file|evidence root",
+        result.stdout + result.stderr,
+        re.IGNORECASE,
+    )
+
+
+def test_full_lesson_evidence_rejects_normalized_credential_key_families(
+    tmp_path,
+):
+    for credential_key in ["apiKey", "credential", "bridgeToken", "pairing_code"]:
+        root = tmp_path / credential_key
+        write_synthetic_full_lesson_evidence_tree(root)
+        session_path = (
+            root / "evidence/full-lesson/raw/full-lesson-live-session.json"
+        )
+        session = load_json(session_path)
+        secret_value = "DO_NOT_ECHO_THIS_SECRET_VALUE"
+        session["metadata"] = {credential_key: secret_value}
+        session_path.write_text(
+            json.dumps(session, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                "node",
+                str(FULL_LESSON_ASSEMBLER_PATH),
+                "--write",
+                "--root",
+                str(root),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert re.search(r"credential|secret|prohibited", output, re.IGNORECASE)
+        assert secret_value not in output
 
 
 def test_synthetic_full_lesson_evidence_is_explicitly_test_only_and_redacted(

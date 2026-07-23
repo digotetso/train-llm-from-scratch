@@ -1,8 +1,15 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
-  existsSync,
-  mkdirSync,
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
   readFileSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
   writeFileSync
 } from "node:fs";
 import path from "node:path";
@@ -52,16 +59,108 @@ const derivedPaths = {
   manifest: path.join(evidenceDirectory, "manifest.json")
 };
 const isolatedTimingPath = path.join(exporterRoot, "config", "video001-figma-scenes.json");
-const timingPath = existsSync(isolatedTimingPath)
-  ? isolatedTimingPath
-  : path.join(scriptRoot, "config", "video001-figma-scenes.json");
+const timingPath = path.join(scriptRoot, "config", "video001-figma-scenes.json");
+
+function isWithin(parent, child) {
+  const relativePath = path.relative(parent, child);
+  return relativePath === "" || (
+    !path.isAbsolute(relativePath) &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(".." + path.sep)
+  );
+}
+
+function lstatOrUndefined(filePath) {
+  try {
+    return lstatSync(filePath);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function assertDirectory(filePath, label) {
+  const details = lstatSync(filePath);
+  if (!details.isDirectory() || details.isSymbolicLink()) {
+    throw new Error(label + " must be a real directory, not a symlink");
+  }
+}
+
+function assertEvidenceDirectories() {
+  const evidenceParent = path.join(exporterRoot, "evidence");
+  assertDirectory(exporterRoot, "Evidence exporter root");
+  assertDirectory(evidenceParent, "Evidence directory");
+  assertDirectory(evidenceDirectory, "Full-lesson evidence root");
+  assertDirectory(rawDirectory, "Full-lesson raw evidence directory");
+  const exporterRealPath = realpathSync(exporterRoot);
+  const evidenceRealPath = realpathSync(evidenceDirectory);
+  const rawRealPath = realpathSync(rawDirectory);
+  if (
+    !isWithin(exporterRealPath, evidenceRealPath) ||
+    !isWithin(evidenceRealPath, rawRealPath)
+  ) {
+    throw new Error("Evidence directory containment is invalid");
+  }
+  return evidenceRealPath;
+}
+
+function assertEvidenceFile(filePath, label) {
+  const evidenceRealPath = assertEvidenceDirectories();
+  if (!isWithin(path.resolve(evidenceDirectory), path.resolve(filePath))) {
+    throw new Error(label + " is outside the full-lesson evidence root");
+  }
+  const details = lstatSync(filePath);
+  if (!details.isFile() || details.isSymbolicLink()) {
+    throw new Error(label + " must be a regular file, not a symlink");
+  }
+  const actualPath = realpathSync(filePath);
+  if (!isWithin(evidenceRealPath, actualPath)) {
+    throw new Error(label + " resolves outside the full-lesson evidence root");
+  }
+}
+
+function readEvidenceFile(filePath, label, encoding) {
+  assertEvidenceFile(filePath, label);
+  const descriptor = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (!fstatSync(descriptor).isFile()) {
+      throw new Error(label + " must remain a regular file while it is read");
+    }
+    return readFileSync(descriptor, encoding);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function validateTrustedTimingSource() {
+  const details = lstatSync(timingPath);
+  if (!details.isFile() || details.isSymbolicLink()) {
+    throw new Error("Committed canonical timing must be a trusted regular file");
+  }
+  if (path.resolve(isolatedTimingPath) === path.resolve(timingPath)) return;
+  const isolatedDetails = lstatOrUndefined(isolatedTimingPath);
+  if (isolatedDetails === undefined) return;
+  if (!isolatedDetails.isFile() || isolatedDetails.isSymbolicLink()) {
+    throw new Error("Root-local timing must be a regular byte-identical copy of committed canonical timing");
+  }
+  const exporterRealPath = realpathSync(exporterRoot);
+  if (!isWithin(exporterRealPath, realpathSync(isolatedTimingPath))) {
+    throw new Error("Root-local timing resolves outside the evidence exporter root");
+  }
+  if (!readFileSync(isolatedTimingPath).equals(readFileSync(timingPath))) {
+    throw new Error("Root-local timing is not byte-identical to committed canonical timing");
+  }
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
 function sha256File(filePath) {
-  return sha256(readFileSync(filePath));
+  const bytes = isWithin(path.resolve(evidenceDirectory), path.resolve(filePath))
+    ? readEvidenceFile(filePath, path.basename(filePath))
+    : readFileSync(filePath);
+  return sha256(bytes);
 }
 
 function canonicalJson(value) {
@@ -82,7 +181,10 @@ function jsonBytes(value) {
 
 function readJson(filePath, label) {
   try {
-    return JSON.parse(readFileSync(filePath, "utf8"));
+    const source = isWithin(path.resolve(evidenceDirectory), path.resolve(filePath))
+      ? readEvidenceFile(filePath, label, "utf8")
+      : readFileSync(filePath, "utf8");
+    return JSON.parse(source);
   } catch (error) {
     throw new Error("Cannot read " + label + " JSON from " + filePath + ": " + error.message);
   }
@@ -93,6 +195,14 @@ function object(value, label) {
     throw new Error(label + " must be an object");
   }
   return value;
+}
+
+function exactKeys(value, expectedKeys, label) {
+  const actualKeys = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  if (canonicalJson(actualKeys) !== canonicalJson(expected)) {
+    throw new Error(label + " has unexpected or missing fields");
+  }
 }
 
 function array(value, label) {
@@ -114,20 +224,51 @@ function string(value, label) {
   return value;
 }
 
-function scanRedaction(filePath) {
-  const value = readFileSync(filePath, "utf8");
-  const findings = [
-    ["/Users/", /\/Users\//],
-    ["pairing credential", /pairingCode/i],
-    ["authorization credential", /authorization/i],
-    ["token credential", /"(?:token|accessToken|refreshToken|password|secret)"\s*:/i],
-    ["Bearer credential", /Bearer\s+[A-Za-z0-9._~-]+/i]
-  ];
-  for (const [label, pattern] of findings) {
-    if (pattern.test(value)) {
-      throw new Error(path.basename(filePath) + " contains prohibited " + label + " or mutable user path");
-    }
+function prohibitedCredentialKey(key) {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (
+    normalized.includes("authorization") ||
+    normalized.includes("apikey") ||
+    normalized.includes("pairingcode") ||
+    normalized.includes("credential") ||
+    normalized.includes("password") ||
+    normalized.includes("secret") ||
+    normalized.includes("token")
+  );
+}
+
+function scanStructuredCredentials(value, fileLabel) {
+  if (Array.isArray(value)) {
+    for (const child of value) scanStructuredCredentials(child, fileLabel);
+    return;
   }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    if (prohibitedCredentialKey(key)) {
+      throw new Error(fileLabel + " contains a prohibited credential field");
+    }
+    scanStructuredCredentials(child, fileLabel);
+  }
+}
+
+function scanRedaction(filePath) {
+  const fileLabel = path.basename(filePath);
+  const source = readEvidenceFile(filePath, fileLabel, "utf8");
+  if (/\/Users\//.test(source)) {
+    throw new Error(fileLabel + " contains a prohibited mutable user path");
+  }
+  if (/Bearer\s+[A-Za-z0-9._~-]+/i.test(source)) {
+    throw new Error(fileLabel + " contains a prohibited bearer credential");
+  }
+  let values;
+  try {
+    values = filePath.endsWith(".jsonl")
+      ? source.split(/\r?\n/).filter((line) => line.length > 0).map((line) => JSON.parse(line))
+      : [JSON.parse(source)];
+  } catch {
+    throw new Error(fileLabel + " is not valid structured JSON evidence");
+  }
+  scanStructuredCredentials(values, fileLabel);
 }
 
 function validateTiming() {
@@ -207,6 +348,39 @@ function requireTiedHash(value, expectedHash, label) {
   }
 }
 
+function validateRasterAssets(packageValue) {
+  const assetByHash = new Map();
+  for (const [index, rawAsset] of array(packageValue.assets, "Package assets").entries()) {
+    const asset = object(rawAsset, "Package asset " + String(index + 1));
+    const hash = string(asset.hash, "Package asset hash");
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new Error("Package asset hash must be lowercase SHA-256");
+    }
+    if (assetByHash.has(hash)) throw new Error("Package asset hashes must be unique");
+    if (asset.mimeType !== "image/png") throw new Error("Package raster assets must use image/png");
+    if (!Number.isSafeInteger(asset.byteLength) || asset.byteLength <= 0) {
+      throw new Error("Package asset byteLength must be a positive safe integer");
+    }
+    const dataBase64 = string(asset.dataBase64, "Package asset dataBase64");
+    if (
+      dataBase64.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(dataBase64)
+    ) {
+      throw new Error("Package asset dataBase64 is not canonical base64");
+    }
+    const bytes = Buffer.from(dataBase64, "base64");
+    if (
+      bytes.byteLength !== asset.byteLength ||
+      bytes.toString("base64") !== dataBase64 ||
+      sha256(bytes) !== hash
+    ) {
+      throw new Error("Package raster asset bytes, byteLength, and SHA-256 do not match");
+    }
+    assetByHash.set(hash, asset);
+  }
+  return assetByHash;
+}
+
 function rasterFallbackIds(values, label) {
   const ids = [];
   for (const rawValue of array(values, label)) {
@@ -216,6 +390,128 @@ function rasterFallbackIds(values, label) {
     }
   }
   return ids.sort();
+}
+
+function rasterFallbackMap(values, label) {
+  const entries = new Map();
+  for (const rawValue of array(values, label)) {
+    const value = object(rawValue, label + " entry");
+    if (value.type !== "raster-fallback") continue;
+    const nodeId = string(value.nodeId, label + " raster node ID");
+    if (entries.has(nodeId)) throw new Error(label + " contains a duplicate raster node ID");
+    entries.set(nodeId, value);
+  }
+  return entries;
+}
+
+function validateLiveEvidence({
+  liveSession,
+  bridgeEvents,
+  expectedHash,
+  importedMasterName
+}) {
+  if (liveSession.status !== "COMPLETE") {
+    throw new Error("Live session must have successful COMPLETE status");
+  }
+  const sessionId = string(liveSession.sessionId, "Live session ID");
+  const requestId = string(liveSession.requestId, "Live request ID");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new Error("Live request ID must be a server UUID");
+  }
+  if (liveSession.contentHash !== expectedHash) {
+    throw new Error("Live session contains the wrong content hash");
+  }
+
+  const figma = object(liveSession.figma, "Live Figma evidence");
+  const build = object(figma.build, "Live Figma build");
+  if (
+    build.status !== "PACKAGE_READY" ||
+    build.shotCount !== 48 ||
+    build.durationSeconds !== 840 ||
+    build.contentHash !== expectedHash
+  ) {
+    throw new Error("Live Figma build is not a complete 48-shot package");
+  }
+  const exported = object(figma.export, "Live Figma export");
+  if (
+    exported.sessionId !== sessionId ||
+    exported.requestId !== requestId ||
+    exported.method !== "POST" ||
+    exported.route !== "export" ||
+    exported.status !== 202 ||
+    exported.code !== "EXPORT_ACCEPTED" ||
+    exported.contentHash !== expectedHash
+  ) {
+    throw new Error("Live Figma export request identity, route, or accepted status is invalid");
+  }
+
+  const bridge = object(liveSession.bridge, "Live bridge reference");
+  if (bridge.requestId !== requestId || bridge.contentHash !== expectedHash) {
+    throw new Error("Live bridge request identity does not match the session");
+  }
+  const acceptedEvents = bridgeEvents.filter((rawEvent) => {
+    const event = object(rawEvent, "Bridge log event");
+    return event.event === "export_accepted";
+  });
+  for (const rawEvent of acceptedEvents) {
+    const event = object(rawEvent, "Bridge accepted event");
+    exactKeys(event, [
+      "timestamp",
+      "event",
+      "requestId",
+      "method",
+      "route",
+      "status",
+      "remoteAddress",
+      "remoteFamily",
+      "authenticated",
+      "contentHash"
+    ], "Bridge accepted event");
+    if (
+      typeof event.timestamp !== "string" ||
+      !Number.isFinite(Date.parse(event.timestamp)) ||
+      event.method !== "POST" ||
+      event.route !== "export" ||
+      event.status !== 202 ||
+      event.remoteAddress !== "127.0.0.1" ||
+      event.remoteFamily !== "IPv4" ||
+      event.authenticated !== true ||
+      event.contentHash !== expectedHash
+    ) {
+      throw new Error(
+        "Bridge accepted event must prove authenticated POST export status 202 on IPv4 loopback 127.0.0.1"
+      );
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      string(event.requestId, "Bridge accepted request ID")
+    )) {
+      throw new Error("Bridge accepted request ID must be a UUID");
+    }
+  }
+  if (acceptedEvents.filter((event) => event.requestId === requestId).length !== 1) {
+    throw new Error("Bridge log must contain exactly one accepted event for the live request identity");
+  }
+
+  const afterEffects = object(liveSession.afterEffects, "Live After Effects evidence");
+  const imported = object(afterEffects.import, "Live After Effects import");
+  if (
+    imported.status !== "IMPORTED" ||
+    imported.sessionId !== sessionId ||
+    imported.requestId !== requestId ||
+    imported.contentHash !== expectedHash ||
+    imported.createdCompCount !== 48 ||
+    imported.createdMasterCompName !== importedMasterName
+  ) {
+    throw new Error("Live After Effects import or master identity is invalid");
+  }
+  if (afterEffects.queueCountAfterImport !== 0) {
+    throw new Error("Live After Effects queue must be drained after import");
+  }
+  if (afterEffects.projectPath !== "/private/tmp/Video001-Exporter-Full-Lesson.aep") {
+    throw new Error(
+      "Live After Effects project path must be /private/tmp/Video001-Exporter-Full-Lesson.aep"
+    );
+  }
 }
 
 function hierarchyDurationsExact(hierarchyValue, duration, fps, label) {
@@ -235,13 +531,19 @@ function hierarchyDurationsExact(hierarchyValue, duration, fps, label) {
 }
 
 function derive() {
+  validateTrustedTimingSource();
+  assertEvidenceDirectories();
   for (const filePath of Object.values(rawPaths)) scanRedaction(filePath);
   const timing = validateTiming();
   const packageValue = object(readJson(rawPaths.package, "full-lesson package"), "Full-lesson package");
   const importReport = object(readJson(rawPaths.importReport, "full-lesson import report"), "Import report");
   const aeAudit = object(readJson(rawPaths.aeAudit, "full-lesson AE audit"), "AE audit");
   const liveSession = object(readJson(rawPaths.liveSession, "full-lesson live session"), "Live session");
-  const bridgeEvents = readFileSync(rawPaths.bridgeLog, "utf8")
+  const bridgeEvents = readEvidenceFile(
+    rawPaths.bridgeLog,
+    "full-lesson bridge log",
+    "utf8"
+  )
     .split(/\r?\n/)
     .filter((line) => line.length > 0)
     .map((line, index) => {
@@ -274,12 +576,15 @@ function derive() {
   }
   const frames = array(packageValue.frames, "Package frames");
   if (frames.length !== 48) throw new Error("Full-lesson package must contain exactly 48 frames");
+  const packageAssetByHash = validateRasterAssets(packageValue);
 
   let expectedStart = 0;
   let packageNativeCount = 0;
   let packageRasterCount = 0;
   const packageRasterIds = [];
   const packageWarningRasterIds = [];
+  const packageRasterById = new Map();
+  const packageWarningById = new Map();
   frames.forEach((rawFrame, index) => {
     const frame = object(rawFrame, "Package frame " + String(index + 1));
     const shot = timing.shots[index];
@@ -300,8 +605,17 @@ function derive() {
     for (const node of flattenNodes(frame.children)) {
       if (node.kind === "raster") {
         packageRasterCount += 1;
-        packageRasterIds.push(string(node.id, "Raster node ID"));
-        string(node.assetHash, "Raster asset hash");
+        const nodeId = string(node.id, "Raster node ID");
+        const assetHash = string(node.assetHash, "Raster asset hash");
+        if (!/^[0-9a-f]{64}$/.test(assetHash) || !packageAssetByHash.has(assetHash)) {
+          throw new Error("Raster node references a missing or invalid exact asset SHA-256");
+        }
+        if (packageRasterById.has(nodeId)) throw new Error("Package raster node IDs must be unique");
+        packageRasterIds.push(nodeId);
+        packageRasterById.set(nodeId, {
+          assetHash,
+          name: string(node.name, "Raster node name")
+        });
       } else {
         packageNativeCount += 1;
       }
@@ -311,7 +625,12 @@ function derive() {
       if (warning.fallback !== "png") {
         throw new Error("Package raster fallback warning must use png");
       }
-      packageWarningRasterIds.push(string(warning.nodeId, "Package raster warning node ID"));
+      const nodeId = string(warning.nodeId, "Package raster warning node ID");
+      if (packageWarningById.has(nodeId)) {
+        throw new Error("Package raster warnings must identify each raster node once");
+      }
+      packageWarningRasterIds.push(nodeId);
+      packageWarningById.set(nodeId, warning);
     }
   });
   if (expectedStart !== 840) {
@@ -321,6 +640,25 @@ function derive() {
   packageWarningRasterIds.sort();
   if (canonicalJson(packageRasterIds) !== canonicalJson(packageWarningRasterIds)) {
     throw new Error("Package raster nodes and raster fallback warnings do not match exactly");
+  }
+  const referencedAssetHashes = new Set();
+  for (const [nodeId, raster] of packageRasterById) {
+    const warning = packageWarningById.get(nodeId);
+    if (
+      warning === undefined ||
+      warning.nodeName !== raster.name ||
+      typeof warning.property !== "string" ||
+      warning.property.length === 0
+    ) {
+      throw new Error("Package raster warning identity does not match its raster node");
+    }
+    referencedAssetHashes.add(raster.assetHash);
+  }
+  if (
+    referencedAssetHashes.size !== packageAssetByHash.size ||
+    [...packageAssetByHash.keys()].some((hash) => !referencedAssetHashes.has(hash))
+  ) {
+    throw new Error("Package asset table must exactly match referenced raster asset hashes");
   }
 
   if (importReport.contentHash !== computedHash) {
@@ -371,12 +709,13 @@ function derive() {
   let auditedNativeCount = 0;
   let auditedRasterCount = 0;
   const auditedRasterIds = [];
+  const auditedRasterById = new Map();
   for (let index = 0; index < timing.shots.length; index += 1) {
     const timingShot = timing.shots[index];
     const layer = object(masterLayers[index], "Master layer " + String(index + 1));
     const shot = object(auditedShots[index], "Audited shot " + String(index + 1));
     const expectedCompPattern = new RegExp(
-      "^" + timingShot.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "_v[0-9]{3}$"
+      "^" + timingShot.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "_v(?!000)[0-9]{3}$"
     );
     if (
       layer.index !== timingShot.index ||
@@ -423,10 +762,16 @@ function derive() {
     auditedRasterCount += finiteNumber(shot.rasterCount, "Audited raster count");
     for (const rawRaster of array(shot.rasterFallbacks, "Audited raster fallbacks")) {
       const raster = object(rawRaster, "Audited raster fallback");
-      auditedRasterIds.push(string(raster.nodeId, "Audited raster node ID"));
-      if (!/^[0-9a-f]{64}$/.test(string(raster.assetHash, "Audited raster asset hash"))) {
+      const nodeId = string(raster.nodeId, "Audited raster node ID");
+      const assetHash = string(raster.assetHash, "Audited raster asset hash");
+      auditedRasterIds.push(nodeId);
+      if (!/^[0-9a-f]{64}$/.test(assetHash)) {
         throw new Error("Audited raster fallback has an invalid asset hash");
       }
+      if (auditedRasterById.has(nodeId)) {
+        throw new Error("AE audit contains duplicate raster fallback identities");
+      }
+      auditedRasterById.set(nodeId, assetHash);
     }
   }
   auditedRasterIds.sort();
@@ -437,6 +782,11 @@ function derive() {
   ) {
     throw new Error("AE audit contains an unexpected raster fallback or native/raster count");
   }
+  for (const [nodeId, raster] of packageRasterById) {
+    if (auditedRasterById.get(nodeId) !== raster.assetHash) {
+      throw new Error("AE audited raster asset hash does not match the package raster node");
+    }
+  }
   const importRasterIds = rasterFallbackIds(importReport.fallbacks, "Import report fallbacks");
   const auditFallbackRasterIds = rasterFallbackIds(aeAudit.fallbacks, "AE audit fallbacks");
   if (
@@ -444,6 +794,28 @@ function derive() {
     canonicalJson(auditFallbackRasterIds) !== canonicalJson(packageRasterIds)
   ) {
     throw new Error("Package, import report, and AE audit raster fallback evidence do not match");
+  }
+  const importFallbackById = rasterFallbackMap(
+    importReport.fallbacks,
+    "Import report fallbacks"
+  );
+  const auditFallbackById = rasterFallbackMap(aeAudit.fallbacks, "AE audit fallbacks");
+  for (const [nodeId, raster] of packageRasterById) {
+    const warning = packageWarningById.get(nodeId);
+    const importedFallback = importFallbackById.get(nodeId);
+    const auditedFallback = auditFallbackById.get(nodeId);
+    if (
+      importedFallback === undefined ||
+      auditedFallback === undefined ||
+      importedFallback.nodeName !== raster.name ||
+      importedFallback.property !== warning.property ||
+      importedFallback.replacement !== warning.fallback ||
+      canonicalJson(importedFallback) !== canonicalJson(auditedFallback)
+    ) {
+      throw new Error(
+        "Package warning, import fallback, and AE audit raster identity do not match exactly"
+      );
+    }
   }
   if (
     canonicalJson(array(aeAudit.missingFonts, "AE audit missing fonts")) !==
@@ -458,6 +830,12 @@ function derive() {
 
   requireTiedHash(liveSession, computedHash, "Live session");
   requireTiedHash(bridgeEvents, computedHash, "Bridge log");
+  validateLiveEvidence({
+    liveSession,
+    bridgeEvents,
+    expectedHash: computedHash,
+    importedMasterName
+  });
 
   const derivedAudit = {
     evidenceSchemaVersion: 1,
@@ -517,16 +895,71 @@ function artifactManifest() {
   };
 }
 
+function assertSafeOutputPath(filePath, label) {
+  const evidenceRealPath = assertEvidenceDirectories();
+  if (!isWithin(path.resolve(evidenceDirectory), path.resolve(filePath))) {
+    throw new Error(label + " is outside the full-lesson evidence root");
+  }
+  const details = lstatOrUndefined(filePath);
+  if (details === undefined) return;
+  if (!details.isFile() || details.isSymbolicLink()) {
+    throw new Error(label + " must be a regular output file, not a symlink");
+  }
+  if (!isWithin(evidenceRealPath, realpathSync(filePath))) {
+    throw new Error(label + " resolves outside the full-lesson evidence root");
+  }
+}
+
+function atomicWriteDerived(filePath, bytes, label) {
+  assertSafeOutputPath(filePath, label);
+  const temporaryPath = path.join(
+    evidenceDirectory,
+    "." + path.basename(filePath) + "." + String(process.pid) + "." +
+      randomBytes(8).toString("hex") + ".tmp"
+  );
+  let descriptor;
+  try {
+    descriptor = openSync(
+      temporaryPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600
+    );
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    assertSafeOutputPath(filePath, label);
+    renameSync(temporaryPath, filePath);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    const temporaryDetails = lstatOrUndefined(temporaryPath);
+    if (
+      temporaryDetails !== undefined &&
+      temporaryDetails.isFile() &&
+      !temporaryDetails.isSymbolicLink()
+    ) {
+      unlinkSync(temporaryPath);
+    }
+  }
+}
+
 function writeDerived(derived) {
-  mkdirSync(evidenceDirectory, { recursive: true });
-  writeFileSync(derivedPaths.audit, jsonBytes(derived.audit));
-  writeFileSync(derivedPaths.summary, jsonBytes(derived.summary));
-  writeFileSync(derivedPaths.manifest, jsonBytes(artifactManifest()));
+  assertEvidenceDirectories();
+  assertSafeOutputPath(derivedPaths.audit, "Derived audit output");
+  assertSafeOutputPath(derivedPaths.summary, "Derived summary output");
+  assertSafeOutputPath(derivedPaths.manifest, "Derived manifest output");
+  atomicWriteDerived(derivedPaths.audit, jsonBytes(derived.audit), "Derived audit output");
+  atomicWriteDerived(derivedPaths.summary, jsonBytes(derived.summary), "Derived summary output");
+  atomicWriteDerived(
+    derivedPaths.manifest,
+    jsonBytes(artifactManifest()),
+    "Derived manifest output"
+  );
 }
 
 function verifyFile(filePath, value) {
   const expected = jsonBytes(value);
-  const actual = readFileSync(filePath);
+  const actual = readEvidenceFile(filePath, path.basename(filePath));
   if (!actual.equals(expected)) {
     throw new Error(
       path.relative(exporterRoot, filePath) + " is not the deterministic assembler output"
