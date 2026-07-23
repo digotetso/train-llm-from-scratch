@@ -10,6 +10,7 @@ var Video001ExporterImporter = (function (core) {
     var HASH_PATTERN = /^[0-9a-f]{64}$/;
     var PACKAGE_SUFFIX = ".video001-ae.json";
     var FALLBACK_FONT = "Inter-Regular";
+    var installedFontFallbacks = null;
     var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     var MAX_ASSET_BYTES = 32 * 1024 * 1024;
     var MAX_AGGREGATE_ASSET_BYTES = 512 * 1024 * 1024;
@@ -686,6 +687,65 @@ var Video001ExporterImporter = (function (core) {
         return null;
     }
 
+    function fontHasGlyphs(fontObject, runText) {
+        try {
+            return runText.length === 0 || fontObject.hasGlyphsFor(runText);
+        } catch (glyphCoverageError) {
+            return false;
+        }
+    }
+
+    function discoverInstalledFontFallbacks() {
+        var groups;
+        var values = [];
+        var familyIndex;
+        var styleIndex;
+        var fontObject;
+        var postScriptName;
+        if (installedFontFallbacks !== null) {
+            return installedFontFallbacks;
+        }
+        if (!app.fonts || !app.fonts.allFonts) {
+            installedFontFallbacks = values;
+            return installedFontFallbacks;
+        }
+        groups = app.fonts.allFonts;
+        for (familyIndex = 0; familyIndex < groups.length; familyIndex += 1) {
+            for (styleIndex = 0; styleIndex < groups[familyIndex].length; styleIndex += 1) {
+                fontObject = groups[familyIndex][styleIndex];
+                postScriptName = String(fontObject.postScriptName || "");
+                if (!fontObject.isSubstitute && postScriptName.length > 0) {
+                    values[values.length] = {
+                        fontObject: fontObject,
+                        postScriptName: postScriptName
+                    };
+                }
+            }
+        }
+        values.sort(function (left, right) {
+            if (left.postScriptName < right.postScriptName) {
+                return -1;
+            }
+            if (left.postScriptName > right.postScriptName) {
+                return 1;
+            }
+            return 0;
+        });
+        installedFontFallbacks = values;
+        return installedFontFallbacks;
+    }
+
+    function findInstalledGlyphFallback(runText) {
+        var values = discoverInstalledFontFallbacks();
+        var index;
+        for (index = 0; index < values.length; index += 1) {
+            if (fontHasGlyphs(values[index].fontObject, runText)) {
+                return values[index].fontObject;
+            }
+        }
+        return null;
+    }
+
     function resolveRunFont(run, node, state) {
         var candidates = fontCandidates(run);
         var requested = candidates[0];
@@ -695,20 +755,22 @@ var Video001ExporterImporter = (function (core) {
         var index;
         for (index = 0; index < candidates.length; index += 1) {
             fontObject = findFontByPostScriptName(candidates[index]);
+            if (fontObject !== null && fontHasGlyphs(fontObject, runText)) {
+                replacement = fontObject.postScriptName;
+                break;
+            }
+            fontObject = null;
+        }
+        if (fontObject === null) {
+            fontObject = findInstalledGlyphFallback(runText);
             if (fontObject !== null) {
-                try {
-                    if (runText.length === 0 || fontObject.hasGlyphsFor(runText)) {
-                        replacement = fontObject.postScriptName;
-                        break;
-                    }
-                } catch (glyphCoverageError) {
-                    fontObject = null;
-                }
-                fontObject = null;
+                replacement = fontObject.postScriptName;
             }
         }
         if (fontObject === null || replacement === "") {
-            throw new Error("Required fallback font " + FALLBACK_FONT + " is not installed");
+            throw new Error(
+                "No installed font can render " + requested + " text on " + node.name
+            );
         }
         if (replacement !== requested) {
             appendUnique(state.missingFonts, requested);
@@ -728,8 +790,7 @@ var Video001ExporterImporter = (function (core) {
             fontObject: fontObject,
             postScriptName: replacement,
             requested: requested,
-            fauxBold: replacement === FALLBACK_FONT &&
-                replacement !== requested &&
+            fauxBold: replacement !== requested &&
                 new RegExp("(?:bold|black|heavy)", "i").test(String(run.fontStyle || ""))
         };
     }

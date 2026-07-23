@@ -176,7 +176,16 @@ function makeImporterHarness(
   const projectItems: FolderItemMock[] = [];
   const removalLog: string[] = [];
   const systemCommands: string[] = [];
-  const fontsByPostScriptName = new Map<string, Array<{ postScriptName: string; hasGlyphsFor(value: string): boolean }>>();
+  const fontsByPostScriptName = new Map<string, Array<{
+    postScriptName: string;
+    hasGlyphsFor(value: string): boolean;
+    isSubstitute?: boolean;
+  }>>();
+  const fontGroups: Array<Array<{
+    postScriptName: string;
+    hasGlyphsFor(value: string): boolean;
+    isSubstitute?: boolean;
+  }>> = [];
   let beginUndoCount = 0;
   let endUndoCount = 0;
   let masterLayerAddCount = 0;
@@ -372,6 +381,7 @@ function makeImporterHarness(
     app: {
       project,
       fonts: {
+        allFonts: fontGroups,
         getFontsByPostScriptName(postScriptName: string) {
           return fontsByPostScriptName.get(postScriptName) ?? [];
         }
@@ -495,6 +505,7 @@ function makeImporterHarness(
     preexisting,
     projectItems,
     fontsByPostScriptName,
+    fontGroups,
     trustedQueuePath,
     get beginUndoCount() {
       return beginUndoCount;
@@ -796,6 +807,66 @@ test("font resolution rejects an installed font that cannot render the exact run
     requested: "Sora-Bold",
     replacement: "Inter-Regular"
   }]);
+});
+
+test("font resolution deterministically discovers an installed font for glyphs outside named fallbacks", () => {
+  const harness = makeImporterHarness();
+  const soraBold = {
+    postScriptName: "Sora-Bold",
+    hasGlyphsFor() { return false; }
+  };
+  const interRegular = {
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return false; }
+  };
+  const arialUnicode = {
+    postScriptName: "ArialUnicodeMS",
+    hasGlyphsFor(value: string) { return value === "␠"; }
+  };
+  const appleSymbols = {
+    postScriptName: "AppleSymbols",
+    hasGlyphsFor(value: string) { return value === "␠"; }
+  };
+  harness.fontsByPostScriptName.set("Sora-Bold", [soraBold]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [interRegular]);
+  harness.fontGroups.push([arialUnicode], [appleSymbols]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  const result = harness.importer.__test.resolveRunFont(
+    { start: 0, end: 1, fontFamily: "Sora", fontStyle: "Bold" },
+    { id: "visible-space", name: "TXT_Character", text: "␠" },
+    state
+  );
+
+  assert.equal(result.fontObject, appleSymbols);
+  assert.equal(result.postScriptName, "AppleSymbols");
+  assert.equal(result.fauxBold, true);
+  assert.deepEqual(state.missingFonts, ["Sora-Bold"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.fallbacks)), [{
+    type: "font-substitution",
+    nodeId: "visible-space",
+    nodeName: "TXT_Character",
+    property: "font",
+    start: 0,
+    end: 1,
+    requested: "Sora-Bold",
+    replacement: "AppleSymbols"
+  }]);
+});
+
+test("font resolution reports glyph coverage failure instead of claiming an installed fallback is missing", () => {
+  const harness = makeImporterHarness();
+  harness.fontsByPostScriptName.set("Inter-Regular", [{
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return false; }
+  }]);
+  const state = { missingFonts: [] as string[], fallbacks: [] as unknown[], warnings: [] as string[] };
+
+  assert.throws(() => harness.importer.__test.resolveRunFont(
+    { start: 0, end: 1, fontFamily: "Sora", fontStyle: "Bold" },
+    { id: "unrenderable", name: "TXT_Character", text: "␠" },
+    state
+  ), /No installed font can render.*Sora-Bold.*TXT_Character/);
 });
 
 test("font resolution checks visible glyphs without treating paragraph breaks as missing glyphs", () => {
