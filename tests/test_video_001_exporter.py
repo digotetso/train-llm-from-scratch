@@ -1367,6 +1367,8 @@ def test_live_duplicate_evidence_capture_is_guarded_and_ae_authored():
         "Raw evidence ancestor chain",
         "cursor.fsName !== exporterRoot.fsName",
         "temporaryEvidenceFile",
+        "fileSha256",
+        "/usr/bin/shasum -a 256 ",
         ".rename(",
     ]:
         assert required in source

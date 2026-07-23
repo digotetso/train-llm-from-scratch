@@ -336,6 +336,31 @@
         return null;
     }
 
+    function quoteShellArgument(value) {
+        return "'" + String(value).replace(/'/g, "'\\''") + "'";
+    }
+
+    function fileSha256(file) {
+        var output;
+        var match;
+        if (
+            file === null ||
+            file === undefined ||
+            !file.exists ||
+            file.alias === true
+        ) {
+            throw new Error("Footage source is unavailable or aliased");
+        }
+        output = system.callSystem(
+            "/usr/bin/shasum -a 256 " + quoteShellArgument(file.fsName)
+        );
+        match = /^([0-9a-f]{64})\b/.exec(String(output));
+        if (match === null) {
+            throw new Error("Cannot fingerprint footage source");
+        }
+        return match[1];
+    }
+
     function sourceFingerprint(source) {
         var mainSource;
         var file;
@@ -358,6 +383,9 @@
             pixelAspect: source.pixelAspect === undefined ? null : source.pixelAspect,
             fileName: file === null || file === undefined ? null : String(file.name),
             fileLength: file === null || file === undefined ? null : file.length,
+            fileSha256: file === null || file === undefined
+                ? null
+                : fileSha256(file),
             hasAlpha: mainSource === null || mainSource === undefined
                 ? null
                 : mainSource.hasAlpha === true,
