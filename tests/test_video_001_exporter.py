@@ -22,6 +22,7 @@ SHOT_32_COMPARISON_PATH = EXPORTER_DIR / "evidence/shot-32-comparison.json"
 SHOT_32_REFERENCE_PATH = EXPORTER_DIR / "tests/fixtures/shot-32-reference.json"
 SHOT_32_RAW_DIR = EXPORTER_DIR / "evidence/raw"
 SHOT_32_ASSEMBLER_PATH = EXPORTER_DIR / "scripts/assemble-shot-32-evidence.mjs"
+FIGMA_UI_PROTOCOL_TEST_PATH = EXPORTER_DIR / "tests/ui-protocol.test.ts"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -96,6 +97,25 @@ def stable_v001_audit(audit):
             "warnings",
         ]
     }
+
+
+def test_full_lesson_figma_exporter_protocol_integration():
+    result = subprocess.run(
+        [
+            "npx",
+            "tsx",
+            "--test",
+            "--test-concurrency=1",
+            "--test-name-pattern=full lesson|full-lesson",
+            str(FIGMA_UI_PROTOCOL_TEST_PATH),
+        ],
+        cwd=EXPORTER_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():

@@ -82,6 +82,43 @@ const config: EmbeddedVideo001Config = {
   ]
 };
 
+interface CanonicalTimingFixture {
+  source: { figmaFileKey: string; figmaPageNodeId: string };
+  canvas: { width: number; height: number; fps: number; timeUnit: "seconds" };
+  shots: Array<{ index: number; figmaNodeId: string; name: string; duration: number }>;
+}
+
+const canonicalTimingFixture = JSON.parse(
+  readFileSync(approvedTimingSource(), "utf8")
+) as CanonicalTimingFixture;
+
+const fullConfig: EmbeddedVideo001Config = {
+  source: {
+    fileKey: canonicalTimingFixture.source.figmaFileKey,
+    pageId: canonicalTimingFixture.source.figmaPageNodeId
+  },
+  target: {
+    width: canonicalTimingFixture.canvas.width,
+    height: canonicalTimingFixture.canvas.height,
+    fps: canonicalTimingFixture.canvas.fps,
+    timeUnit: canonicalTimingFixture.canvas.timeUnit
+  },
+  shots: canonicalTimingFixture.shots.map((shot) => {
+    const section = APPROVED_SECTIONS.find(
+      ({ firstShot, lastShot }) => shot.index >= firstShot && shot.index <= lastShot
+    );
+    assert.ok(section, `missing approved section fixture for shot ${shot.index}`);
+    return {
+      index: shot.index,
+      nodeId: shot.figmaNodeId,
+      name: shot.name,
+      duration: shot.duration,
+      sectionId: section.sectionId,
+      sectionName: section.sectionName
+    };
+  })
+};
+
 function solidPaint(): { type: "SOLID"; color: { r: number; g: number; b: number }; opacity: number; visible: true } {
   return { type: "SOLID", color: { r: 0.1, g: 0.2, b: 0.3 }, opacity: 1, visible: true };
 }
@@ -144,18 +181,23 @@ function documentedFigmaFetchResponse(body: string, status: number): ControllerF
 interface HostHarness {
   host: ControllerHost;
   messages: unknown[];
+  nodes: Map<string, FigmaNodeLike>;
   requests: Array<{ input: string; init?: ControllerFetchOptions }>;
   storage: Map<string, unknown>;
   setSelection(nodes: FigmaNodeLike[]): void;
 }
 
-function hostHarness(fetchResponses: ControllerFetchResponse[] = []): HostHarness {
+function hostHarness(
+  fetchResponses: ControllerFetchResponse[] = [],
+  nodes: Map<string, FigmaNodeLike> = new Map()
+): HostHarness {
   const page = { id: "90:2", selection: [] as FigmaNodeLike[] };
   const messages: unknown[] = [];
   const requests: Array<{ input: string; init?: ControllerFetchOptions }> = [];
   const storage = new Map<string, unknown>();
   return {
     messages,
+    nodes,
     requests,
     storage,
     setSelection(nodes): void {
@@ -173,6 +215,7 @@ function hostHarness(fetchResponses: ControllerFetchResponse[] = []): HostHarnes
     host: {
       fileKey: "fFTux3sx2AzVQtoya67f95",
       getCurrentPage: () => page,
+      getNodeByIdAsync: async (nodeId) => nodes.get(nodeId) ?? null,
       postMessage: (message) => messages.push(structuredClone(message)),
       closePlugin: () => undefined,
       now: () => new Date("2026-07-22T00:00:00.000Z"),
@@ -190,6 +233,28 @@ function hostHarness(fetchResponses: ControllerFetchResponse[] = []): HostHarnes
       }
     }
   };
+}
+
+function fullLessonNodes(): Map<string, FigmaNodeLike> {
+  return new Map(fullConfig.shots.map((timing) => [
+    timing.nodeId,
+    sceneNode({
+      id: timing.nodeId,
+      name: timing.name,
+      children: [sceneNode({
+        id: `${timing.nodeId}:background`,
+        name: "BG_Base",
+        type: "RECTANGLE",
+        children: undefined
+      })],
+      parent: {
+        id: timing.sectionId,
+        name: timing.sectionName,
+        type: "SECTION",
+        parent: { id: fullConfig.source.pageId, name: "02 Video 001 - AE Assets", type: "PAGE" }
+      }
+    })
+  ]));
 }
 
 function lastFailure(messages: unknown[]): { type: string; code: string; message: string } {
@@ -278,6 +343,165 @@ test("selection accepts only exact approved section ancestry by identifier", asy
     type: "SECTION",
     parent: { id: "nested-group", type: "GROUP", parent: { id: "90:2", type: "PAGE" } }
   });
+});
+
+test("full lesson resolves all 48 configured shots in order without changing the user's selection", async () => {
+  assert.equal(fullConfig.shots.length, 48);
+  const harness = hostHarness([], fullLessonNodes());
+  harness.setSelection([sceneNode()]);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  const selection = harness.messages.find((value) =>
+    (value as { type?: string }).type === "selection"
+  ) as { frames: Array<{ nodeId: string }> };
+  assert.deepEqual(selection.frames.map((frame) => frame.nodeId), fullConfig.shots.map((shot) => shot.nodeId));
+  assert.equal(harness.host.getCurrentPage().selection.length, 1, "full build changed the user's selection");
+  const packageMessage = harness.messages.find((value) =>
+    (value as { type?: string }).type === "package-unhashed"
+  ) as { generation: number; value: ExporterPackage } | undefined;
+  assert.ok(packageMessage, JSON.stringify(harness.messages));
+  assert.equal(packageMessage.generation, 1, "one request incremented the package generation more than once");
+  assert.equal(packageMessage.value.schemaVersion, "2.0.0");
+  assert.equal(packageMessage.value.target.timeUnit, "seconds");
+  assert.deepEqual(packageMessage.value.frames.map((frame) => frame.nodeId), fullConfig.shots.map((shot) => shot.nodeId));
+});
+
+test("full lesson fails when a configured shot node is unavailable", async () => {
+  const nodes = fullLessonNodes();
+  const missing = fullConfig.shots[17]!;
+  nodes.delete(missing.nodeId);
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  const failure = lastFailure(harness.messages);
+  assert.equal(failure.code, "SHOT_NODE_NOT_FOUND");
+  assert.equal(failure.message, `Shot ${missing.index} node ${missing.nodeId} is unavailable.`);
+});
+
+test("full lesson fails when a shot is not a direct child of its approved SECTION", async () => {
+  const nodes = fullLessonNodes();
+  const timing = fullConfig.shots[9]!;
+  nodes.get(timing.nodeId)!.parent = {
+    id: "nested-group",
+    name: "Nested",
+    type: "GROUP",
+    parent: {
+      id: timing.sectionId,
+      name: timing.sectionName,
+      type: "SECTION",
+      parent: { id: fullConfig.source.pageId, type: "PAGE" }
+    }
+  };
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  assert.equal(lastFailure(harness.messages).code, "SELECTION_NOT_IN_APPROVED_SECTION");
+});
+
+test("full lesson fails when an approved SECTION belongs to the wrong PAGE", async () => {
+  const nodes = fullLessonNodes();
+  const timing = fullConfig.shots[10]!;
+  nodes.get(timing.nodeId)!.parent = {
+    id: timing.sectionId,
+    name: timing.sectionName,
+    type: "SECTION",
+    parent: { id: "wrong-page", type: "PAGE" }
+  };
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  assert.equal(lastFailure(harness.messages).code, "SELECTION_NOT_IN_APPROVED_SECTION");
+});
+
+test("full lesson fails when a configured shot name has drifted", async () => {
+  const nodes = fullLessonNodes();
+  const timing = fullConfig.shots[11]!;
+  nodes.get(timing.nodeId)!.name = "Renamed shot";
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  assert.equal(lastFailure(harness.messages).code, "SHOT_NAME_MISMATCH");
+});
+
+test("full lesson fails when a configured shot has the wrong dimensions", async () => {
+  const nodes = fullLessonNodes();
+  const timing = fullConfig.shots[12]!;
+  nodes.get(timing.nodeId)!.width = 1919;
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, fullConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  assert.equal(lastFailure(harness.messages).code, "SHOT_DIMENSIONS_MISMATCH");
+});
+
+test("full lesson discards a stale generation during raster export", async () => {
+  const rasterStarted = deferred<void>();
+  const rasterBytes = deferred<Uint8Array>();
+  const nodes = fullLessonNodes();
+  const first = fullConfig.shots[0]!;
+  const firstNode = nodes.get(first.nodeId)!;
+  firstNode.opacity = 0.5;
+  firstNode.exportAsync = async () => {
+    rasterStarted.resolve();
+    return rasterBytes.promise;
+  };
+  const harness = hostHarness([], nodes);
+  harness.setSelection([sceneNode()]);
+  const controller = createController(harness.host, fullConfig);
+
+  const staleBuild = controller.handleMessage({ type: "build-full-lesson" });
+  const started = await Promise.race([
+    rasterStarted.promise.then(() => true),
+    staleBuild.then(() => false)
+  ]);
+  assert.equal(started, true, "full build did not reach raster export");
+  await controller.handleMessage({ type: "refresh-selection" });
+  rasterBytes.resolve(new Uint8Array([137, 80, 78, 71]));
+  await staleBuild;
+
+  const stalePackages = harness.messages.filter((value) =>
+    (value as { type?: string; generation?: number }).type === "package-unhashed" &&
+    (value as { generation?: number }).generation === 1
+  );
+  assert.equal(stalePackages.length, 0);
+});
+
+test("full lesson rejects a configuration larger than the 48-frame package limit", async () => {
+  const extraTiming = {
+    ...fullConfig.shots.at(-1)!,
+    index: 49,
+    nodeId: "95:95",
+    name: "S001_SH49_Invalid"
+  };
+  const oversizedConfig = { ...fullConfig, shots: [...fullConfig.shots, extraTiming] };
+  const nodes = fullLessonNodes();
+  nodes.set(extraTiming.nodeId, sceneNode({
+    id: extraTiming.nodeId,
+    name: extraTiming.name,
+    parent: {
+      id: extraTiming.sectionId,
+      name: extraTiming.sectionName,
+      type: "SECTION",
+      parent: { id: fullConfig.source.pageId, type: "PAGE" }
+    }
+  }));
+  const harness = hostHarness([], nodes);
+  const controller = createController(harness.host, oversizedConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  assert.equal(lastFailure(harness.messages).code, "TOO_MANY_FRAMES");
 });
 
 test("Shot 32 maps node 95:44 to the exact frame name and 28-second duration", async () => {
@@ -468,6 +692,8 @@ test("controller discards a stale raster build after a newer build generation co
 });
 
 test("both protocol boundaries reject unknown keys, invalid types, and exotic prototypes", () => {
+  assert.deepEqual(validateUiToController({ type: "build-full-lesson" }), { type: "build-full-lesson" });
+  assert.throws(() => validateUiToController({ type: "build-full-lesson", extra: true }), /unknown field/i);
   assert.throws(() => validateUiToController({ type: "send-live", token: "secret" }), /unknown field/i);
   assert.throws(() => validateUiToController({ type: "pair", operation: 1, code: "12345" }), /pairing code/i);
   const inherited = Object.create({ polluted: true }) as Record<string, unknown>;
@@ -529,6 +755,24 @@ test("UI hashes with pure SHA-256 parity, returns only package-ready, exposes co
   assert.equal(downloads[0]?.mimeType, EXPORT_MEDIA_TYPE);
   assert.equal(downloads[0]?.filename, `S001_SH32_Repo_PreparationNotLearning-${nodeHash.slice(0, 12)}.video001-ae.json`);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(downloads[0]?.bytes)), ready.value);
+});
+
+test("UI starts a full-lesson build independently of selected-frame availability", async () => {
+  const posted: unknown[] = [];
+  const views: UiViewModel[] = [];
+  const ui = createUiController({
+    postMessage: (message) => posted.push(structuredClone(message)),
+    render: (view) => views.push(structuredClone(view)),
+    sha256: async (bytes) => sha256Hex(bytes),
+    download: () => undefined
+  });
+
+  ui.buildFullLesson();
+
+  assert.deepEqual(posted, [{ type: "build-full-lesson" }]);
+  assert.equal(views.at(-1)?.busy, true);
+  assert.equal(views.at(-1)?.buildDisabled, true);
+  assert.match(readFileSync(new URL("../src/figma/ui.html", import.meta.url), "utf8"), /<button id="build-full-lesson" type="button">Build full lesson \(48 shots\)<\/button>/);
 });
 
 test("UI discards a stale hash after a newer selection and package generation", async () => {

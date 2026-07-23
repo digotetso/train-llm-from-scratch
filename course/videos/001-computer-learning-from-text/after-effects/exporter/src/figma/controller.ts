@@ -42,6 +42,7 @@ export type ControllerToUi =
 export type UiToController =
   | { type: "refresh-selection" }
   | { type: "build-package" }
+  | { type: "build-full-lesson" }
   | { type: "package-ready"; generation: number; value: ExporterPackage }
   | { type: "pair"; operation: number; code: string }
   | { type: "send-live"; operation: number }
@@ -125,6 +126,7 @@ type FigmaSandboxFetch = (url: string, options?: FetchOptions) => Promise<FetchR
 export interface ControllerHost {
   fileKey: string | undefined;
   getCurrentPage(): ControllerPage;
+  getNodeByIdAsync(nodeId: string): Promise<FigmaNodeLike | null>;
   mixed: unknown;
   postMessage(message: ControllerToUi): void;
   closePlugin(): void;
@@ -185,6 +187,7 @@ export function validateUiToController(value: unknown): UiToController {
   switch (record.type) {
     case "refresh-selection":
     case "build-package":
+    case "build-full-lesson":
     case "close":
       exactKeys(record, ["type"], "$");
       return { type: record.type };
@@ -418,40 +421,67 @@ function hasApprovedSectionAncestry(
   return sectionParent?.type === "PAGE" && sectionParent.id === pageId;
 }
 
+type ApprovedFrame = {
+  node: FigmaNodeLike;
+  timing: EmbeddedVideo001Config["shots"][number];
+};
+
+function validateApprovedFrame(
+  node: FigmaNodeLike,
+  timing: EmbeddedVideo001Config["shots"][number],
+  page: ControllerPage,
+  host: ControllerHost,
+  config: EmbeddedVideo001Config
+): void {
+  if (host.fileKey !== config.source.fileKey || page.id !== config.source.pageId) {
+    throw controllerFailure("WRONG_LESSON_SOURCE", "Open the configured Video 001 Figma page before exporting.");
+  }
+  if (!FRAME_LIKE_TYPES.has(node.type)) {
+    throw controllerFailure("SELECTION_NOT_FRAME", `Selected node ${node.id} is not a frame-like node.`);
+  }
+  if (node.id !== timing.nodeId) {
+    throw controllerFailure(
+      "SHOT_NODE_ID_MISMATCH",
+      `Shot ${timing.index} lookup returned node ${node.id} instead of ${timing.nodeId}.`
+    );
+  }
+  if (node.name !== timing.name) {
+    throw controllerFailure(
+      "SHOT_NAME_MISMATCH",
+      `Selected frame ${node.id} must be named ${timing.name} before export.`
+    );
+  }
+  if (node.width !== config.target.width || node.height !== config.target.height) {
+    throw controllerFailure(
+      "SHOT_DIMENSIONS_MISMATCH",
+      `Selected frame ${node.id} must be ${config.target.width}×${config.target.height} before export.`
+    );
+  }
+  if (!hasApprovedSectionAncestry(node, timing, config.source.pageId)) {
+    throw controllerFailure(
+      "SELECTION_NOT_IN_APPROVED_SECTION",
+      `Selected frame ${node.id} must be a direct child of approved section ${timing.sectionName} (${timing.sectionId}) on the configured Video 001 page.`
+    );
+  }
+}
+
 function selectedFrames(
   host: ControllerHost,
   config: EmbeddedVideo001Config,
   timings: Map<string, EmbeddedVideo001Config["shots"][number]>
-): Array<{ node: FigmaNodeLike; timing: EmbeddedVideo001Config["shots"][number] }> {
+): ApprovedFrame[] {
   const page = host.getCurrentPage();
   const selection = Array.from(page.selection);
   if (selection.length === 0) throw controllerFailure("NO_FRAME_SELECTED", "Select at least one Video 001 frame.");
   if (selection.length > MAX_FRAMES) {
     throw controllerFailure("TOO_MANY_FRAMES", `Select no more than ${MAX_FRAMES} frames.`);
   }
-  if (host.fileKey !== config.source.fileKey || page.id !== config.source.pageId) {
-    throw controllerFailure("WRONG_LESSON_SOURCE", "Open the configured Video 001 Figma page before exporting.");
-  }
   return selection.map((node) => {
-    if (!FRAME_LIKE_TYPES.has(node.type)) {
-      throw controllerFailure("SELECTION_NOT_FRAME", `Selected node ${node.id} is not a frame-like node.`);
-    }
     const timing = timings.get(node.id);
     if (timing === undefined) {
       throw controllerFailure("SHOT_TIMING_NOT_FOUND", `No Video 001 timing exists for selected frame ${node.id}.`);
     }
-    if (node.name !== timing.name) {
-      throw controllerFailure(
-        "SHOT_NAME_MISMATCH",
-        `Selected frame ${node.id} must be named ${timing.name} before export.`
-      );
-    }
-    if (!hasApprovedSectionAncestry(node, timing, config.source.pageId)) {
-      throw controllerFailure(
-        "SELECTION_NOT_IN_APPROVED_SECTION",
-        `Selected frame ${node.id} must be a direct child of approved section ${timing.sectionName} (${timing.sectionId}) on the configured Video 001 page.`
-      );
-    }
+    validateApprovedFrame(node, timing, page, host, config);
     return { node, timing };
   });
 }
@@ -572,9 +602,11 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     }
   };
 
-  const buildPackage = async (): Promise<void> => {
-    const generation = beginPackageGeneration();
-    const selected = selectedFrames(host, config, timings);
+  const buildApprovedFrames = async (
+    generation: number,
+    selected: readonly ApprovedFrame[]
+  ): Promise<void> => {
+    if (generation !== packageGeneration) return;
     host.postMessage({
       type: "selection",
       generation,
@@ -642,6 +674,41 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     if (generation !== packageGeneration) return;
     pendingPackage = { generation, value };
     host.postMessage({ type: "package-unhashed", generation, value });
+  };
+
+  const resolveFullLessonFrames = async (
+    generation: number
+  ): Promise<ApprovedFrame[] | undefined> => {
+    if (config.shots.length > MAX_FRAMES) {
+      throw controllerFailure("TOO_MANY_FRAMES", `Select no more than ${MAX_FRAMES} frames.`);
+    }
+    const page = host.getCurrentPage();
+    const resolved: ApprovedFrame[] = [];
+    for (const timing of config.shots) {
+      const node = await host.getNodeByIdAsync(timing.nodeId);
+      if (generation !== packageGeneration) return undefined;
+      if (node === null) {
+        throw controllerFailure(
+          "SHOT_NODE_NOT_FOUND",
+          `Shot ${timing.index} node ${timing.nodeId} is unavailable.`
+        );
+      }
+      validateApprovedFrame(node, timing, page, host, config);
+      resolved.push({ node, timing });
+    }
+    return resolved;
+  };
+
+  const buildPackage = async (): Promise<void> => {
+    const generation = beginPackageGeneration();
+    await buildApprovedFrames(generation, selectedFrames(host, config, timings));
+  };
+
+  const buildFullLesson = async (): Promise<void> => {
+    const generation = beginPackageGeneration();
+    const resolved = await resolveFullLessonFrames(generation);
+    if (resolved === undefined) return;
+    await buildApprovedFrames(generation, resolved);
   };
 
   const acceptPackage = (generation: number, value: ExporterPackage): void => {
@@ -808,6 +875,9 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
         case "build-package":
           await buildPackage();
           break;
+        case "build-full-lesson":
+          await buildFullLesson();
+          break;
         case "package-ready":
           acceptPackage(message.generation, message.value);
           break;
@@ -842,6 +912,8 @@ function startRuntime(): void {
   const controller = createController({
     fileKey: figma.fileKey,
     getCurrentPage: () => figma.currentPage as unknown as ControllerPage,
+    getNodeByIdAsync: async (nodeId) =>
+      await figma.getNodeByIdAsync(nodeId) as unknown as FigmaNodeLike | null,
     mixed: figma.mixed,
     postMessage: (message) => figma.ui.postMessage(message),
     closePlugin: () => figma.closePlugin(),

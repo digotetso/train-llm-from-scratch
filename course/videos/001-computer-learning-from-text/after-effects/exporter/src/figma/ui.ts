@@ -38,6 +38,7 @@ export interface UiController {
   handleMessage(value: unknown): Promise<void>;
   refresh(): void;
   build(): void;
+  buildFullLesson(): void;
   pair(code: string): void;
   send(): void;
   download(): void;
@@ -363,6 +364,10 @@ export function createUiController(dependencies: UiDependencies): UiController {
       invalidateForRequest("Building package…");
       dependencies.postMessage({ type: "build-package" });
     },
+    buildFullLesson: () => {
+      invalidateForRequest("Building full lesson package…");
+      dependencies.postMessage({ type: "build-full-lesson" });
+    },
     pair: (code) => startBridgeOperation("Pairing with After Effects…", (operation) => ({
       type: "pair",
       operation,
@@ -392,6 +397,7 @@ function startRuntime(): void {
   const error = requiredElement<HTMLElement>("error");
   const bridgeCode = requiredElement<HTMLElement>("bridge-code");
   const buildButton = requiredElement<HTMLButtonElement>("build-package");
+  const fullBuildButton = requiredElement<HTMLButtonElement>("build-full-lesson");
   const sendButton = requiredElement<HTMLButtonElement>("send-live");
   const downloadButton = requiredElement<HTMLButtonElement>("download-package");
   const pairingInput = requiredElement<HTMLInputElement>("pairing-code");
@@ -431,6 +437,7 @@ function startRuntime(): void {
       error.hidden = view.error.length === 0;
       bridgeCode.textContent = view.bridgeCode;
       buildButton.disabled = view.buildDisabled || view.busy;
+      fullBuildButton.disabled = view.busy;
       sendButton.disabled = view.sendDisabled || view.busy;
       downloadButton.disabled = view.downloadDisabled || view.busy;
       document.documentElement.setAttribute("aria-busy", String(view.busy));
@@ -439,6 +446,7 @@ function startRuntime(): void {
 
   requiredElement<HTMLButtonElement>("refresh-selection").addEventListener("click", () => ui.refresh());
   buildButton.addEventListener("click", () => ui.build());
+  fullBuildButton.addEventListener("click", () => ui.buildFullLesson());
   requiredElement<HTMLFormElement>("pair-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const code = pairingInput.value.trim();
