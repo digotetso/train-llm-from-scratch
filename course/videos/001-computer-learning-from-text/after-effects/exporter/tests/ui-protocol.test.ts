@@ -294,6 +294,17 @@ test("selection refresh reports empty, non-frame, unknown, and over-limit select
   assert.equal(lastFailure(harness.messages).code, "TOO_MANY_FRAMES");
 });
 
+test("selection rejects the wrong lesson source before looking up unconfigured frame timing", async () => {
+  const harness = hostHarness();
+  harness.host.fileKey = "wrong-file";
+  harness.setSelection([sceneNode({ id: "999:999" })]);
+  const controller = createController(harness.host, config);
+
+  await controller.handleMessage({ type: "refresh-selection" });
+
+  assert.equal(lastFailure(harness.messages).code, "WRONG_LESSON_SOURCE");
+});
+
 test("selection accepts only exact approved section ancestry by identifier", async () => {
   const harness = hostHarness();
   const shot31 = sceneNode({ id: "95:41", name: "S001_SH31_Repo_PrepareRecord" });
@@ -502,6 +513,22 @@ test("full lesson rejects a configuration larger than the 48-frame package limit
   await controller.handleMessage({ type: "build-full-lesson" });
 
   assert.equal(lastFailure(harness.messages).code, "TOO_MANY_FRAMES");
+});
+
+test("full lesson rejects a configuration smaller than the required 48-shot set", async () => {
+  const undersizedConfig = { ...fullConfig, shots: fullConfig.shots.slice(0, -1) };
+  assert.equal(undersizedConfig.shots.length, 47);
+  const harness = hostHarness([], fullLessonNodes());
+  const controller = createController(harness.host, undersizedConfig);
+
+  await controller.handleMessage({ type: "build-full-lesson" });
+
+  const failure = lastFailure(harness.messages);
+  assert.equal(failure.code, "FULL_LESSON_SHOT_COUNT_MISMATCH");
+  assert.equal(failure.message, "Full-lesson builds require exactly 48 configured shots; received 47.");
+  assert.equal(harness.messages.some((value) =>
+    (value as { type?: string }).type === "package-unhashed"
+  ), false);
 });
 
 test("Shot 32 maps node 95:44 to the exact frame name and 28-second duration", async () => {

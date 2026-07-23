@@ -476,6 +476,9 @@ function selectedFrames(
   if (selection.length > MAX_FRAMES) {
     throw controllerFailure("TOO_MANY_FRAMES", `Select no more than ${MAX_FRAMES} frames.`);
   }
+  if (host.fileKey !== config.source.fileKey || page.id !== config.source.pageId) {
+    throw controllerFailure("WRONG_LESSON_SOURCE", "Open the configured Video 001 Figma page before exporting.");
+  }
   return selection.map((node) => {
     const timing = timings.get(node.id);
     if (timing === undefined) {
@@ -679,6 +682,12 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
   const resolveFullLessonFrames = async (
     generation: number
   ): Promise<ApprovedFrame[] | undefined> => {
+    if (config.shots.length < MAX_FRAMES) {
+      throw controllerFailure(
+        "FULL_LESSON_SHOT_COUNT_MISMATCH",
+        `Full-lesson builds require exactly ${MAX_FRAMES} configured shots; received ${config.shots.length}.`
+      );
+    }
     if (config.shots.length > MAX_FRAMES) {
       throw controllerFailure("TOO_MANY_FRAMES", `Select no more than ${MAX_FRAMES} frames.`);
     }
