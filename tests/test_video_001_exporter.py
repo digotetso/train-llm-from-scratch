@@ -16,12 +16,16 @@ CORE_PATH = AE_SOURCE_DIR / "import-core.jsxinc"
 IMPORTER_PATH = AE_SOURCE_DIR / "importer.jsxinc"
 PANEL_PATH = AE_SOURCE_DIR / "panel.jsx"
 AUDIT_PATH = AE_SOURCE_DIR / "audit-export.jsx"
+FULL_LESSON_AUDIT_SOURCE_PATH = AE_SOURCE_DIR / "audit-full-lesson.jsx"
 HOST_RUNTIME_TEST_PATH = EXPORTER_DIR / "tests/ae-host-runtime.test.ts"
 SHOT_32_AUDIT_PATH = EXPORTER_DIR / "evidence/shot-32-audit.json"
 SHOT_32_COMPARISON_PATH = EXPORTER_DIR / "evidence/shot-32-comparison.json"
 SHOT_32_REFERENCE_PATH = EXPORTER_DIR / "tests/fixtures/shot-32-reference.json"
 SHOT_32_RAW_DIR = EXPORTER_DIR / "evidence/raw"
 SHOT_32_ASSEMBLER_PATH = EXPORTER_DIR / "scripts/assemble-shot-32-evidence.mjs"
+FULL_LESSON_ASSEMBLER_PATH = (
+    EXPORTER_DIR / "scripts/assemble-full-lesson-evidence.mjs"
+)
 FIGMA_UI_PROTOCOL_TEST_PATH = EXPORTER_DIR / "tests/ui-protocol.test.ts"
 
 
@@ -99,6 +103,225 @@ def stable_v001_audit(audit):
     }
 
 
+def write_synthetic_full_lesson_evidence_tree(root: Path):
+    timing = load_json(EXPORTER_DIR / "config/video001-figma-scenes.json")
+    raw_dir = root / "evidence/full-lesson/raw"
+    raw_dir.mkdir(parents=True)
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "video001-figma-scenes.json").write_text(
+        json.dumps(timing, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    package = {
+        "schemaVersion": "2.0.0",
+        "exporterVersion": "0.1.0",
+        "exportedAt": "2026-07-23T00:00:00.000Z",
+        "contentHash": "",
+        "source": {
+            "fileKey": timing["source"]["figmaFileKey"],
+            "pageId": timing["source"]["figmaPageNodeId"],
+        },
+        "target": {
+            "width": timing["canvas"]["width"],
+            "height": timing["canvas"]["height"],
+            "fps": timing["canvas"]["fps"],
+            "timeUnit": timing["canvas"]["timeUnit"],
+        },
+        "frames": [
+            {
+                "nodeId": shot["figmaNodeId"],
+                "name": shot["name"],
+                "width": 1920,
+                "height": 1080,
+                "duration": shot["duration"],
+                "children": [
+                    {
+                        "id": f'{shot["figmaNodeId"]}::shape',
+                        "name": "Synthetic native shape",
+                        "kind": "rect",
+                        "x": 0,
+                        "y": 0,
+                        "width": 100,
+                        "height": 100,
+                        "rotation": 0,
+                        "opacity": 1,
+                        "fill": "#000000",
+                        "stroke": None,
+                        "strokeWidth": 0,
+                        "radius": 0,
+                    },
+                    *(
+                        [
+                            {
+                                "id": f'{shot["figmaNodeId"]}::raster',
+                                "name": "Synthetic declared raster",
+                                "kind": "raster",
+                                "x": 100,
+                                "y": 100,
+                                "width": 100,
+                                "height": 100,
+                                "rotation": 0,
+                                "opacity": 1,
+                                "assetHash": "b" * 64,
+                            }
+                        ]
+                        if shot["index"] == 31
+                        else []
+                    ),
+                ],
+                "warnings": (
+                    [
+                        {
+                            "nodeId": f'{shot["figmaNodeId"]}::raster',
+                            "nodeName": "Synthetic declared raster",
+                            "property": "gradient",
+                            "fallback": "png",
+                        }
+                    ]
+                    if shot["index"] == 31
+                    else []
+                ),
+            }
+            for shot in timing["shots"]
+        ],
+        "assets": [
+            {
+                "hash": "b" * 64,
+                "mimeType": "image/png",
+                "byteLength": 8,
+                "dataBase64": "iVBORw0KGgo=",
+            }
+        ],
+    }
+    fingerprint = {**package, "exportedAt": "", "contentHash": ""}
+    package["contentHash"] = hashlib.sha256(
+        canonical_json(fingerprint).encode("utf-8")
+    ).hexdigest()
+    content_hash = package["contentHash"]
+    root_names = [f'{shot["name"]}_v001' for shot in timing["shots"]]
+    audit = {
+        "auditSchemaVersion": 1,
+        "contentHash": content_hash,
+        "itemCountBefore": 97,
+        "itemCountAfter": 97,
+        "projectStateUnchanged": True,
+        "master": {
+            "name": "VIDEO001_MASTER_v001",
+            "width": 1920,
+            "height": 1080,
+            "fps": 30,
+            "durationSeconds": 840,
+            "durationFrames": 25_200,
+            "layers": [
+                {
+                    "index": shot["index"],
+                    "nodeId": shot["figmaNodeId"],
+                    "name": f'{shot["name"]}_v001',
+                    "sourceComp": f'{shot["name"]}_v001',
+                    "startTime": shot["start"],
+                    "inPoint": shot["start"],
+                    "outPoint": shot["start"] + shot["duration"],
+                }
+                for shot in timing["shots"]
+            ],
+        },
+        "shots": [
+            {
+                "index": shot["index"],
+                "nodeId": shot["figmaNodeId"],
+                "configuredName": shot["name"],
+                "name": f'{shot["name"]}_v001',
+                "contentHash": content_hash,
+                "width": 1920,
+                "height": 1080,
+                "fps": 30,
+                "durationSeconds": shot["duration"],
+                "durationFrames": shot["duration"] * 30,
+                "nativeCount": 1,
+                "rasterCount": 1 if shot["index"] == 31 else 0,
+                "rasterFallbacks": (
+                    [
+                        {
+                            "nodeId": f'{shot["figmaNodeId"]}::raster',
+                            "assetHash": "b" * 64,
+                        }
+                    ]
+                    if shot["index"] == 31
+                    else []
+                ),
+                "hierarchy": {
+                    "name": f'{shot["name"]}_v001',
+                    "durationSeconds": shot["duration"],
+                    "durationFrames": shot["duration"] * 30,
+                    "children": [
+                        {
+                            "name": f'{shot["name"]}_v001__SyntheticGroup',
+                            "nodeId": f'{shot["figmaNodeId"]}::group',
+                            "durationSeconds": shot["duration"],
+                            "durationFrames": shot["duration"] * 30,
+                            "children": [],
+                        }
+                    ],
+                },
+            }
+            for shot in timing["shots"]
+        ],
+        "missingFonts": [],
+        "fallbacks": [
+            {
+                "type": "raster-fallback",
+                "nodeId": f'{timing["shots"][30]["figmaNodeId"]}::raster',
+                "nodeName": "Synthetic declared raster",
+                "property": "gradient",
+                "replacement": "png",
+            }
+        ],
+        "warnings": [
+            "Raster fallback on Synthetic declared raster: gradient"
+        ],
+    }
+    import_report = {
+        "contentHash": content_hash,
+        "createdCompNames": root_names,
+        "createdMasterCompName": "VIDEO001_MASTER_v001",
+        "layerCount": 49,
+        "nativeCount": 48,
+        "rasterCount": 1,
+        "missingFonts": [],
+        "fallbacks": audit["fallbacks"],
+        "warnings": audit["warnings"],
+        "elapsedMs": 1,
+    }
+    files = {
+        "full-lesson-package.video001-ae.json": package,
+        "full-lesson-import-report.json": import_report,
+        "full-lesson-ae-audit.json": audit,
+        "full-lesson-live-session.json": {
+            "fixture": "synthetic-test-only",
+            "status": "COMPLETE",
+            "contentHash": content_hash,
+        },
+    }
+    for name, value in files.items():
+        (raw_dir / name).write_text(
+            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    (raw_dir / "full-lesson-bridge-log.jsonl").write_text(
+        json.dumps(
+            {
+                "fixture": "synthetic-test-only",
+                "event": "package-accepted",
+                "contentHash": content_hash,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_full_lesson_figma_exporter_protocol_integration():
     result = subprocess.run(
         [
@@ -116,6 +339,97 @@ def test_full_lesson_figma_exporter_protocol_integration():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_full_lesson_evidence_verifier_rejects_falsified_master_out_point(tmp_path):
+    synthetic_root = tmp_path / "synthetic-source"
+    write_synthetic_full_lesson_evidence_tree(synthetic_root)
+    assembled = subprocess.run(
+        [
+            "node",
+            str(FULL_LESSON_ASSEMBLER_PATH),
+            "--write",
+            "--root",
+            str(synthetic_root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert assembled.returncode == 0, assembled.stdout + assembled.stderr
+
+    isolated_root = tmp_path / "isolated-exporter"
+    shutil.copytree(
+        synthetic_root / "evidence/full-lesson",
+        isolated_root / "evidence/full-lesson",
+    )
+
+    def verify():
+        return subprocess.run(
+            [
+                "node",
+                str(FULL_LESSON_ASSEMBLER_PATH),
+                "--verify",
+                "--root",
+                str(isolated_root),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    first = verify()
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    audit_path = isolated_root / "evidence/full-lesson/audit.json"
+    audit = load_json(audit_path)
+    audit["master"]["layers"][31]["outPoint"] += 1
+    audit_path.write_text(
+        json.dumps(audit, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    falsified = verify()
+    assert falsified.returncode != 0
+    assert "deterministic assembler output" in (
+        falsified.stdout + falsified.stderr
+    )
+
+
+def test_synthetic_full_lesson_evidence_is_explicitly_test_only_and_redacted(
+    tmp_path,
+):
+    root = tmp_path / "synthetic-evidence"
+    write_synthetic_full_lesson_evidence_tree(root)
+    assembled = subprocess.run(
+        [
+            "node",
+            str(FULL_LESSON_ASSEMBLER_PATH),
+            "--write",
+            "--root",
+            str(root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert assembled.returncode == 0, assembled.stdout + assembled.stderr
+
+    evidence_files = sorted(
+        path
+        for path in (root / "evidence/full-lesson").rglob("*")
+        if path.is_file()
+    )
+    combined_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in evidence_files
+    )
+    assert "synthetic-test-only" in combined_text
+    assert "/Users/" not in combined_text
+    assert "pairingCode" not in combined_text
+    assert "authorization" not in combined_text.lower()
+    assert not re.search(r'"token"\s*:', combined_text, re.IGNORECASE)
+    assert not re.search(
+        r"Bearer\s+[A-Za-z0-9._~-]+", combined_text, re.IGNORECASE
+    )
 
 
 def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
@@ -617,6 +931,7 @@ def test_full_lesson_master_is_canonical_transactional_and_auditable():
     core = CORE_PATH.read_text(encoding="utf-8")
     importer = IMPORTER_PATH.read_text(encoding="utf-8")
     audit = AUDIT_PATH.read_text(encoding="utf-8")
+    full_audit = FULL_LESSON_AUDIT_SOURCE_PATH.read_text(encoding="utf-8")
     harness = HOST_RUNTIME_TEST_PATH.read_text(encoding="utf-8")
 
     assert "createdMasterCompName" in core
@@ -644,6 +959,25 @@ def test_full_lesson_master_is_canonical_transactional_and_auditable():
     )
     for timing_field in ["result.startTime", "result.inPoint", "result.outPoint"]:
         assert timing_field in audit
+    for required in [
+        "full-lesson-audit.json",
+        "VIDEO001_MASTER_v",
+        "Video001Export sha256:",
+        "Figma recursive precomp ",
+        'property("ADBE Transform Group")',
+        "projectStateUnchanged",
+        "cyclic precomp reference",
+    ]:
+        assert required in full_audit
+    for prohibited in [
+        ".setValue(",
+        ".remove(",
+        "app.project.save",
+        "app.project.close",
+        "app.endUndoGroup",
+        "app.beginUndoGroup",
+    ]:
+        assert prohibited not in full_audit
     for behavior in [
         "exact canonical 48-frame lesson",
         "reordered 48-frame lesson",

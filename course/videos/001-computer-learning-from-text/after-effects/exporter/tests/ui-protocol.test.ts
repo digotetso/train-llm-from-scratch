@@ -1356,16 +1356,370 @@ test("After Effects build packages the exact validated timing beside the panel",
 
     const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
     const builtPanel = readFileSync(join(projectRoot, "dist/ae/Video001-Figma-AE-Exporter.jsx"), "utf8");
+    const auditSource = join(projectRoot, "src/ae/audit-full-lesson.jsx");
+    const builtAudit = join(projectRoot, "dist/ae/audit-full-lesson.jsx");
     assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(timingSource, "utf8"));
+    assert.equal(readFileSync(builtAudit, "utf8"), readFileSync(auditSource, "utf8"));
     assert.match(builtPanel, /scriptDirectory\.fsName \+ "\/figma-scenes\.json"/);
     assert.doesNotMatch(builtPanel, /timingDirectory = timingDirectory\.parent/);
     assert.match(builtPanel, /\$\.global\.Video001ExporterPanel\s*=/);
     assert.match(builtPanel, /app\.scheduleTask\("\$\.global\.Video001ExporterPanel\.poll\(\)"/);
     assert.doesNotMatch(builtPanel, /app\.scheduleTask\("Video001ExporterPanel\.poll\(\)"/);
+    assert.doesNotMatch(
+      readFileSync(builtAudit, "utf8"),
+      /\blet\s+[$A-Za-z_]|\bconst\s+[$A-Za-z_]|=>|\bclass\s+[$A-Za-z_]|`|\?\.|\?\?/
+    );
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+function writeSyntheticFullLessonEvidence(root: string) {
+  const timing = JSON.parse(readFileSync(approvedTimingSource(), "utf8")) as {
+    source: { figmaFileKey: string; figmaPageNodeId: string };
+    canvas: { width: number; height: number; fps: number; timeUnit: string; duration: number };
+    shots: Array<{
+      index: number;
+      figmaNodeId: string;
+      name: string;
+      start: number;
+      duration: number;
+    }>;
+  };
+  const rawDir = join(root, "evidence/full-lesson/raw");
+  const configDir = join(root, "config");
+  mkdirSync(rawDir, { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, "video001-figma-scenes.json"),
+    JSON.stringify(timing, null, 2) + "\n",
+    "utf8"
+  );
+  const packageValue = {
+    schemaVersion: "2.0.0",
+    exporterVersion: "0.1.0",
+    exportedAt: "2026-07-23T00:00:00.000Z",
+    contentHash: "",
+    source: {
+      fileKey: timing.source.figmaFileKey,
+      pageId: timing.source.figmaPageNodeId
+    },
+    target: {
+      width: timing.canvas.width,
+      height: timing.canvas.height,
+      fps: timing.canvas.fps,
+      timeUnit: timing.canvas.timeUnit
+    },
+    frames: timing.shots.map((shot, index) => ({
+      nodeId: shot.figmaNodeId,
+      name: shot.name,
+      width: timing.canvas.width,
+      height: timing.canvas.height,
+      duration: shot.duration,
+      children: [{
+        id: shot.figmaNodeId + "::shape",
+        name: "Synthetic native shape",
+        kind: "rect",
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        rotation: 0,
+        opacity: 1,
+        fill: "#000000",
+        stroke: null,
+        strokeWidth: 0,
+        radius: 0
+      }, ...(index === 30 ? [{
+        id: shot.figmaNodeId + "::raster",
+        name: "Synthetic declared raster",
+        kind: "raster",
+        x: 100,
+        y: 100,
+        width: 100,
+        height: 100,
+        rotation: 0,
+        opacity: 1,
+        assetHash: "b".repeat(64)
+      }] : [])],
+      warnings: index === 30 ? [{
+        nodeId: shot.figmaNodeId + "::raster",
+        nodeName: "Synthetic declared raster",
+        property: "gradient",
+        fallback: "png"
+      }] : []
+    })),
+    assets: [{
+      hash: "b".repeat(64),
+      mimeType: "image/png",
+      byteLength: 8,
+      dataBase64: "iVBORw0KGgo="
+    }]
+  };
+  packageValue.contentHash = createHash("sha256")
+    .update(contentFingerprintInput(packageValue as ExporterPackage), "utf8")
+    .digest("hex");
+  const hash = packageValue.contentHash;
+  const audit = {
+    auditSchemaVersion: 1,
+    contentHash: hash,
+    itemCountBefore: 97,
+    itemCountAfter: 97,
+    projectStateUnchanged: true,
+    master: {
+      name: "VIDEO001_MASTER_v001",
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      durationSeconds: 840,
+      durationFrames: 25_200,
+      layers: timing.shots.map((shot) => ({
+        index: shot.index,
+        nodeId: shot.figmaNodeId,
+        name: shot.name + "_v001",
+        sourceComp: shot.name + "_v001",
+        startTime: shot.start,
+        inPoint: shot.start,
+        outPoint: shot.start + shot.duration
+      }))
+    },
+    shots: timing.shots.map((shot, index) => ({
+      index: shot.index,
+      nodeId: shot.figmaNodeId,
+      configuredName: shot.name,
+      name: shot.name + "_v001",
+      contentHash: hash,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      durationSeconds: shot.duration,
+      durationFrames: shot.duration * 30,
+      nativeCount: 1,
+      rasterCount: index === 30 ? 1 : 0,
+      rasterFallbacks: index === 30 ? [{
+        nodeId: shot.figmaNodeId + "::raster",
+        assetHash: "b".repeat(64)
+      }] : [],
+      hierarchy: {
+        name: shot.name + "_v001",
+        durationSeconds: shot.duration,
+        durationFrames: shot.duration * 30,
+        children: [{
+          name: shot.name + "_v001__SyntheticGroup",
+          nodeId: shot.figmaNodeId + "::group",
+          durationSeconds: shot.duration,
+          durationFrames: shot.duration * 30,
+          children: []
+        }]
+      }
+    })),
+    missingFonts: [],
+    fallbacks: [{
+      type: "raster-fallback",
+      nodeId: timing.shots[30]!.figmaNodeId + "::raster",
+      nodeName: "Synthetic declared raster",
+      property: "gradient",
+      replacement: "png"
+    }],
+    warnings: ["Raster fallback on Synthetic declared raster: gradient"]
+  };
+  const importReport = {
+    contentHash: hash,
+    createdCompNames: timing.shots.map((shot) => shot.name + "_v001"),
+    createdMasterCompName: "VIDEO001_MASTER_v001",
+    layerCount: 49,
+    nativeCount: 48,
+    rasterCount: 1,
+    missingFonts: [],
+    fallbacks: audit.fallbacks,
+    warnings: audit.warnings,
+    elapsedMs: 1
+  };
+  const paths = {
+    package: join(rawDir, "full-lesson-package.video001-ae.json"),
+    importReport: join(rawDir, "full-lesson-import-report.json"),
+    audit: join(rawDir, "full-lesson-ae-audit.json"),
+    session: join(rawDir, "full-lesson-live-session.json"),
+    bridge: join(rawDir, "full-lesson-bridge-log.jsonl")
+  };
+  writeFileSync(paths.package, JSON.stringify(packageValue, null, 2) + "\n", "utf8");
+  writeFileSync(paths.importReport, JSON.stringify(importReport, null, 2) + "\n", "utf8");
+  writeFileSync(paths.audit, JSON.stringify(audit, null, 2) + "\n", "utf8");
+  writeFileSync(paths.session, JSON.stringify({
+    fixture: "synthetic-test-only",
+    contentHash: hash,
+    status: "COMPLETE"
+  }, null, 2) + "\n", "utf8");
+  writeFileSync(paths.bridge, JSON.stringify({
+    fixture: "synthetic-test-only",
+    event: "package-accepted",
+    contentHash: hash
+  }) + "\n", "utf8");
+  return { timing, packageValue, audit, paths };
+}
+
+function runFullLessonEvidence(root: string, mode: "--write" | "--verify") {
+  const script = new URL("../scripts/assemble-full-lesson-evidence.mjs", import.meta.url);
+  return spawnSync(process.execPath, [script.pathname, mode, "--root", root], {
+    cwd: PROJECT_ROOT,
+    encoding: "utf8"
+  });
+}
+
+function restampSyntheticPackage(value: Record<string, unknown>) {
+  value.contentHash = createHash("sha256").update(
+    canonicalJsonForEvidence({ ...value, exportedAt: "", contentHash: "" }), "utf8"
+  ).digest("hex");
+}
+
+test("full-lesson evidence is independently derived and deterministic from synthetic raw proof", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "video001-full-evidence-"));
+  try {
+    const fixtureData = writeSyntheticFullLessonEvidence(fixture);
+    const written = runFullLessonEvidence(fixture, "--write");
+    assert.equal(written.status, 0, written.stdout + "\n" + written.stderr);
+    const verified = runFullLessonEvidence(fixture, "--verify");
+    assert.equal(verified.status, 0, verified.stdout + "\n" + verified.stderr);
+    for (const name of ["audit.json", "summary.json", "manifest.json"]) {
+      assert.doesNotThrow(() => readFileSync(join(fixture, "evidence/full-lesson", name)));
+    }
+    const summary = JSON.parse(
+      readFileSync(join(fixture, "evidence/full-lesson/summary.json"), "utf8")
+    ) as {
+      status: string;
+      shotCount: number;
+      durationSeconds: number;
+      durationFrames: number;
+      nativeCount: number;
+      rasterCount: number;
+      missingFontCount: number;
+      fallbackCount: number;
+      contentHash: string;
+    };
+    assert.deepEqual(summary, {
+      status: "PASS",
+      shotCount: 48,
+      durationSeconds: 840,
+      durationFrames: 25_200,
+      nativeCount: 48,
+      rasterCount: 1,
+      missingFontCount: 0,
+      fallbackCount: 1,
+      contentHash: fixtureData.packageValue.contentHash
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+for (const [label, mutate, expected] of [
+  ["wrong package schema", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.schemaVersion = "1.0.0";
+    restampSyntheticPackage(value);
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /schemaVersion|2\.0\.0/i],
+  ["noncanonical package hash", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.contentHash = "f".repeat(64);
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /contentHash|canonical/i],
+  ["wrong package time unit", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.target.timeUnit = "frames";
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /timeUnit|seconds/i],
+  ["wrong package source", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.source.pageId = "wrong:page";
+    restampSyntheticPackage(value);
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /source/i],
+  ["wrong package duration", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    value.frames[10].duration += 1;
+    restampSyntheticPackage(value);
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /duration|840|gap|overlap/i],
+  ["reordered package node IDs", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.package, "utf8"));
+    [value.frames[0], value.frames[1]] = [value.frames[1], value.frames[0]];
+    restampSyntheticPackage(value);
+    writeFileSync(fixture.paths.package, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /order|node ID/i],
+  ["wrong master duration", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.master.durationSeconds = 839;
+    value.master.durationFrames = 25_170;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /master|840|25200/i],
+  ["master timing gap", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.master.layers[10].startTime += 1;
+    value.master.layers[10].inPoint += 1;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /start|gap/i],
+  ["master timing overlap", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.master.layers[10].startTime -= 1;
+    value.master.layers[10].inPoint -= 1;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /start|overlap/i],
+  ["wrong master source", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.master.layers[10].sourceComp = value.master.layers[11].sourceComp;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /source/i],
+  ["wrong master out point", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.master.layers[10].outPoint += 1;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /out point/i],
+  ["wrong recursive duration", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.shots[10].hierarchy.children[0].durationSeconds -= 1;
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /recursive|duration/i],
+  ["unexpected raster fallback", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.shots[10].rasterCount = 1;
+    value.shots[10].rasterFallbacks = [{
+      nodeId: "unexpected:raster",
+      assetHash: "a".repeat(64)
+    }];
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /raster fallback|raster/i],
+  ["credential disclosure", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    writeFileSync(fixture.paths.bridge, '{"authorization":"Bearer ' + "A".repeat(43) + '"}\n', "utf8");
+  }, /credential|authorization|secret/i],
+  ["mutable user path", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.projectPath = "/Users/example/Video001.aep";
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /\/Users\/|mutable user path/i]
+] as const) {
+  test("full-lesson evidence rejects " + label, () => {
+    const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-defect-"));
+    try {
+      const fixture = writeSyntheticFullLessonEvidence(root);
+      mutate(fixture);
+      const result = runFullLessonEvidence(root, "--write");
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + "\n" + result.stderr, expected);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+function canonicalJsonForEvidence(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalJsonForEvidence).join(",") + "]";
+  const record = value as Record<string, unknown>;
+  return "{" + Object.keys(record).sort().map((key) =>
+    JSON.stringify(key) + ":" + canonicalJsonForEvidence(record[key])
+  ).join(",") + "}";
+}
 
 test("plain build uses the committed canonical Video 001 timing", () => {
   const projectRoot = fileURLToPath(PROJECT_ROOT);

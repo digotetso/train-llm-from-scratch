@@ -272,6 +272,18 @@ function assertExtendScriptBundle(value, label) {
   }
 }
 
+function assertReadOnlyAudit(value, label) {
+  for (const [description, pattern] of [
+    ["property setter", /\.setValue\s*\(/],
+    ["item removal", /\.remove\s*\(/],
+    ["project save", /app\.project\.save/],
+    ["project close", /app\.project\.close/],
+    ["undo group mutation", /app\.(?:beginUndoGroup|endUndoGroup)/]
+  ]) {
+    if (pattern.test(value)) throw new Error(`${label} contains prohibited ${description}`);
+  }
+}
+
 export async function buildBridge({ projectRoot } = {}) {
   const root = resolve(projectRoot ?? rootFromScript);
   const destination = join(root, "dist", "bridge");
@@ -314,11 +326,15 @@ export async function buildAfterEffects({ projectRoot, environment = process.env
   }
   const panel = `${sourceParts.join("\n\n")}\n`;
   const audit = await readFile(join(sourceDirectory, "audit-export.jsx"), "utf8");
+  const fullLessonAudit = await readFile(join(sourceDirectory, "audit-full-lesson.jsx"), "utf8");
   assertExtendScriptBundle(panel, "After Effects panel");
   assertExtendScriptBundle(audit, "After Effects audit");
+  assertExtendScriptBundle(fullLessonAudit, "After Effects full-lesson audit");
+  assertReadOnlyAudit(fullLessonAudit, "After Effects full-lesson audit");
   await mkdir(destination, { recursive: true });
   await writeFile(join(destination, "Video001-Figma-AE-Exporter.jsx"), panel, { encoding: "utf8", mode: 0o600 });
   await writeFile(join(destination, "audit-export.jsx"), audit, { encoding: "utf8", mode: 0o600 });
+  await writeFile(join(destination, "audit-full-lesson.jsx"), fullLessonAudit, { encoding: "utf8", mode: 0o600 });
   await writeFile(join(destination, "figma-scenes.json"), timingSource, { encoding: "utf8", mode: 0o600 });
   return { destination, scenesPath };
 }

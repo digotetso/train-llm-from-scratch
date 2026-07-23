@@ -2064,3 +2064,267 @@ test("read-only audit records timing only for precomp layers without changing pr
     outPoint: 540
   });
 });
+
+type FullLessonAuditDefect =
+  | "gap"
+  | "overlap"
+  | "wrong-source"
+  | "wrong-hash"
+  | "wrong-recursive-duration"
+  | "unexpected-raster"
+  | "project-mutation";
+
+function runFullLessonAudit(defect?: FullLessonAuditDefect) {
+  const sourceUrl = new URL("../src/ae/audit-full-lesson.jsx", import.meta.url);
+  const source = readFileSync(sourceUrl, "utf8");
+  const timing = canonicalTiming();
+  const hash = "c".repeat(64);
+  const records = new Map<string, string>();
+  let output = "";
+
+  class FolderMock {
+    static userData = new FolderMock("/user-data");
+    readonly fsName: string;
+    constructor(path: string) { this.fsName = path.replace(/\/$/, ""); }
+  }
+  class FileMock {
+    static encoding = "UTF-8";
+    readonly fsName: string;
+    encoding = "UTF-8";
+    private mode = "";
+    constructor(path: string) { this.fsName = path; }
+    get parent(): FolderMock {
+      return new FolderMock(this.fsName.slice(0, this.fsName.lastIndexOf("/")));
+    }
+    get exists(): boolean { return records.has(this.fsName); }
+    open(mode: string): boolean {
+      this.mode = mode;
+      return mode === "r" ? this.exists : true;
+    }
+    read(): string {
+      if (defect === "project-mutation" && this.fsName.endsWith("/figma-scenes.json")) {
+        projectItems.push(new FolderItemMock("mutation"));
+      }
+      return records.get(this.fsName) ?? "";
+    }
+    write(value: string): boolean {
+      assert.equal(this.mode, "w");
+      output = value;
+      records.set(this.fsName, value);
+      return true;
+    }
+    close(): void {}
+  }
+  class AuditComp {
+    readonly name: string;
+    readonly width = 1920;
+    readonly height = 1080;
+    readonly frameRate = 30;
+    readonly duration: number;
+    readonly comment: string;
+    readonly timelineLayers: object[];
+    constructor(name: string, duration: number, comment: string, layers: object[] = []) {
+      this.name = name;
+      this.duration = duration;
+      this.comment = comment;
+      this.timelineLayers = layers;
+    }
+    get numLayers(): number { return this.timelineLayers.length; }
+    layer(index: number): object { return this.timelineLayers[index - 1]!; }
+  }
+  class AuditAvLayer {
+    readonly name: string;
+    readonly comment: string;
+    readonly source: AuditComp | AuditFootage;
+    readonly startTime: number;
+    readonly inPoint: number;
+    readonly outPoint: number;
+    readonly enabled = true;
+    constructor(
+      name: string,
+      comment: string,
+      source: AuditComp | AuditFootage,
+      startTime = 0,
+      inPoint = 0,
+      outPoint = source instanceof AuditComp ? source.duration : 1
+    ) {
+      this.name = name;
+      this.comment = comment;
+      this.source = source;
+      this.startTime = startTime;
+      this.inPoint = inPoint;
+      this.outPoint = outPoint;
+    }
+    property(matchName: string): object | null {
+      return matchName === "ADBE Transform Group" ? { matchName } : null;
+    }
+  }
+  class AuditShapeLayer {
+    readonly name: string;
+    readonly comment: string;
+    readonly enabled = true;
+    constructor(name: string, comment: string) {
+      this.name = name;
+      this.comment = comment;
+    }
+    property(matchName: string): object | null {
+      return matchName === "ADBE Transform Group" ? { matchName } : null;
+    }
+  }
+  class AuditFootage {
+    readonly name: string;
+    constructor(name: string) { this.name = name; }
+  }
+  class EmptyClass {}
+
+  const roots: AuditComp[] = [];
+  const allComps: AuditComp[] = [];
+  for (let index = 0; index < timing.shots.length; index += 1) {
+    const shot = timing.shots[index]!;
+    const recursiveDuration =
+      defect === "wrong-recursive-duration" && index === 12
+        ? shot.duration - 1
+        : shot.duration;
+    const recursive = new AuditComp(
+      shot.name + "_v001__Group",
+      recursiveDuration,
+      "Figma recursive precomp " + shot.figmaNodeId + "::group",
+      [new AuditShapeLayer(
+        "Native " + String(index + 1),
+        "Figma native vector " + shot.figmaNodeId + "::shape rect"
+      )]
+    );
+    const rootLayers: object[] = [
+      new AuditAvLayer(
+        "Group",
+        "Figma group precomp " + shot.figmaNodeId + "::group",
+        recursive,
+        0,
+        0,
+        shot.duration
+      )
+    ];
+    if (defect === "unexpected-raster" && index === 20) {
+      rootLayers.push(new AuditAvLayer(
+        "Unexpected raster",
+        "Figma raster fallback " + shot.figmaNodeId + "::raster sha256:" + "d".repeat(64),
+        new AuditFootage("unexpected.png")
+      ));
+    }
+    const rootHash = defect === "wrong-hash" && index === 7 ? "e".repeat(64) : hash;
+    const root = new AuditComp(
+      shot.name + "_v001",
+      shot.duration,
+      "Video001Export sha256:" + rootHash,
+      rootLayers
+    );
+    roots.push(root);
+    allComps.push(recursive, root);
+  }
+  const masterLayers = timing.shots.map((shot, index) => {
+    let source = roots[index]!;
+    let start = shot.start;
+    if (defect === "wrong-source" && index === 9) source = roots[index + 1]!;
+    if (defect === "gap" && index === 18) start += 1;
+    if (defect === "overlap" && index === 18) start -= 1;
+    return new AuditAvLayer(
+      source.name,
+      "",
+      source,
+      start,
+      start,
+      start + shot.duration
+    );
+  });
+  const master = new AuditComp(
+    "VIDEO001_MASTER_v001",
+    840,
+    "Video001Export sha256:" + hash,
+    masterLayers
+  );
+  const projectItems: Array<AuditComp | FolderItemMock> = [...allComps, master];
+  const project = mutationRejectingProxy({
+    activeItem: master,
+    file: null,
+    get numItems() { return projectItems.length; },
+    item(index: number) { return projectItems[index - 1]!; }
+  }, "fullLessonProject");
+  records.set("/bundle/ae/figma-scenes.json", JSON.stringify(timing));
+  records.set(
+    "/user-data/Video001FigmaAEExporter/import-report-" + hash + ".json",
+    JSON.stringify({
+      contentHash: hash,
+      createdCompNames: roots.map((root) => root.name),
+      createdMasterCompName: master.name,
+      nativeCount: 96,
+      rasterCount: 0,
+      missingFonts: [],
+      fallbacks: [],
+      warnings: []
+    })
+  );
+  const context = {
+    $: { fileName: "/bundle/ae/audit-full-lesson.jsx" },
+    File: FileMock,
+    Folder: FolderMock,
+    CompItem: AuditComp,
+    AVLayer: AuditAvLayer,
+    TextLayer: EmptyClass,
+    ShapeLayer: AuditShapeLayer,
+    CameraLayer: EmptyClass,
+    LightLayer: EmptyClass,
+    app: { project }
+  };
+
+  vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
+  return {
+    audit: JSON.parse(output) as {
+      contentHash: string;
+      itemCountBefore: number;
+      itemCountAfter: number;
+      projectStateUnchanged: boolean;
+      master: {
+        durationSeconds: number;
+        durationFrames: number;
+        layers: Array<Record<string, unknown>>;
+      };
+      shots: Array<{
+        nodeId: string;
+        durationSeconds: number;
+        durationFrames: number;
+        hierarchy: { children: unknown[] };
+      }>;
+    },
+    timing
+  };
+}
+
+test("full-lesson audit traverses all 48 root comps and recursive precomps without mutation", () => {
+  const { audit, timing } = runFullLessonAudit();
+  const timingById = new Map(timing.shots.map((shot) => [shot.figmaNodeId, shot]));
+
+  assert.equal(audit.master.durationSeconds, 840);
+  assert.equal(audit.master.durationFrames, 25_200);
+  assert.equal(audit.master.layers.length, 48);
+  assert.equal(audit.shots.length, 48);
+  assert.ok(audit.shots.every((shot) =>
+    shot.durationSeconds === timingById.get(shot.nodeId)!.duration
+  ));
+  assert.ok(audit.shots.every((shot) => shot.hierarchy.children.length === 1));
+  assert.equal(audit.itemCountBefore, audit.itemCountAfter);
+  assert.equal(audit.projectStateUnchanged, true);
+});
+
+for (const [defect, expected] of [
+  ["gap", /gap|start/i],
+  ["overlap", /overlap|start/i],
+  ["wrong-source", /source comp/i],
+  ["wrong-hash", /content hash/i],
+  ["wrong-recursive-duration", /recursive precomp duration/i],
+  ["unexpected-raster", /unexpected raster fallback/i],
+  ["project-mutation", /project.*change|item-count/i]
+] as const) {
+  test("full-lesson audit rejects " + defect, () => {
+    assert.throws(() => runFullLessonAudit(defect), expected);
+  });
+}
