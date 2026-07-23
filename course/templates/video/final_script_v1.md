@@ -252,7 +252,7 @@ We have traced the policy from input to output. Before moving farther, let’s t
 
 ## 10:45 Predict, Run, and Explain
 
-Use this small program to inspect the representation of `Cat`:
+Use this companion file to inspect the representation of `Cat`:
 
 ```python
 text = "Cat"
@@ -260,38 +260,38 @@ text = "Cat"
 print("Human-readable text:", text)
 print("Unicode code points:", [ord(character) for character in text])
 print("UTF-8 bytes:", list(text.encode("utf-8")))
-print("Model-ready training input? Not yet")
-print("Later stages produce tokens, token IDs, and embeddings.")
+print("Ready for later AI training? Not yet")
+print("Tokens, token IDs, and embeddings belong to later stages.")
 ```
 
-Before running it, predict:
+Before you run it, pause. Predict both lists:
 
 - the Unicode code-point list; and
 - the UTF-8 byte list.
 
-Then run:
+Can you also explain why the values should match for these three characters? Now run:
 
 ```bash
-python course/videos/001-computer-learning-from-text/lab.py
+python course/templates/video/final_script_v1_lab.py
 ```
 
-The expected output is:
+You should observe five lines:
 
 ```text
 Human-readable text: Cat
 Unicode code points: [67, 97, 116]
 UTF-8 bytes: [67, 97, 116]
-Model-ready training input? Not yet
-Later stages produce tokens, token IDs, and embeddings.
+Ready for later AI training? Not yet
+Tokens, token IDs, and embeddings belong to later stages.
 ```
 
-Line by line:
+Now explain the result from the rules:
 
 - `ord(character)` follows the Unicode agreement from each character to its code point;
 - `text.encode("utf-8")` converts the Unicode string into UTF-8 bytes; and
 - `list(...)` exposes the individual byte values so that we can inspect them.
 
-For `Cat`, the two numerical lists match because the characters are in the ASCII range.
+For `Cat`, the two lists match because these characters are in the ASCII range. The final two lines remind us that representation and preparation are only the early stages.
 
 Now change only this line:
 
@@ -308,26 +308,30 @@ UTF-8 bytes: [65]
 
 Run the same command, compare the result with your prediction, and explain it using the same Unicode and UTF-8 rules. Then restore `Cat`.
 
-You can apply the same predict-and-explain method to the preparation function. Under the repository’s NFKC policy, predict what happens to:
+This companion lab does not call `normalize_text`; it tests character representation and byte encoding. Keep the preparation prediction separate.
+
+Under the repository’s NFKC policy, predict both results:
 
 ```text
-①
+① -> ?
+ﬀ -> ?
 ```
 
-The prepared character is:
+The prepared forms are:
 
 ```text
-1
+① -> 1
+ﬀ -> ff
 ```
 
-The representation example and the preparation example test different jobs:
+These examples still test different jobs:
 
 ```text
 ord and UTF-8 encoding -> inspect character representation and storage
 normalize_text         -> prepare source text according to repository rules
 ```
 
-This cycle—predict, run, observe, explain, change, and compare—tests the rules instead of your memory of one output.
+Predict, run, observe, explain, change, and compare. That cycle tests the rules instead of your memory of one output.
 
 ## 13:20 Return to the Whole Route
 
