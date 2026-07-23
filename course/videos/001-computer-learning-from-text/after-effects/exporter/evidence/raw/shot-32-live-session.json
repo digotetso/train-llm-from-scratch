@@ -1,0 +1,44 @@
+{
+  "figma": {
+    "selection": {
+      "count": 1,
+      "nodeId": "95:44",
+      "name": "S001_SH32_Repo_PreparationNotLearning"
+    },
+    "build": {
+      "status": "PACKAGE_READY",
+      "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+      "nativeCount": 30,
+      "rasterCount": 0
+    },
+    "pair": {
+      "httpStatus": 200,
+      "code": "PAIRED"
+    },
+    "send": {
+      "httpStatus": 202,
+      "code": "EXPORT_ACCEPTED",
+      "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb"
+    }
+  },
+  "afterEffects": {
+    "firstImport": {
+      "status": "IMPORTED",
+      "createdCompName": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "itemCount": 10
+    },
+    "unchangedResend": {
+      "sendHttpStatus": 202,
+      "importStatus": "DUPLICATE_CONTENT",
+      "queueCountAfterImport": 0,
+      "itemCount": 10
+    },
+    "projectName": "Video001-Exporter-Shot32-Live.aep"
+  },
+  "buildArtifacts": {
+    "panelSha256": "b7e7797ec024b98732502bdfead5f3082c930ee349443377074498f2f5c63ea4",
+    "timingSha256": "eb9e0786bcc53fb99ae055ac64be2eae73e5941e83f7ab83a28a19841a35d0a6",
+    "bridgeSha256": "5e05f46a9db21ef1c85d2b97a7b53bf6dc6743a0141fdb729babce46e41be417"
+  },
+  "operatorNote": "A redundant retry of the already-used one-time code returned PAIRING_FAILED as designed. A fresh authorized pairing was then used for the unchanged resend; no credential value was retained."
+}

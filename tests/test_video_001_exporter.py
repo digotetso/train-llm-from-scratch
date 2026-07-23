@@ -1,5 +1,9 @@
 import json
+import hashlib
 import re
+import shutil
+import struct
+import subprocess
 from pathlib import Path
 
 
@@ -14,6 +18,10 @@ PANEL_PATH = AE_SOURCE_DIR / "panel.jsx"
 AUDIT_PATH = AE_SOURCE_DIR / "audit-export.jsx"
 HOST_RUNTIME_TEST_PATH = EXPORTER_DIR / "tests/ae-host-runtime.test.ts"
 SHOT_32_AUDIT_PATH = EXPORTER_DIR / "evidence/shot-32-audit.json"
+SHOT_32_COMPARISON_PATH = EXPORTER_DIR / "evidence/shot-32-comparison.json"
+SHOT_32_REFERENCE_PATH = EXPORTER_DIR / "tests/fixtures/shot-32-reference.json"
+SHOT_32_RAW_DIR = EXPORTER_DIR / "evidence/raw"
+SHOT_32_ASSEMBLER_PATH = EXPORTER_DIR / "scripts/assemble-shot-32-evidence.mjs"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -26,8 +34,72 @@ def ae_sources() -> dict[Path, str]:
     return {path: path.read_text(encoding="utf-8") for path in paths}
 
 
+def load_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256_path(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    payload = path.read_bytes()
+    assert payload[:8] == b"\x89PNG\r\n\x1a\n"
+    assert payload[12:16] == b"IHDR"
+    return struct.unpack(">II", payload[16:24])
+
+
+def canonical_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def flatten_package_nodes(nodes, path=()):
+    flattened = []
+    fields = [
+        "id",
+        "name",
+        "kind",
+        "x",
+        "y",
+        "width",
+        "height",
+        "rotation",
+        "opacity",
+        "text",
+        "textBox",
+        "paragraph",
+        "runs",
+        "fill",
+        "stroke",
+        "strokeWidth",
+        "radius",
+        "assetHash",
+    ]
+    for index, node in enumerate(nodes):
+        entry = {"path": [*path, index], "zIndex": index}
+        entry.update({field: node[field] for field in fields if node.get(field) is not None})
+        flattened.append(entry)
+        flattened.extend(flatten_package_nodes(node.get("children", []), (*path, index)))
+    return flattened
+
+
+def stable_v001_audit(audit):
+    return {
+        key: audit[key]
+        for key in [
+            "comp",
+            "layers",
+            "precompHierarchy",
+            "contentHash",
+            "missingFonts",
+            "rasterFallbacks",
+            "warnings",
+        ]
+    }
+
+
 def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
-    audit = json.loads(SHOT_32_AUDIT_PATH.read_text(encoding="utf-8"))
+    audit = load_json(SHOT_32_AUDIT_PATH)
 
     assert audit["comp"]["name"] == "S001_SH32_Repo_PreparationNotLearning_v001"
     assert audit["comp"]["width"] == 1920
@@ -53,6 +125,261 @@ def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
     ]
     assert audit["v001Immutable"] is True
     assert audit["mutatedPreexistingItems"] == []
+
+
+def test_shot_32_summaries_are_deterministically_derived_from_raw_evidence():
+    assert SHOT_32_ASSEMBLER_PATH.is_file(), "the deterministic evidence assembler is missing"
+    verification = subprocess.run(
+        ["node", str(SHOT_32_ASSEMBLER_PATH), "--verify"],
+        cwd=EXPORTER_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert verification.returncode == 0, verification.stdout + verification.stderr
+
+    package_path = SHOT_32_RAW_DIR / "shot-32-package.video001-ae.json"
+    result_path = SHOT_32_RAW_DIR / "shot-32-final-result.json"
+    before_path = SHOT_32_RAW_DIR / "shot-32-v001-before.json"
+    after_path = SHOT_32_RAW_DIR / "shot-32-v001-after.json"
+    timing_path = SHOT_32_RAW_DIR / "shot-32-timing.json"
+    metrics_path = SHOT_32_RAW_DIR / "shot-32-image-metrics.json"
+    manifest_path = SHOT_32_RAW_DIR / "shot-32-evidence-manifest.json"
+    for path in [
+        package_path,
+        result_path,
+        before_path,
+        after_path,
+        timing_path,
+        metrics_path,
+        manifest_path,
+    ]:
+        assert path.is_file(), f"missing raw evidence: {path.name}"
+
+    package = load_json(package_path)
+    result = load_json(result_path)
+    before = load_json(before_path)
+    after = load_json(after_path)
+    timing = load_json(timing_path)
+    metrics = load_json(metrics_path)
+    manifest = load_json(manifest_path)
+    reference = load_json(SHOT_32_REFERENCE_PATH)
+    audit = load_json(SHOT_32_AUDIT_PATH)
+    comparison = load_json(SHOT_32_COMPARISON_PATH)
+
+    for relative_path, expected_hash in manifest["sha256"].items():
+        assert sha256_path(EXPORTER_DIR / relative_path) == expected_hash
+
+    fingerprint_value = {**package, "exportedAt": "", "contentHash": ""}
+    computed_content_hash = hashlib.sha256(
+        canonical_json(fingerprint_value).encode("utf-8")
+    ).hexdigest()
+    assert package["contentHash"] == computed_content_hash
+    assert reference["contentHash"] == computed_content_hash
+    assert reference["packageSha256"] == sha256_path(package_path)
+    assert reference["timingSha256"] == sha256_path(timing_path)
+
+    frame = package["frames"][0]
+    flattened_nodes = flatten_package_nodes(frame["children"])
+    assert reference["frame"]["nodes"] == flattened_nodes
+    assert reference["frame"]["nodeId"] == frame["nodeId"] == "95:44"
+    assert reference["frame"]["name"] == frame["name"]
+    assert reference["frame"]["duration"] == frame["duration"] == 28
+    timing_shot = next(shot for shot in timing["shots"] if shot["figmaNodeId"] == frame["nodeId"])
+    assert timing["source"]["figmaFileKey"] == package["source"]["fileKey"]
+    assert timing["source"]["figmaPageNodeId"] == package["source"]["pageId"]
+    assert timing_shot["name"] == frame["name"]
+    assert timing_shot["duration"] == frame["duration"]
+    assert reference["frame"]["nativeNodeCount"] == len(flattened_nodes) == 30
+    assert reference["frame"]["rasterNodeCount"] == sum(
+        node["kind"] == "raster" for node in flattened_nodes
+    ) == 0
+
+    assert stable_v001_audit(before) == stable_v001_audit(after)
+    for key in [
+        "comp",
+        "layers",
+        "precompHierarchy",
+        "contentHash",
+        "missingFonts",
+        "rasterFallbacks",
+        "warnings",
+    ]:
+        assert audit[key] == after[key]
+
+    payload = result["payload"]
+    assert result["status"] == "COMPLETE"
+    assert audit["original"] == payload["original"]
+    assert audit["duplicate"] == payload["duplicate"]
+    assert audit["changed"] == payload["changed"]
+    assert audit["textChecks"] == payload["textChecks"]
+    assert audit["duplicate"]["status"] == "DUPLICATE_CONTENT"
+    assert audit["duplicate"]["itemCountBefore"] == audit["duplicate"]["itemCountAfter"]
+    assert audit["changed"]["createdCompNames"] == [
+        "S001_SH32_Repo_PreparationNotLearning_v002"
+    ]
+    assert audit["v001Immutable"] is True
+    assert audit["hardChecks"]["v001Immutable"] is True
+    assert audit["mutatedPreexistingItems"] == payload["mutatedPreexistingItems"] == []
+
+    texts = {layer["name"]: layer["text"] for layer in after["layers"] if layer["type"] == "text"}
+    assert texts["MODEL_Parameters"] == "θ"
+    assert "·" in texts["TXT_Caveat"]
+    assert payload["textChecks"]["TXT_Title"]["lineCount"] == reference["expected"]["TXT_Title"]["lineCount"]
+    assert payload["textChecks"]["MODEL_Parameters"]["fauxBold"] is True
+    assert payload["textChecks"]["TXT_Deck"]["fauxBold"] is False
+    assert payload["original"]["nativeCount"] == len(flattened_nodes)
+    assert payload["original"]["rasterCount"] == 0
+
+    figma_path = EXPORTER_DIR / "evidence/shot-32-figma.png"
+    ae_path = EXPORTER_DIR / "evidence/shot-32-ae.png"
+    assert png_dimensions(figma_path) == png_dimensions(ae_path) == (1920, 1080)
+    assert comparison["figma"]["sha256"] == sha256_path(figma_path)
+    assert comparison["afterEffects"]["sha256"] == sha256_path(ae_path)
+    assert comparison["pixelDiagnostics"] == metrics["pixelDiagnostics"]
+
+
+def test_shot_32_verifier_rejects_summary_falsification_and_raw_byte_drift(tmp_path):
+    isolated_exporter = tmp_path / "exporter"
+    shutil.copytree(EXPORTER_DIR / "evidence", isolated_exporter / "evidence")
+    (isolated_exporter / "tests/fixtures").mkdir(parents=True)
+    shutil.copy2(
+        SHOT_32_REFERENCE_PATH,
+        isolated_exporter / "tests/fixtures/shot-32-reference.json",
+    )
+
+    def verify():
+        return subprocess.run(
+            [
+                "node",
+                str(SHOT_32_ASSEMBLER_PATH),
+                "--verify",
+                "--root",
+                str(isolated_exporter),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert verify().returncode == 0
+
+    isolated_audit_path = isolated_exporter / "evidence/shot-32-audit.json"
+    falsified_audit = load_json(isolated_audit_path)
+    falsified_audit["hardChecks"]["nativeCount"] = 999
+    isolated_audit_path.write_text(
+        json.dumps(falsified_audit, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    assert verify().returncode != 0
+
+    shutil.copy2(SHOT_32_AUDIT_PATH, isolated_audit_path)
+    isolated_package_path = (
+        isolated_exporter / "evidence/raw/shot-32-package.video001-ae.json"
+    )
+    isolated_package_path.write_bytes(isolated_package_path.read_bytes() + b"\n")
+    assert verify().returncode != 0
+
+
+def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
+    live_session_path = SHOT_32_RAW_DIR / "shot-32-live-session.json"
+    live_package_path = SHOT_32_RAW_DIR / "shot-32-live-package.video001-ae.json"
+    live_bridge_log_path = SHOT_32_RAW_DIR / "shot-32-live-bridge-log.jsonl"
+    live_import_report_path = SHOT_32_RAW_DIR / "shot-32-live-import-report.json"
+    live_ae_result_path = SHOT_32_RAW_DIR / "shot-32-live-ae-result.json"
+    for path in [
+        live_session_path,
+        live_package_path,
+        live_bridge_log_path,
+        live_import_report_path,
+        live_ae_result_path,
+    ]:
+        assert path.is_file(), f"missing live-path evidence: {path.name}"
+
+    combined_raw_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            live_session_path,
+            live_package_path,
+            live_bridge_log_path,
+            live_import_report_path,
+            live_ae_result_path,
+        ]
+    )
+    assert "/Users/" not in combined_raw_text
+    assert "pairingCode" not in combined_raw_text
+    assert "authorization" not in combined_raw_text.lower()
+    assert not re.search(r'"token"\s*:', combined_raw_text, re.IGNORECASE)
+    assert not re.search(r'Bearer\s+[A-Za-z0-9._~-]+', combined_raw_text, re.IGNORECASE)
+
+    package = load_json(live_package_path)
+    session = load_json(live_session_path)
+    import_report = load_json(live_import_report_path)
+    ae_result = load_json(live_ae_result_path)
+    bridge_events = [
+        json.loads(line)
+        for line in live_bridge_log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    fingerprint_value = {**package, "exportedAt": "", "contentHash": ""}
+    computed_content_hash = hashlib.sha256(
+        canonical_json(fingerprint_value).encode("utf-8")
+    ).hexdigest()
+    build = subprocess.run(
+        ["node", str(EXPORTER_DIR / "scripts/build.mjs")],
+        cwd=EXPORTER_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+    assert session["buildArtifacts"] == {
+        "panelSha256": sha256_path(
+            EXPORTER_DIR / "dist/ae/Video001-Figma-AE-Exporter.jsx"
+        ),
+        "timingSha256": sha256_path(EXPORTER_DIR / "dist/ae/figma-scenes.json"),
+        "bridgeSha256": sha256_path(
+            EXPORTER_DIR / "dist/bridge/video001-bridge.mjs"
+        ),
+    }
+
+    assert package["contentHash"] == computed_content_hash
+    assert package["source"] == {"fileKey": "fFTux3sx2AzVQtoya67f95", "pageId": "90:2"}
+    assert package["frames"][0]["nodeId"] == "95:44"
+    assert package["frames"][0]["name"] == "S001_SH32_Repo_PreparationNotLearning"
+    assert session["figma"]["selection"] == {
+        "count": 1,
+        "nodeId": "95:44",
+        "name": "S001_SH32_Repo_PreparationNotLearning",
+    }
+    assert session["figma"]["build"] == {
+        "status": "PACKAGE_READY",
+        "contentHash": computed_content_hash,
+        "nativeCount": 30,
+        "rasterCount": 0,
+    }
+    assert session["figma"]["pair"] == {"httpStatus": 200, "code": "PAIRED"}
+    assert session["figma"]["send"] == {
+        "httpStatus": 202,
+        "code": "EXPORT_ACCEPTED",
+        "contentHash": computed_content_hash,
+    }
+    assert any(event["route"] == "pair" and event["status"] == 200 for event in bridge_events)
+    assert sum(
+        event["route"] == "export" and event["status"] == 202
+        for event in bridge_events
+    ) >= 2
+    assert import_report["contentHash"] == computed_content_hash
+    assert import_report["createdCompNames"] == [
+        "S001_SH32_Repo_PreparationNotLearning_v001"
+    ]
+    assert ae_result["status"] == "COMPLETE"
+    assert ae_result["payload"]["contentHash"] == computed_content_hash
+    assert ae_result["payload"]["duplicateStatus"] == "DUPLICATE_CONTENT"
+    assert ae_result["payload"]["itemCountAfterFirst"] == ae_result["payload"]["itemCountAfterDuplicate"]
+    assert ae_result["payload"]["compNames"] == [
+        "S001_SH32_Repo_PreparationNotLearning_v001"
+    ]
 
 
 def test_after_effects_sources_forbid_destructive_project_and_process_calls():

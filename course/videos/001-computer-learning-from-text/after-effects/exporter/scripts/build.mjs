@@ -194,7 +194,7 @@ function timingSourcePath(projectRoot, environment) {
     if (!isAbsolute(override)) throw new TypeError("VIDEO001_FIGMA_SCENES must be an absolute path");
     return override;
   }
-  return resolve(projectRoot, "..", "figma-scenes.json");
+  return resolve(projectRoot, "config", "video001-figma-scenes.json");
 }
 
 function browserBuildOptions(entryPoint) {
@@ -253,7 +253,7 @@ function assertExtendScriptBundle(value, label) {
     ["template literals", /`/],
     ["optional chaining", /\?\./],
     ["nullish coalescing", /\?\?/],
-    ["Node globals", /\b(?:require|module|exports|process|Buffer|global)\b/],
+    ["Node globals", /\b(?:require|module|exports|process|Buffer)\b|(?:^|[^.$A-Za-z0-9_])global\b/m],
     ["Array prototype additions", /Array\.prototype\./]
   ];
   for (const [description, pattern] of prohibitedPatterns) {
@@ -287,12 +287,20 @@ export async function buildBridge({ projectRoot } = {}) {
   return { destination };
 }
 
-export async function buildAfterEffects({ projectRoot } = {}) {
+export async function buildAfterEffects({ projectRoot, environment = process.env } = {}) {
   const root = resolve(projectRoot ?? rootFromScript);
   const sourceDirectory = join(root, "src", "ae");
   const destination = join(root, "dist", "ae");
+  const scenesPath = timingSourcePath(root, environment);
   const sourceNames = ["import-core.jsxinc", "importer.jsxinc", "panel.jsx"];
   const sourceParts = [];
+  let timingSource;
+  try {
+    timingSource = await readFile(scenesPath, "utf8");
+    validateVideo001Scenes(JSON.parse(timingSource));
+  } catch (error) {
+    throw new Error(`Unable to package valid Video 001 timings from ${scenesPath}`, { cause: error });
+  }
   for (const sourceName of sourceNames) {
     sourceParts.push(await readFile(join(sourceDirectory, sourceName), "utf8"));
   }
@@ -303,7 +311,8 @@ export async function buildAfterEffects({ projectRoot } = {}) {
   await mkdir(destination, { recursive: true });
   await writeFile(join(destination, "Video001-Figma-AE-Exporter.jsx"), panel, { encoding: "utf8", mode: 0o600 });
   await writeFile(join(destination, "audit-export.jsx"), audit, { encoding: "utf8", mode: 0o600 });
-  return { destination };
+  await writeFile(join(destination, "figma-scenes.json"), timingSource, { encoding: "utf8", mode: 0o600 });
+  return { destination, scenesPath };
 }
 
 export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environment = process.env } = {}) {

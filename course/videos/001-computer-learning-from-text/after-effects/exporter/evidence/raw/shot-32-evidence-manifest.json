@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/assemble-shot-32-evidence.mjs",
+  "sha256": {
+    "evidence/raw/shot-32-package.video001-ae.json": "1eeedd4d25b3798099d2d00cf49ef67a4039ba4302c388be4db34704b48d92a0",
+    "evidence/raw/shot-32-final-result.json": "5bf044887a95fa48ebbe2481e7a10d7a93cf4a54ac40e8f56a9093cecca98ec5",
+    "evidence/raw/shot-32-v001-before.json": "1d9e6f280a199bedb7f5a5551146508210b9ffd5b8adb0c346a96510e1058cf2",
+    "evidence/raw/shot-32-v001-after.json": "5ff5364c6365145771c64d454baff5fe0022e4f5eebbd4e98f9af103941b0131",
+    "evidence/raw/shot-32-timing.json": "eb9e0786bcc53fb99ae055ac64be2eae73e5941e83f7ab83a28a19841a35d0a6",
+    "evidence/raw/shot-32-image-metrics.json": "30134ae56380b546ab072d516e5e1cba62ea3333c007168f106b34038288c5ec",
+    "evidence/raw/shot-32-live-session.json": "c3255fbc3ac6aa48552c4edef26dbadfdc1a4732a2c6f26751a75eb2fec0a795",
+    "evidence/raw/shot-32-live-package.video001-ae.json": "a6009b19f9d777ebd58d162c8a436f9d3e51deeebbb2803609dc7e89918ebafd",
+    "evidence/raw/shot-32-live-bridge-log.jsonl": "7f03cc4011c5775023c1b1883bc93375c72a0cb2f4ed60961ac97e0f323425bd",
+    "evidence/raw/shot-32-live-import-report.json": "b7bb27651c8fd6ea5800737eb690cecb0b7989ca2ad677645e182d367c61f9b1",
+    "evidence/raw/shot-32-live-ae-result.json": "514a07c6a400ebd386b88d15b6048e7c65c685ae6b5fc7751411d290114a30f4",
+    "evidence/shot-32-figma.png": "65b0c8341b7370200e87531dbd7197aff2557a50ecdb0ee0e09383e911da62b3",
+    "evidence/shot-32-ae.png": "91559ca55b724d5948cc54b5641fe4e21483b04cfd96803514f3f91e7718cffe",
+    "tests/fixtures/shot-32-reference.json": "034df9cf38039353d4fb7ed130bf91c115b0acb4a47f2ce7c5051d17b23a9436",
+    "evidence/shot-32-audit.json": "60cde76fbfe5f0441c9031841058c9972b8ba0666cf4e63924cb52cb9511159a",
+    "evidence/shot-32-comparison.json": "50f47f3bf5a0d42f93b6ab5f5c1df40f1ca29d485f0ceb608eb1d46b1a8cc020"
+  }
+}

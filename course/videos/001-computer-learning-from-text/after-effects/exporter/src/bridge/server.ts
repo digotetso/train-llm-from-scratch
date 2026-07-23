@@ -154,6 +154,7 @@ function hasMediaType(request: IncomingMessage, expected: string): boolean {
 
 function baseHeaders(): Record<string, string> {
   return {
+    "access-control-allow-origin": "*",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff"
   };
@@ -608,6 +609,14 @@ class NodeBridgeServer implements BridgeServer {
     const allowedMethod = route === "health" ? "GET" : route === "unknown" ? undefined : "POST";
     if (route === "unknown") {
       this.respondError(response, route, 404, "NOT_FOUND", "The requested route does not exist");
+      return;
+    }
+    if (request.method === "OPTIONS") {
+      response.setHeader("access-control-allow-methods", allowedMethod ?? "");
+      response.setHeader("access-control-allow-headers", "authorization, content-type");
+      response.setHeader("access-control-max-age", "600");
+      sendEmpty(response, 204);
+      this.log.record(route, 204);
       return;
     }
     if (request.method !== allowedMethod) {

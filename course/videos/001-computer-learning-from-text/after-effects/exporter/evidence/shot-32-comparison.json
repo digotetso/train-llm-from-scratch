@@ -6,11 +6,15 @@
   },
   "figma": {
     "file": "shot-32-figma.png",
-    "sha256": "65b0c8341b7370200e87531dbd7197aff2557a50ecdb0ee0e09383e911da62b3"
+    "sha256": "65b0c8341b7370200e87531dbd7197aff2557a50ecdb0ee0e09383e911da62b3",
+    "width": 1920,
+    "height": 1080
   },
   "afterEffects": {
     "file": "shot-32-ae.png",
-    "sha256": "91559ca55b724d5948cc54b5641fe4e21483b04cfd96803514f3f91e7718cffe"
+    "sha256": "91559ca55b724d5948cc54b5641fe4e21483b04cfd96803514f3f91e7718cffe",
+    "width": 1920,
+    "height": 1080
   },
   "visualReview": {
     "geometryAndZOrder": "PASS",
@@ -31,5 +35,11 @@
     "psnr": 16.6962,
     "structuralSimilarity": 0.9402225,
     "rationale": "Font engines rasterize differently; semantic, geometry, wrapping, and editability checks are the release gate."
-  }
+  },
+  "rawMetrics": {
+    "rmse": "9586.57 (0.146282)",
+    "psnr": "16.6962 (0.139135)",
+    "ssimDistortion": "0.0597775"
+  },
+  "metricTool": "ImageMagick 7.1.2-25 Q16-HDRI"
 }

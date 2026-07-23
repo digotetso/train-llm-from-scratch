@@ -6,7 +6,15 @@
  * Licensed under the Apache License, Version 2.0.
  */
 
-var Video001ExporterPanel = (function (thisObject, importer) {
+if (
+    $.global.Video001ExporterPanel !== undefined &&
+    $.global.Video001ExporterPanel !== null &&
+    typeof $.global.Video001ExporterPanel.dispose === "function"
+) {
+    $.global.Video001ExporterPanel.dispose();
+}
+$.global.Video001ExporterPanel = { poll: function () {} };
+$.global.Video001ExporterPanel = (function (thisObject, importer) {
     var POLL_INTERVAL_MS = 1000;
     var PACKAGE_SUFFIX = ".video001-ae.json";
     var scriptFile = new File($.fileName);
@@ -17,8 +25,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     var assetFolder = new Folder(queueRoot.fsName + "/assets");
     var stateFile = new File(queueRoot.fsName + "/state.json");
     var authFile = new File(queueRoot.fsName + "/auth.json");
-    var timingDirectory = scriptDirectory;
-    var timingFile;
+    var timingFile = new File(scriptDirectory.fsName + "/figma-scenes.json");
     var palette;
     var statusText;
     var pairingCodeText;
@@ -27,12 +34,6 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     var pollTaskId = 0;
     var resetPending = false;
     var closing = false;
-    var index;
-
-    for (index = 0; index < 3; index += 1) {
-        timingDirectory = timingDirectory.parent;
-    }
-    timingFile = new File(timingDirectory.fsName + "/figma-scenes.json");
 
     function trim(value) {
         return String(value).replace(/^\s+|\s+$/g, "");
@@ -95,15 +96,21 @@ var Video001ExporterPanel = (function (thisObject, importer) {
 
     function findNodeExecutable() {
         var value = trim(system.callSystem("/usr/bin/which node"));
+        var candidates = [];
         var file;
-        if (value.length === 0 || value.charAt(0) !== "/" || /[\r\n]/.test(value)) {
-            throw new Error("Node 20 or newer was not found on PATH");
+        var index;
+        if (value.length > 0 && value.charAt(0) === "/" && !/[\r\n]/.test(value)) {
+            candidates.push(value);
         }
-        file = new File(value);
-        if (!file.exists) {
-            throw new Error("The resolved Node executable does not exist");
+        candidates.push("/opt/homebrew/bin/node");
+        candidates.push("/usr/local/bin/node");
+        for (index = 0; index < candidates.length; index += 1) {
+            file = new File(candidates[index]);
+            if (file.exists) {
+                return file;
+            }
         }
-        return file;
+        throw new Error("Node 20 or newer was not found in PATH or a trusted system location");
     }
 
     function startBridge() {
@@ -356,7 +363,21 @@ var Video001ExporterPanel = (function (thisObject, importer) {
         button.onClick = function () {
             guarded(action);
         };
+        button.addEventListener("keydown", function (event) {
+            if (event.keyName === "Space" || event.keyName === "Enter" || event.keyName === "Return") {
+                event.preventDefault();
+                guarded(action);
+            }
+        });
         return button;
+    }
+
+    function dispose() {
+        closing = true;
+        if (pollTaskId !== 0) {
+            app.cancelTask(pollTaskId);
+            pollTaskId = 0;
+        }
     }
 
     function buildPalette() {
@@ -411,11 +432,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
             this.layout.resize();
         };
         windowValue.onClose = function () {
-            closing = true;
-            if (pollTaskId !== 0) {
-                app.cancelTask(pollTaskId);
-                pollTaskId = 0;
-            }
+            dispose();
             try {
                 stopBridge(true);
             } catch (closeError) {
@@ -430,7 +447,7 @@ var Video001ExporterPanel = (function (thisObject, importer) {
     palette.layout.layout(true);
     palette.layout.resize();
     poll();
-    pollTaskId = app.scheduleTask("Video001ExporterPanel.poll()", POLL_INTERVAL_MS, true);
+    pollTaskId = app.scheduleTask("$.global.Video001ExporterPanel.poll()", POLL_INTERVAL_MS, true);
     if (palette instanceof Window) {
         palette.center();
         palette.show();
@@ -441,6 +458,8 @@ var Video001ExporterPanel = (function (thisObject, importer) {
         startBridge: startBridge,
         stopBridge: stopBridge,
         resetPairing: resetPairing,
-        importNext: importNext
+        importNext: importNext,
+        dispose: dispose
     };
 }(this, Video001ExporterImporter));
+var Video001ExporterPanel = $.global.Video001ExporterPanel;

@@ -123,8 +123,11 @@ async function pair(base: string, code: string): Promise<string> {
 function assertSecurityHeaders(response: Response): void {
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
   for (const name of response.headers.keys()) {
-    assert.equal(name.startsWith("access-control-"), false, name);
+    if (name.startsWith("access-control-")) {
+      assert.equal(name, "access-control-allow-origin", name);
+    }
   }
 }
 
@@ -414,6 +417,31 @@ test("bridge rejects non-loopback hosts and ports outside the TCP range", async 
   for (const port of [-1, 65_536, 1.5, Number.NaN]) {
     assert.throws(() => createBridgeServer({ auth, queue, host: "127.0.0.1", port }), /port/i, String(port));
   }
+});
+
+test("bridge permits Figma's CORS preflight without consuming the pairing code", async (t) => {
+  const { base, code } = await startBridge(t);
+  const preflight = await fetch(`${base}/v1/pair`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "null",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type"
+    }
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+  assert.equal(preflight.headers.get("access-control-allow-methods"), "POST");
+  assert.equal(preflight.headers.get("access-control-allow-headers"), "authorization, content-type");
+  assert.equal(preflight.headers.get("content-type"), null);
+
+  const response = await fetch(`${base}/v1/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code })
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
 });
 
 test("bridge uses exact routes, methods, media types, and JSON error envelopes", async (t) => {

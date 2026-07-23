@@ -1163,13 +1163,17 @@ var Video001ExporterImporter = (function (core) {
         verifyPackageFileIdentity(packageFile, options, packageValue);
         var result = importValidatedPackage(packageValue, options);
         if (
-            result.status === "IMPORTED" &&
+            (result.status === "IMPORTED" || result.status === "DUPLICATE_CONTENT") &&
             options.removeAfterReport &&
-            isQueuedPackageFile(packageFile, result.report.contentHash)
+            isQueuedPackageFile(packageFile, packageValue.contentHash)
         ) {
             if (!packageFile.remove()) {
-                result.report.warnings[result.report.warnings.length] = "Imported queue package could not be removed after report publication";
-                writeUtf8(result.reportFile, JSON.stringify(result.report, null, 2));
+                if (result.status === "IMPORTED") {
+                    result.report.warnings[result.report.warnings.length] = "Imported queue package could not be removed after report publication";
+                    writeUtf8(result.reportFile, JSON.stringify(result.report, null, 2));
+                } else {
+                    throw new Error("Duplicate queue package could not be removed after no-op");
+                }
             }
         }
         return result;

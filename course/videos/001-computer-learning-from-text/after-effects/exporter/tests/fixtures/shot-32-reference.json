@@ -12,6 +12,7 @@
   },
   "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
   "packageSha256": "1eeedd4d25b3798099d2d00cf49ef67a4039ba4302c388be4db34704b48d92a0",
+  "timingSha256": "eb9e0786bcc53fb99ae055ac64be2eae73e5941e83f7ab83a28a19841a35d0a6",
   "frame": {
     "nodeId": "95:44",
     "name": "S001_SH32_Repo_PreparationNotLearning",

@@ -1074,6 +1074,45 @@ test("isolated build embeds exact timings and separates browser-only APIs from t
   }
 });
 
+test("After Effects build packages the exact validated timing beside the panel", () => {
+  const projectRoot = fileURLToPath(PROJECT_ROOT);
+  const script = new URL("../scripts/build.mjs", import.meta.url);
+  const timingSource = approvedTimingSource();
+  const result = spawnSync(process.execPath, [script.pathname], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: { ...process.env, VIDEO001_FIGMA_SCENES: timingSource }
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+  const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
+  const builtPanel = readFileSync(join(projectRoot, "dist/ae/Video001-Figma-AE-Exporter.jsx"), "utf8");
+  assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(timingSource, "utf8"));
+  assert.match(builtPanel, /scriptDirectory\.fsName \+ "\/figma-scenes\.json"/);
+  assert.doesNotMatch(builtPanel, /timingDirectory = timingDirectory\.parent/);
+  assert.match(builtPanel, /\$\.global\.Video001ExporterPanel\s*=/);
+  assert.match(builtPanel, /app\.scheduleTask\("\$\.global\.Video001ExporterPanel\.poll\(\)"/);
+  assert.doesNotMatch(builtPanel, /app\.scheduleTask\("Video001ExporterPanel\.poll\(\)"/);
+});
+
+test("plain build uses the committed canonical Video 001 timing", () => {
+  const projectRoot = fileURLToPath(PROJECT_ROOT);
+  const script = new URL("../scripts/build.mjs", import.meta.url);
+  const environment = { ...process.env };
+  delete environment.VIDEO001_FIGMA_SCENES;
+  const result = spawnSync(process.execPath, [script.pathname], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: environment
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+  const canonicalTiming = join(projectRoot, "config/video001-figma-scenes.json");
+  const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
+  assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(canonicalTiming, "utf8"));
+  assert.equal(readFileSync(canonicalTiming, "utf8"), readFileSync(approvedTimingSource(), "utf8"));
+});
+
 test("built UI accepts routed messages and hashes packages without crypto", async () => {
   const fixture = mkdtempSync(join(tmpdir(), "video001-ui-runtime-"));
   try {

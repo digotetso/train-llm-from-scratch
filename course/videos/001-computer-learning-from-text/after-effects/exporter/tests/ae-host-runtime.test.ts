@@ -52,6 +52,7 @@ function instrumentImporter(source: string): string {
         __test: {
             rememberItem: rememberItem,
             rollbackItems: rollbackItems,
+            addText: addText,
             addRunAnimator: addRunAnimator,
             applyResolvedFont: applyResolvedFont,
             resolveRunFont: resolveRunFont,
@@ -63,7 +64,7 @@ function instrumentImporter(source: string): string {
 }(Video001ExporterCore));\n`;
 }
 
-function makeImporterHarness(forcedSystemHash?: string) {
+function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
   const sourceUrl = new URL("../src/ae/importer.jsxinc", import.meta.url);
   const source = instrumentImporter(readFileSync(sourceUrl, "utf8"));
   const records = new Map<string, FileRecord>();
@@ -222,7 +223,7 @@ function makeImporterHarness(forcedSystemHash?: string) {
         return name + "_v001";
       },
       isDuplicateHash() {
-        return false;
+        return duplicateHash;
       },
       makeImportReport(value: unknown) {
         return value;
@@ -263,6 +264,7 @@ function makeImporterHarness(forcedSystemHash?: string) {
     __test: {
       rememberItem(items: FolderItemMock[], item: FolderItemMock): FolderItemMock;
       rollbackItems(items: FolderItemMock[]): void;
+      addText(comp: unknown, node: unknown, context: unknown): unknown;
       addRunAnimator(layer: unknown, run: { start: number; end: number; color: string; fontSize: number }, dominant: { fontSize: number }, scaleY: number): void;
       applyResolvedFont(documentValue: { fontObject: unknown; fauxBold: boolean }, resolved: { fontObject: unknown; fauxBold: boolean }): void;
       resolveRunFont(run: { start: number; end: number; fontFamily: string; fontStyle: string }, node: { id: string; name: string; text: string }, state: { missingFonts: string[]; fallbacks: unknown[]; warnings: string[] }): { fontObject: unknown; postScriptName: string; fauxBold: boolean };
@@ -446,6 +448,216 @@ test("font substitution preserves bold emphasis without bolding ordinary Inter t
   assert.equal(ordinaryInter.postScriptName, "Inter-Regular");
   assert.equal(ordinaryDocument.fontObject, interRegular);
   assert.equal(ordinaryDocument.fauxBold, false);
+});
+
+function mixedTextHostRecorder() {
+  const ranges: Array<{
+    start: number;
+    end: number;
+    fontObject: unknown;
+    fauxBold: boolean;
+  }> = [];
+  const transformValues = new Map<string, unknown>();
+  const animatorValues = new Map<string, unknown>();
+  const documentValue = {
+    text: "",
+    fontObject: null as unknown,
+    fauxBold: false,
+    fontSize: 0,
+    applyFill: false,
+    fillColor: [] as number[],
+    applyStroke: true,
+    autoLeading: true,
+    leading: 0,
+    tracking: 0,
+    justification: 0,
+    boxTextPos: [-100, -20],
+    resetCharStyle() {
+      this.fontObject = null;
+      this.fauxBold = false;
+    },
+    resetParagraphStyle() {},
+    characterRange(start: number, end: number) {
+      const range = {
+        start,
+        end,
+        fontObject: this.fontObject,
+        fauxBold: this.fauxBold
+      };
+      ranges.push(range);
+      return range;
+    }
+  };
+  const propertyValue = (name: string) => ({
+    setValue(value: unknown) {
+      animatorValues.set(name, value);
+    }
+  });
+  const advanced = {
+    property(name: string) {
+      return name === "ADBE Text Range Units" ? propertyValue(name) : null;
+    }
+  };
+  const selector = {
+    property(name: string) {
+      if (name === "ADBE Text Range Advanced") return advanced;
+      if (name === "ADBE Text Index Start" || name === "ADBE Text Index End") return propertyValue(name);
+      return null;
+    }
+  };
+  const animator = {
+    name: "",
+    property(name: string) {
+      if (name === "ADBE Text Animator Properties") {
+        return { addProperty: (propertyName: string) => propertyValue(propertyName) };
+      }
+      if (name === "ADBE Text Selectors") {
+        return { addProperty: () => selector };
+      }
+      return null;
+    }
+  };
+  const source = {
+    value: documentValue,
+    setValue(value: typeof documentValue) {
+      this.value = value;
+    }
+  };
+  const textProperties = {
+    property(name: string) {
+      if (name === "ADBE Text Document") return source;
+      if (name === "ADBE Text Animators") return { addProperty: () => animator };
+      return null;
+    }
+  };
+  const transform = {
+    property(name: string) {
+      return {
+        setValue(value: unknown) {
+          transformValues.set(name, value);
+        }
+      };
+    }
+  };
+  const layer = {
+    name: "",
+    comment: "",
+    property(name: string) {
+      if (name === "ADBE Text Properties") return textProperties;
+      if (name === "ADBE Transform Group") return transform;
+      return null;
+    }
+  };
+  const comp = {
+    layers: {
+      addBoxText(size: number[]) {
+        assert.deepEqual(Array.from(size), [200, 40]);
+        return layer;
+      }
+    }
+  };
+  const state = {
+    layerCount: 0,
+    nativeCount: 0,
+    missingFonts: [] as string[],
+    fallbacks: [] as unknown[],
+    warnings: [] as string[]
+  };
+  return {
+    comp,
+    documentValue,
+    ranges,
+    animatorValues,
+    transformValues,
+    context: {
+      frame: { width: 1920, height: 1080 },
+      target: { width: 1920, height: 1080 },
+      state
+    },
+    state
+  };
+}
+
+test("addText keeps ordinary Inter dominant while bolding only the fallback secondary run", () => {
+  const harness = makeImporterHarness();
+  const host = mixedTextHostRecorder();
+  const interRegular = {
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return true; }
+  };
+  harness.fontsByPostScriptName.set("Sora-Bold", [{
+    postScriptName: "Sora-Bold",
+    hasGlyphsFor(value: string) { return value !== "θ"; }
+  }]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [interRegular]);
+
+  harness.importer.__test.addText(host.comp, {
+    id: "mixed-bold-dominant",
+    name: "TXT_Mixed",
+    x: 10,
+    y: 20,
+    rotation: 0,
+    opacity: 1,
+    text: "θtext",
+    textBox: { width: 200, height: 40 },
+    paragraph: { align: "LEFT", lineHeightPx: 32, letterSpacingPx: 0 },
+    runs: [
+      { start: 0, end: 1, fontFamily: "Sora", fontStyle: "Bold", fontSize: 32, color: "#FFFFFF" },
+      { start: 1, end: 5, fontFamily: "Inter", fontStyle: "Regular", fontSize: 32, color: "#FFFFFF" }
+    ]
+  }, host.context);
+
+  assert.equal(host.documentValue.fontObject, interRegular);
+  assert.equal(host.documentValue.fauxBold, false);
+  assert.deepEqual(host.ranges.map((range) => ({
+    start: range.start,
+    end: range.end,
+    font: (range.fontObject as { postScriptName: string }).postScriptName,
+    fauxBold: range.fauxBold
+  })), [{ start: 0, end: 1, font: "Inter-Regular", fauxBold: true }]);
+  assert.equal(host.state.layerCount, 1);
+  assert.equal(host.state.nativeCount, 1);
+});
+
+test("addText keeps a bold fallback dominant while restoring the ordinary Inter secondary run", () => {
+  const harness = makeImporterHarness();
+  const host = mixedTextHostRecorder();
+  const interRegular = {
+    postScriptName: "Inter-Regular",
+    hasGlyphsFor() { return true; }
+  };
+  harness.fontsByPostScriptName.set("Sora-Bold", [{
+    postScriptName: "Sora-Bold",
+    hasGlyphsFor(value: string) { return value.indexOf("θ") === -1; }
+  }]);
+  harness.fontsByPostScriptName.set("Inter-Regular", [interRegular]);
+
+  harness.importer.__test.addText(host.comp, {
+    id: "mixed-bold-dominant",
+    name: "TXT_Mixed",
+    x: 10,
+    y: 20,
+    rotation: 0,
+    opacity: 1,
+    text: "θθθθθtext",
+    textBox: { width: 200, height: 40 },
+    paragraph: { align: "LEFT", lineHeightPx: 32, letterSpacingPx: 0 },
+    runs: [
+      { start: 0, end: 5, fontFamily: "Sora", fontStyle: "Bold", fontSize: 32, color: "#FFFFFF" },
+      { start: 5, end: 9, fontFamily: "Inter", fontStyle: "Regular", fontSize: 32, color: "#FFFFFF" }
+    ]
+  }, host.context);
+
+  assert.equal(host.documentValue.fontObject, interRegular);
+  assert.equal(host.documentValue.fauxBold, true);
+  assert.deepEqual(host.ranges.map((range) => ({
+    start: range.start,
+    end: range.end,
+    font: (range.fontObject as { postScriptName: string }).postScriptName,
+    fauxBold: range.fauxBold
+  })), [{ start: 5, end: 9, font: "Inter-Regular", fauxBold: false }]);
+  assert.equal(host.state.layerCount, 1);
+  assert.equal(host.state.nativeCount, 1);
 });
 
 function transformRecorder() {
@@ -676,6 +888,21 @@ test("manual packages use the shared canonical content fingerprint before import
   assert.ok(harness.systemCommands.some((command) => command.startsWith("/bin/chmod 600 ")));
 });
 
+test("unchanged live resend is consumed after a duplicate no-op", () => {
+  const harness = makeImporterHarness(undefined, true);
+  const value = stampCanonicalContentHash(harness.validPackage());
+  const queuePath = `${harness.trustedQueuePath}/incoming/${value.contentHash}.video001-ae.json`;
+  const packageFile = harness.put(queuePath, value);
+  const result = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(true)
+  ) as { status: string };
+
+  assert.equal(result.status, "DUPLICATE_CONTENT");
+  assert.equal(harness.records.get(queuePath)?.exists, false);
+  assert.equal(harness.beginUndoCount, 0);
+});
+
 type BridgeState = {
   pid: number;
   port: number;
@@ -684,10 +911,12 @@ type BridgeState = {
 };
 
 type PanelHarnessOptions = {
+  nodePaths?: string[];
   stateCommand?: string;
   stateExists?: boolean;
   stateSequence?: BridgeState[];
   psByPid?: Record<number, string[]>;
+  whichNode?: string;
 };
 
 function instrumentPanel(source: string): string {
@@ -706,16 +935,18 @@ function instrumentPanel(source: string): string {
 }
 
 function makePanelHarness({
+  nodePaths = ["/usr/local/bin/node"],
   stateCommand = "",
   stateExists = true,
   stateSequence,
-  psByPid
+  psByPid,
+  whichNode = "/usr/local/bin/node\n"
 }: PanelHarnessOptions) {
   const sourceUrl = new URL("../src/ae/panel.jsx", import.meta.url);
   const source = instrumentPanel(readFileSync(sourceUrl, "utf8"));
   const statePath = "/user-data/Video001FigmaAEExporter/state.json";
   const bridgePath = "/bundle/bridge/video001-bridge.mjs";
-  const existing = new Set<string>([bridgePath, "/usr/local/bin/node"]);
+  const existing = new Set<string>([bridgePath, ...nodePaths]);
   if (stateExists) existing.add(statePath);
   const commands: string[] = [];
   const defaultState: BridgeState = {
@@ -770,7 +1001,7 @@ function makePanelHarness({
     system: {
       callSystem(command: string) {
         commands.push(command);
-        if (command === "/usr/bin/which node") return "/usr/local/bin/node\n";
+        if (command === "/usr/bin/which node") return whichNode;
         const psMatch = /^\/bin\/ps -p ([0-9]+) -o command=$/.exec(command);
         if (psMatch) {
           const pid = Number(psMatch[1]);
@@ -784,6 +1015,7 @@ function makePanelHarness({
     },
     app: { cancelTask() {}, scheduleTask() { return 1; } }
   };
+  (context.$ as Record<string, unknown>).global = context;
   vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
   return {
     panel: context.Video001ExporterPanel as {
@@ -802,6 +1034,16 @@ test("Start recovers a structurally valid stale state for a nonexistent PID", ()
   assert.equal(harness.existing.has(harness.statePath), false);
   assert.ok(harness.commands.some((command) => command.includes("video001-bridge.mjs") && command.includes(" --root ")));
   assert.ok(harness.commands.every((command) => !command.startsWith("/bin/kill")));
+});
+
+test("Start uses a trusted fixed Node location when the application PATH omits Node", () => {
+  const harness = makePanelHarness({
+    nodePaths: ["/opt/homebrew/bin/node"],
+    stateCommand: "",
+    whichNode: ""
+  });
+  harness.panel.startBridge();
+  assert.ok(harness.commands.some((command) => command.startsWith("'/opt/homebrew/bin/node' ")));
 });
 
 test("Stop recovers an unrelated reused PID without signaling it", () => {
@@ -878,6 +1120,7 @@ class UiElementMock {
   text = "";
   active = false;
   characters = 0;
+  readonly children: UiElementMock[] = [];
   preferredSize: { height?: number } | number[] = {};
   alignment: unknown;
   orientation = "";
@@ -889,10 +1132,40 @@ class UiElementMock {
   onResize?: () => void;
   onResizing?: () => void;
   readonly layout = { layout() {}, resize() {} };
+  private readonly eventListeners = new Map<string, Array<(event: {
+    keyName: string;
+    preventDefault(): void;
+  }) => void>>();
   add(type: string, _bounds?: unknown, text?: string): UiElementMock {
     const element = new UiElementMock();
     if (type === "statictext" || type === "edittext" || type === "button") element.text = text ?? "";
+    this.children.push(element);
     return element;
+  }
+  addEventListener(
+    type: string,
+    listener: (event: { keyName: string; preventDefault(): void }) => void
+  ): void {
+    const listeners = this.eventListeners.get(type) ?? [];
+    listeners.push(listener);
+    this.eventListeners.set(type, listeners);
+  }
+  dispatchKey(keyName: string): boolean {
+    let prevented = false;
+    const event = {
+      keyName,
+      preventDefault() { prevented = true; }
+    };
+    for (const listener of this.eventListeners.get("keydown") ?? []) listener(event);
+    return prevented;
+  }
+  findByText(text: string): UiElementMock | undefined {
+    if (this.text === text) return this;
+    for (const child of this.children) {
+      const match = child.findByText(text);
+      if (match) return match;
+    }
+    return undefined;
   }
   center(): void {}
   show(): void {}
@@ -937,8 +1210,21 @@ test("panel polls exactly once per second and cancels its task when closed", () 
       cancelTask(id: number) { cancelled.push(id); }
     }
   };
+  (context.$ as Record<string, unknown>).global = context;
   vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
-  assert.deepEqual(scheduled, [["Video001ExporterPanel.poll()", 1000, true]]);
+  assert.deepEqual(scheduled, [["$.global.Video001ExporterPanel.poll()", 1000, true]]);
+  const stopButton = windowValue?.findByText("Stop bridge");
+  assert.ok(stopButton);
+  assert.equal(stopButton.dispatchKey("A"), false);
+  assert.equal(windowValue?.children[0]?.text, "0 package(s) queued; bridge stopped");
+  assert.equal(stopButton.dispatchKey("Space"), true);
+  assert.equal(windowValue?.children[0]?.text, "Bridge is stopped");
+  const panel = (context as typeof context & {
+    Video001ExporterPanel: { dispose?: () => void };
+  }).Video001ExporterPanel;
+  assert.equal(typeof panel.dispose, "function");
+  panel.dispose?.();
+  assert.deepEqual(cancelled, [73]);
   assert.ok(windowValue?.onClose);
   windowValue.onClose();
   assert.deepEqual(cancelled, [73]);
