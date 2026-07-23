@@ -58,25 +58,25 @@ Today we will open only three jobs: identify the characters, represent the text 
 
 ## 03:00 Three Jobs Before Tokenization
 
-Before a training system can tokenize text, three different jobs must be handled.
+Before a later rule can divide text into tokens, three jobs must be handled.
 
 ### Job 1: Identify the characters
 
-The software needs a stable answer to this question:
+Software needs a stable answer to one question:
 
 > Which written character is this?
 
-Unicode provides the shared character system. Each character has a numerical identifier called a **code point**.
+Unicode supplies that shared system. Each character has a numerical identifier called a **code point**.
 
 ### Job 2: Store or transmit the text
 
-The software also needs a way to store the text or send it between systems. UTF-8 represents Unicode text as one or more **bytes**.
+The text must be stored or sent. UTF-8 represents it as one or more **bytes**.
 
 ### Job 3: Prepare the text
 
-Source text can contain different Unicode forms, newline styles, selected control characters, trailing spaces, or repeated blank lines. A preparation policy decides which of these features to make consistent.
+Source text can contain different Unicode forms, newline styles, trailing spaces, or repeated blank lines. A preparation policy decides which features to make consistent.
 
-These jobs are connected, but they are not interchangeable:
+The jobs connect, but they are not interchangeable:
 
 ```text
 code point -> identifies a character
@@ -84,40 +84,31 @@ UTF-8 byte -> stores part of the encoded text
 preparation rule -> changes text according to a chosen policy
 ```
 
-The later training pipeline introduces more numerical forms:
-
-```text
-token ID -> identifies a token
-embedding -> learned number list selected for that token ID
-```
-
-One boundary is therefore especially important:
+Later stages add token IDs and embeddings, which have different jobs again. Keep this boundary visible:
 
 ```text
 Unicode code point ≠ UTF-8 byte ≠ token ID ≠ embedding
 ```
 
-All four can involve numbers, but the numbers have different jobs.
+All four involve numbers, but the numbers do different work.
+
+We will begin by giving each character a stable identity. That building block will let us ask a different question about storage.
 
 ## 04:20 Representing Characters with Unicode
 
-Consider the written character `A`.
-
-Before checking, predict what Python will do with this expression:
+Consider the character `A`. Before checking, predict what Python will do with:
 
 ```python
 ord("A")
 ```
 
-Does Python invent a number for this particular `A`? No. It follows the Unicode standard.
+Does Python invent a number for this particular `A`, or follow a shared agreement?
 
 ```python
 ord("A") == 65
 ```
 
-`A` is a **character**. Unicode is a shared standard that defines characters and assigns agreed numbers to them. The number assigned to a character is called its **code point**.
-
-Therefore, `65` is the Unicode code point for `A`. Python’s `ord` function did not discover the meaning of `A`, and it did not create a new number. It followed the Unicode agreement.
+Python follows Unicode, a shared standard that assigns agreed numbers to characters. The assigned number is called a **code point**, so `65` is the code point for `A`.
 
 The code point identifies the written character. It does not contain the character’s meaning.
 
@@ -131,44 +122,41 @@ a -> 97
 t -> 116
 ```
 
-The code-point list is therefore:
+That gives us:
 
 ```text
 [67, 97, 116]
 ```
 
-Each character follows the same stable Unicode agreement.
+This is an early numerical representation of the text. It is not yet the numerical input used during later AI training.
 
-This is an early numerical representation of the text. It is not yet the sequence of numbers that a language model uses in its calculations.
+A code point now gives each character a stable identity. It still does not tell us which storage units represent the text, so that becomes our next question.
 
 ## 05:50 Storing Unicode Text with UTF-8
 
-A **byte** is a stored number from `0` through `255`. UTF-8 is a common rule for storing Unicode text as one or more bytes.
+A byte is a small unit of storage. When we display its unsigned value, it is a number from `0` through `255`. UTF-8 is a common rule for representing Unicode text as one or more bytes.
 
-For `Cat`, the UTF-8 byte list is:
+You know the code points for `Cat`. Before looking, will its UTF-8 byte values match or differ?
+
+For `Cat`, Python shows this UTF-8 byte list:
 
 ```text
 [67, 97, 116]
 ```
 
-That happens to match the code-point list. These three characters are in the ASCII range, where UTF-8 uses one byte with the same numerical value as the code point.
+For these basic Latin characters, UTF-8 uses one byte with the same value as the code point.
 
-But this match is not universal. Other characters can require more than one UTF-8 byte.
+These characters are in a range historically called ASCII. The matching values are convenient, but they are not a universal rule. Other characters can use several UTF-8 bytes.
 
-This gives us two related but separate observations:
-
-```text
-C, a, t have Unicode code points 67, 97, and 116
-"Cat" is stored in UTF-8 as bytes 67, 97, and 116
-```
-
-For this example, the values match. Their jobs are still different. A code point identifies a character under the Unicode standard. A byte stores part of the UTF-8 encoding.
+The values match here, but their jobs differ. A code point identifies a character. A byte stores part of its UTF-8 representation.
 
 Neither the code-point list nor the byte list is a list of token IDs or embeddings.
 
+We can now identify and store the characters. Yet source files can still differ in Unicode form, newlines, or invisible controls. How should the repository make those differences consistent?
+
 ## 07:00 Preparing Text Consistently
 
-Representation tells software which characters it has and how the text can be stored. Preparation decides how the project wants that source text to be handled before later processing.
+Representation identifies and stores the text. **Preparation** applies the project’s chosen consistency rules before later processing.
 
 A text-preparation policy may:
 
@@ -178,21 +166,26 @@ A text-preparation policy may:
 - remove trailing or outer whitespace; or
 - reduce repeated blank lines.
 
-Preparation is not always a neutral copy. A chosen rule may deliberately remove a distinction from the source.
+A preparation rule can deliberately remove a distinction from the source.
 
-For example, NFKC normalization can change:
+For example, NFKC changes the circled digit `①` into the ordinary digit `1`. Both results contain one Python character, but a distinction in the source has disappeared.
 
 ```text
 ① -> 1
 ```
 
-The source contains a circled digit. The normalized result contains an ordinary digit. A distinction in the source has collapsed, and the character count can change.
+Character count can change in a different example. NFKC changes the single typographic ligature `ﬀ` into the two characters `ff`, so the Python string length changes from `1` to `2`.
 
-That gives us an important principle:
+```text
+ﬀ -> ff
+length 1 -> 2
+```
+
+The rule does not ask what the writer meant. It applies the chosen policy consistently.
 
 > **Prepared text follows a chosen policy. It is not necessarily a lossless copy of the source.**
 
-Now we can inspect the repository’s preparation function with the right question:
+Now the name **text preparation** refers to a job we understand. How does this repository perform that job, step by step?
 
 > **What changes in the text before it becomes prepared training data?**
 
@@ -213,37 +206,26 @@ def normalize_text(text: str) -> str:
 
 Trace the text from top to bottom.
 
-First, `str(text)` produces a Python string. The annotation `text: str` communicates the intended input type, and `-> str` communicates the intended return type. Python does not automatically enforce those annotations at runtime. The explicit call to `str` performs the conversion here.
+The annotations tell readers that this function expects and returns text; `str(text)` is the operation that explicitly asks Python for a string.
 
-Next, `unicodedata.normalize("NFKC", ...)` makes selected Unicode forms consistent.
+Now follow every operation in source order:
 
-Then these replacements:
-
-```python
-text.replace("\r\n", "\n").replace("\r", "\n")
+```text
+str(text)
+-> NFKC
+-> newline standardization
+-> selected control-character removal
+-> per-line trailing-whitespace removal
+-> outer stripping
+-> blank-line-run limiting
+-> return prepared string
 ```
 
-convert different newline styles to `\n`.
+After `str(text)` supplies a string, `unicodedata.normalize("NFKC", ...)` applies the compatibility rule we just tested with `①` and `ﬀ`.
 
-The next line removes the selected control characters defined by the repository:
+The next line standardizes Windows and older Mac newlines as `\n`. `_CONTROL_RE` then removes the selected control characters, and the list step removes trailing whitespace from each line.
 
-```python
-text = _CONTROL_RE.sub("", text)
-```
-
-The list step removes trailing whitespace from every line:
-
-```python
-lines = [line.rstrip() for line in text.split("\n")]
-```
-
-Joining rebuilds the text, and `strip()` removes whitespace from the beginning and end:
-
-```python
-text = "\n".join(lines).strip()
-```
-
-Finally, `_BLANK_LINES_RE` limits a run of blank lines to one blank line, and the function returns the prepared string.
+Joining rebuilds the text, while `strip()` removes outer whitespace. Finally, `_BLANK_LINES_RE` limits each run of blank lines to one blank line, and the function returns the prepared string.
 
 The repository then uses the prepared result:
 
@@ -255,7 +237,7 @@ normalized = normalize_text(text)
 
 Both the stored text and `num_chars` describe the normalized result, not the untouched source.
 
-The output of `normalize_text` is still Unicode text. It has been prepared according to the repository’s policy, but it has not been divided into tokens or converted into token IDs or embeddings.
+The output of `normalize_text` is still Unicode text. It has been prepared according to the repository's policy, but later stages have not yet divided it into reusable pieces or produced the numerical input used during training.
 
 A precise description is:
 
@@ -263,8 +245,10 @@ A precise description is:
 source text
 -> apply fixed preparation rules
 -> prepared Unicode text
--> later tokenization and model-input steps
+-> later AI-training stages [closed]
 ```
+
+We have traced the policy from input to output. Before moving farther, let’s test whether we can predict the simpler representation steps ourselves.
 
 ## 10:45 Predict, Run, and Explain
 
@@ -347,74 +331,59 @@ This cycle—predict, run, observe, explain, change, and compare—tests the rul
 
 ## 13:20 Return to the Whole Route
 
-We began with the larger question:
+We began with one larger question:
 
 > **How can AI learn from written examples?**
 
-This video opened the prerequisite stages that prepare text for the later training pipeline.
-
-First, Unicode gives characters stable code points:
+Today we solved one prerequisite in three steps:
 
 ```text
-A -> 65
+Unicode code point -> identifies a character
+UTF-8 byte        -> stores part of the encoded text
+preparation rule  -> makes a selected feature consistent
 ```
 
-Second, UTF-8 represents Unicode text as bytes for storage or transmission:
-
-```text
-Cat -> [67, 97, 116]
-```
-
-Third, preparation rules make selected features of source text consistent:
-
-```text
-source text -> normalized, prepared text
-```
-
-These stages make text usable for the next parts of the pipeline. They do not yet produce token IDs, embeddings, predictions, or parameter updates.
+These stages produce prepared Unicode text. They have not divided it into pieces, assigned identifiers to those pieces, or selected learned number lists.
 
 The later route is:
 
 ```text
 prepared text
--> tokens
--> token IDs
--> embeddings
--> model calculations
--> prediction
--> measured error
--> updated parameters
+-> reusable text pieces [tokens]
+-> one identifier per piece [token ID]
+-> learned number list selected using that ID [embedding]
+-> later AI-training stages [closed]
 ```
 
-Do not collapse the early stages into one vague idea of “turning text into numbers.” Different numerical forms have different jobs:
+So “turning text into numbers” is too vague. Different numerical forms have different jobs:
 
 - code points identify characters;
 - bytes store encoded text;
 - token IDs identify tokens; and
-- embeddings provide learned numerical values for model calculations.
+- embeddings are learned number lists selected using token IDs.
 
-This is where the brief boundary with learning belongs:
+You can now draw a clean boundary between today’s fixed rules and the later training process:
 
-> **Representing and preparing text changes the data according to fixed rules. Training changes adjustable model parameters by using examples and measured error.**
+> **Representing and preparing text changes the data according to fixed rules. Later training uses examples and measured error to change adjustable internal numbers.**
 
-The distinction matters, but it is not the main subject of this video. The main subject is how written text becomes consistent computer data on the way to AI training.
-
-Before moving on, classify each action by its job:
+Use that distinction now. Classify each action by its job:
 
 1. `ord("A")` returns `65`.
 2. UTF-8 stores `Cat` as `[67, 97, 116]`.
 3. A repository rule converts `\r\n` to `\n`.
 4. A tokenizer divides prepared text into reusable pieces.
-5. A training update changes model parameters after measuring error.
+5. A later training step changes adjustable internal numbers after measuring error.
 
 The answers are:
 
 1. Unicode character representation;
 2. byte encoding for storage or transmission;
 3. text preparation;
-4. a later model-input step; and
-5. model learning.
+4. a later AI-training input step; and
+5. a later training change.
 
-We are now ready for Video 2’s question:
+One building block now carries forward: a code point is a stable character identifier. Software can use those identifiers to collect characters consistently.
+
+That creates Video 2’s question:
 
 > **How can software use stable character numbers to build a dependable character set?**
