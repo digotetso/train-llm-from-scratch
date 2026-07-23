@@ -58,7 +58,7 @@ We have earned a name for this fixed conversion. Text representation changes tex
 
 Now ask a sharper question: during the character and byte conversions, what changed, and what stayed fixed? The form changed from written characters to code points and then to stored bytes. The Unicode and UTF-8 rules stayed fixed. Nothing practiced, compared an answer with an example, or adjusted itself. So representation cannot by itself be learning.
 
-Look back at the still-closed part of our roadmap. Learning needs a chain we have only named: model answer -> known target -> measured error -> closed update method -> changed parameters -> later answer. Only after that behavior is visible can we say what the two new labels mean. A model is the mathematical system that makes the answer. Its parameters are the adjustable internal numbers that the closed update method can change; a later answer can therefore differ from an earlier one.
+Look back at the still-closed part of our roadmap. Learning needs a chain we have only named: model answer -> known target -> measured error -> closed update method -> changed parameters -> later answer. For today's distinction, we need only two labels from that chain. A model is the mathematical system that makes the answer. Its parameters are the adjustable internal numbers that the closed update method can change; a later answer can therefore differ from an earlier one.
 
 Here is a tiny picture of possible improvement. Imagine ten comparable answers with seven mistakes. After an update, imagine ten comparable answers with five mistakes. The move from seven to five is a way to picture an update making these answers less wrong. It is not the repository's training calculation, and it cannot prove performance on unseen examples. Separate examples still matter when we want to know whether improvement carries beyond the examples used for adjustment.
 
@@ -81,7 +81,7 @@ def normalize_text(text: str) -> str:
     return text
 ```
 
-Trace the data from top to bottom. `str(text)` produces a string. NFKC normalization makes selected Unicode forms consistent. Newline replacement turns two newline styles into `\n`. `_CONTROL_RE` removes selected control characters. The list step removes trailing whitespace from each line. Joining rebuilds the lines, and `strip` removes outer whitespace. `_BLANK_LINES_RE` limits a run of blank lines to one blank line. Then the function returns the prepared text.
+Trace the data from top to bottom. First, `str(text)` produces a string, and NFKC normalization makes selected Unicode forms consistent. Newline replacement then turns two newline styles into `\n`, while `_CONTROL_RE` removes selected control characters. Next, the list step removes trailing whitespace from each line; joining rebuilds the lines, and `strip` removes outer whitespace. Finally, `_BLANK_LINES_RE` limits a run of blank lines to one blank line, and the function returns the prepared text.
 
 NFKC is deliberate and not lossless. For example, `①` can become `1`. A distinction present in the source can collapse, and character count can change. That is a preparation policy, not a neutral copy.
 
