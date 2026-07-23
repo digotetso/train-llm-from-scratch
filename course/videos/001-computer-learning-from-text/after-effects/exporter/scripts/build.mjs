@@ -205,8 +205,9 @@ function timingSourcePath(projectRoot, environment) {
   return resolve(projectRoot, "config", "video001-figma-scenes.json");
 }
 
-function browserBuildOptions(entryPoint) {
+function browserBuildOptions(entryPoint, absWorkingDir) {
   return {
+    absWorkingDir,
     entryPoints: [entryPoint],
     bundle: true,
     charset: "utf8",
@@ -296,6 +297,7 @@ export async function buildBridge({ projectRoot } = {}) {
   const root = resolve(projectRoot ?? rootFromScript);
   const destination = join(root, "dist", "bridge");
   const result = await esbuild({
+    absWorkingDir: root,
     entryPoints: [join(root, "src", "bridge", "cli.ts")],
     bundle: true,
     charset: "utf8",
@@ -376,7 +378,7 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   }
 
   const uiResult = await esbuild({
-    ...browserBuildOptions(join(root, "src", "figma", "ui.ts")),
+    ...browserBuildOptions(join(root, "src", "figma", "ui.ts"), root),
     outfile: "ui.js"
   });
   const uiJavaScript = singleOutput(uiResult, "UI");
@@ -388,7 +390,7 @@ export async function buildPlugin({ projectRoot, outDir, pluginIdFile, environme
   if (/https?:\/\//.test(uiHtml)) throw new Error("UI output contains a remote asset or URL");
 
   const controllerResult = await esbuild({
-    ...browserBuildOptions(join(root, "src", "figma", "controller.ts")),
+    ...browserBuildOptions(join(root, "src", "figma", "controller.ts"), root),
     define: {
       __VIDEO001_CONFIG__: JSON.stringify(embeddedConfig)
     },

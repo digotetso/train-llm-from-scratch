@@ -3,14 +3,14 @@ import {
   constants,
   lstat,
   mkdir,
+  mkdtemp,
   open,
-  readFile,
-  readdir,
   rename,
-  rm
+  rm,
+  writeFile
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
 export const RELEASE_VERSION = "0.2.0";
@@ -76,20 +76,6 @@ export const RELEASE_DIST_FILES = Object.freeze([
 ]);
 
 const RELEASE_FILES = Object.freeze([...RELEASE_SOURCE_FILES, ...RELEASE_DIST_FILES].sort());
-const CLEAN_DIST_ENTRIES = new Set([
-  "dist/ae",
-  "dist/ae/Video001-Figma-AE-Exporter.jsx",
-  "dist/ae/audit-export.jsx",
-  "dist/ae/audit-full-lesson.jsx",
-  "dist/ae/figma-scenes.json",
-  "dist/bridge",
-  "dist/bridge/video001-bridge.mjs",
-  "dist/figma",
-  BUILD_OWNERSHIP_MARKER,
-  "dist/figma/code.js",
-  "dist/figma/manifest.json",
-  "dist/figma/ui.html"
-]);
 const BUILD_INPUTS = Object.freeze([
   "config/video001-figma-scenes.json",
   "package-lock.json",
@@ -166,7 +152,7 @@ async function readRegularFile(projectRoot, relativePath) {
     ) {
       throw new Error(`${relativePath} changed while it was read`);
     }
-    return { bytes, mtimeMs: Number(after.mtimeNs / 1_000_000n) };
+    return { bytes };
   } finally {
     await handle.close();
   }
@@ -191,39 +177,26 @@ function assertSafeReleaseContent(path, bytes) {
   }
 }
 
-async function collectDistEntries(projectRoot) {
-  const result = new Set();
-  const visit = async (relativeDirectory) => {
-    await assertDirectoryComponents(projectRoot, `${relativeDirectory}/sentinel`);
-    const directoryPath = sourcePath(projectRoot, relativeDirectory);
-    const directory = await lstat(directoryPath);
-    if (!directory.isDirectory() || directory.isSymbolicLink()) {
-      throw new Error(`${relativeDirectory} must be a regular build directory`);
-    }
-    const entries = await readdir(directoryPath, { withFileTypes: true });
-    entries.sort((first, second) => first.name.localeCompare(second.name, "en"));
-    for (const entry of entries) {
-      const child = `${relativeDirectory}/${entry.name}`;
-      safeRelativePosixPath(child);
-      if (entry.isSymbolicLink()) throw new Error(`Clean build output rejects symlink ${child}`);
-      if (entry.isDirectory()) {
-        result.add(child);
-        await visit(child);
-      } else if (entry.isFile()) {
-        result.add(child);
-      } else {
-        throw new Error(`Clean build output rejects non-regular entry ${child}`);
-      }
-    }
-  };
-  await visit("dist");
-  return result;
+function snapshotBytes(snapshot, path) {
+  const bytes = snapshot.get(path);
+  if (bytes === undefined) throw new Error(`Captured release snapshot is missing ${path}`);
+  return bytes;
 }
 
-async function validateProjectVersion(projectRoot) {
-  const packageBytes = (await readRegularFile(projectRoot, "package.json")).bytes;
-  const lockBytes = (await readRegularFile(projectRoot, "package-lock.json")).bytes;
-  const controllerBytes = (await readRegularFile(projectRoot, "src/figma/controller.ts")).bytes;
+async function captureReleaseSnapshot(projectRoot) {
+  const snapshot = new Map();
+  for (const path of [...RELEASE_FILES, BUILD_OWNERSHIP_MARKER]) {
+    const bytes = (await readRegularFile(projectRoot, path)).bytes;
+    if (path !== BUILD_OWNERSHIP_MARKER) assertSafeReleaseContent(path, bytes);
+    snapshot.set(path, bytes);
+  }
+  return snapshot;
+}
+
+function validateProjectVersion(snapshot) {
+  const packageBytes = snapshotBytes(snapshot, "package.json");
+  const lockBytes = snapshotBytes(snapshot, "package-lock.json");
+  const controllerBytes = snapshotBytes(snapshot, "src/figma/controller.ts");
   const packageValue = JSON.parse(packageBytes.toString("utf8"));
   const lockValue = JSON.parse(lockBytes.toString("utf8"));
   if (
@@ -236,24 +209,17 @@ async function validateProjectVersion(projectRoot) {
   }
 }
 
-async function validateCleanBuild(projectRoot) {
-  const entries = await collectDistEntries(projectRoot);
-  if ([...CLEAN_DIST_ENTRIES].some((path) => !entries.has(path))) {
-    const missing = [...CLEAN_DIST_ENTRIES].filter((path) => !entries.has(path));
-    throw new Error(
-      `dist is missing required npm run build output: ${missing.join(", ")}`
-    );
-  }
-  const marker = (await readRegularFile(projectRoot, BUILD_OWNERSHIP_MARKER)).bytes.toString("utf8");
+async function validateCleanBuild(snapshot) {
+  const marker = snapshotBytes(snapshot, BUILD_OWNERSHIP_MARKER).toString("utf8");
   if (marker !== BUILD_OWNERSHIP_VALUE) {
     throw new Error("dist/figma has an invalid build ownership marker");
   }
-  const sourceTiming = (await readRegularFile(projectRoot, "config/video001-figma-scenes.json")).bytes;
-  const builtTiming = (await readRegularFile(projectRoot, "dist/ae/figma-scenes.json")).bytes;
+  const sourceTiming = snapshotBytes(snapshot, "config/video001-figma-scenes.json");
+  const builtTiming = snapshotBytes(snapshot, "dist/ae/figma-scenes.json");
   if (!sourceTiming.equals(builtTiming)) {
     throw new Error("dist/ae/figma-scenes.json is stale; run npm run build");
   }
-  const manifestBytes = (await readRegularFile(projectRoot, "dist/figma/manifest.json")).bytes;
+  const manifestBytes = snapshotBytes(snapshot, "dist/figma/manifest.json");
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   if (
     !/^[0-9]{10,30}$/u.test(manifest.id) ||
@@ -263,16 +229,33 @@ async function validateCleanBuild(projectRoot) {
     throw new Error("dist/figma/manifest.json is not a valid fresh development-plugin manifest");
   }
 
-  let newestInput = 0;
-  for (const path of BUILD_INPUTS) {
-    newestInput = Math.max(newestInput, (await readRegularFile(projectRoot, path)).mtimeMs);
-  }
-  let oldestOutput = Number.POSITIVE_INFINITY;
-  for (const path of RELEASE_DIST_FILES) {
-    oldestOutput = Math.min(oldestOutput, (await readRegularFile(projectRoot, path)).mtimeMs);
-  }
-  if (oldestOutput < newestInput) {
-    throw new Error("dist is older than a build input; run npm run build immediately before release:build");
+  const temporaryRoot = await mkdtemp(join(rootFromScript, ".release-rebuild-"));
+  try {
+    for (const path of BUILD_INPUTS) {
+      const destination = sourcePath(temporaryRoot, path);
+      await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+      await writeFile(destination, snapshotBytes(snapshot, path), { mode: 0o600 });
+    }
+    const pluginIdFile = join(temporaryRoot, ".figma-plugin-id");
+    await writeFile(pluginIdFile, `${manifest.id}\n`, { encoding: "ascii", mode: 0o600 });
+    const buildModule = await import(
+      `${pathToFileURL(join(temporaryRoot, "scripts", "build.mjs")).href}?snapshot=1`
+    );
+    await buildModule.buildExporter({
+      projectRoot: temporaryRoot,
+      pluginIdFile,
+      environment: {}
+    });
+    for (const path of [...RELEASE_DIST_FILES, BUILD_OWNERSHIP_MARKER]) {
+      const rebuilt = (await readRegularFile(temporaryRoot, path)).bytes;
+      if (!rebuilt.equals(snapshotBytes(snapshot, path))) {
+        throw new Error(
+          `${path} does not match a fresh deterministic build from the captured release sources`
+        );
+      }
+    }
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
   }
 }
 
@@ -385,14 +368,10 @@ export async function buildRelease({
 } = {}) {
   const root = resolve(projectRoot);
   const output = resolve(outputDirectory);
-  await validateProjectVersion(root);
-  const entries = [];
-  for (const path of RELEASE_FILES) {
-    const bytes = (await readRegularFile(root, path)).bytes;
-    assertSafeReleaseContent(path, bytes);
-    entries.push({ path, bytes });
-  }
-  await validateCleanBuild(root);
+  const snapshot = await captureReleaseSnapshot(root);
+  validateProjectVersion(snapshot);
+  await validateCleanBuild(snapshot);
+  const entries = RELEASE_FILES.map((path) => ({ path, bytes: snapshotBytes(snapshot, path) }));
   const archiveBytes = deterministicGzip(createUstar(entries));
   const sha256 = createHash("sha256").update(archiveBytes).digest("hex");
   const archivePath = join(output, RELEASE_ARCHIVE_NAME);

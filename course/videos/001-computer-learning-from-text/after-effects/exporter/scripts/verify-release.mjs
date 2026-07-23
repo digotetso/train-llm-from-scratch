@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { inflateRawSync } from "node:zlib";
 
 const RELEASE_VERSION = "0.2.0";
 const RELEASE_ARCHIVE_NAME = `video001-figma-ae-exporter-${RELEASE_VERSION}.tar.gz`;
 const RELEASE_CHECKSUM_NAME = `video001-figma-ae-exporter-${RELEASE_VERSION}.sha256`;
 const RELEASE_MTIME = Math.floor(Date.parse("2026-07-23T00:00:00Z") / 1000);
 const TAR_BLOCK_SIZE = 512;
+const CANONICAL_GZIP_HEADER = Buffer.from([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 255]);
 const rootFromScript = dirname(dirname(fileURLToPath(import.meta.url)));
 const EXPECTED_MEMBERS = new Set([
   "LICENSE",
@@ -70,6 +71,56 @@ function octalField(block, offset, length, label) {
   const parsed = Number.parseInt(value, 8);
   if (!Number.isSafeInteger(parsed)) throw new Error(`${label} exceeds the safe integer range`);
   return parsed;
+}
+
+function writeString(block, offset, length, value, label) {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length > length) throw new RangeError(`${label} does not fit in its ustar field`);
+  bytes.copy(block, offset);
+}
+
+function writeOctal(block, offset, length, value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a non-negative integer`);
+  }
+  const octal = value.toString(8);
+  if (octal.length > length - 1) throw new RangeError(`${label} does not fit in its ustar field`);
+  writeString(block, offset, length, `${octal.padStart(length - 1, "0")}\0`, label);
+}
+
+function splitUstarPath(path) {
+  if (Buffer.byteLength(path, "utf8") <= 100) return { name: path, prefix: "" };
+  const slashPositions = [...path.matchAll(/\//gu)].map((match) => match.index);
+  for (let index = slashPositions.length - 1; index >= 0; index -= 1) {
+    const split = slashPositions[index];
+    const prefix = path.slice(0, split);
+    const name = path.slice(split + 1);
+    if (Buffer.byteLength(prefix, "utf8") <= 155 && Buffer.byteLength(name, "utf8") <= 100) {
+      return { name, prefix };
+    }
+  }
+  throw new RangeError(`${path} does not fit in a POSIX ustar name`);
+}
+
+function canonicalUstarHeader(path, size) {
+  const { name, prefix } = splitUstarPath(path);
+  const block = Buffer.alloc(TAR_BLOCK_SIZE);
+  writeString(block, 0, 100, name, "name");
+  writeOctal(block, 100, 8, 0o644, "mode");
+  writeOctal(block, 108, 8, 0, "uid");
+  writeOctal(block, 116, 8, 0, "gid");
+  writeOctal(block, 124, 12, size, "size");
+  writeOctal(block, 136, 12, RELEASE_MTIME, "mtime");
+  block.fill(0x20, 148, 156);
+  block[156] = "0".charCodeAt(0);
+  writeString(block, 257, 6, "ustar\0", "magic");
+  writeString(block, 263, 2, "00", "version");
+  writeString(block, 265, 32, "root", "owner");
+  writeString(block, 297, 32, "root", "group");
+  writeString(block, 345, 155, prefix, "prefix");
+  const checksum = block.reduce((sum, byte) => sum + byte, 0);
+  writeString(block, 148, 8, `${checksum.toString(8).padStart(6, "0")}\0 `, "checksum");
+  return block;
 }
 
 function assertSafeMemberName(name) {
@@ -137,17 +188,8 @@ function parseUstar(tar) {
     checksumBlock.fill(0x20, 148, 156);
     const calculated = checksumBlock.reduce((sum, byte) => sum + byte, 0);
     if (checksum !== calculated) throw new Error(`${name} has an invalid ustar header checksum`);
-    if (
-      octalField(block, 100, 8, `${name} mode`) !== 0o644 ||
-      octalField(block, 108, 8, `${name} uid`) !== 0 ||
-      octalField(block, 116, 8, `${name} gid`) !== 0 ||
-      octalField(block, 136, 12, `${name} mtime`) !== RELEASE_MTIME ||
-      block[156] !== "0".charCodeAt(0) ||
-      stringField(block, 157, 100) !== "" ||
-      stringField(block, 265, 32) !== "root" ||
-      stringField(block, 297, 32) !== "root"
-    ) {
-      throw new Error(`${name} has non-canonical ownership, mode, time, or type metadata`);
+    if (!block.equals(canonicalUstarHeader(name, size))) {
+      throw new Error(`${name} does not have a byte-canonical POSIX ustar header`);
     }
     const payloadStart = offset + TAR_BLOCK_SIZE;
     const payloadEnd = payloadStart + size;
@@ -185,6 +227,71 @@ function memberText(members, name) {
   return member.payload.toString("utf8");
 }
 
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function inflateCanonicalGzip(archive) {
+  if (
+    archive.length < CANONICAL_GZIP_HEADER.length + 8 ||
+    !archive.subarray(0, CANONICAL_GZIP_HEADER.length).equals(CANONICAL_GZIP_HEADER)
+  ) {
+    throw new Error("Release archive is not a canonical zero-time gzip stream");
+  }
+  let result;
+  try {
+    result = inflateRawSync(archive.subarray(CANONICAL_GZIP_HEADER.length), { info: true });
+  } catch (error) {
+    throw new Error("Release archive gzip stream is invalid", { cause: error });
+  }
+  const compressedLength = Number(result.engine.bytesWritten);
+  const trailerOffset = CANONICAL_GZIP_HEADER.length + compressedLength;
+  if (
+    !Number.isSafeInteger(compressedLength) ||
+    compressedLength <= 0 ||
+    trailerOffset + 8 !== archive.length
+  ) {
+    throw new Error("Release archive must contain exactly one gzip member with no trailing bytes");
+  }
+  const tar = result.buffer;
+  if (
+    archive.readUInt32LE(trailerOffset) !== crc32(tar) ||
+    archive.readUInt32LE(trailerOffset + 4) !== (tar.length >>> 0)
+  ) {
+    throw new Error("Release archive has an invalid gzip trailer");
+  }
+  return tar;
+}
+
+function runtimeExporterVersion(bundle) {
+  const references = [
+    ...bundle.matchAll(
+      /\bschemaVersion:"2\.0\.0",exporterVersion:([$A-Z_a-z][$\w]*),exportedAt:[$A-Z_a-z][$\w]*\.now\(\)\.toISOString\(\)/gu
+    )
+  ]
+    .map((match) => match[1]);
+  const identifiers = new Set(references);
+  if (identifiers.size !== 1) {
+    throw new Error("Archived Figma runtime bundle has no unambiguous exporterVersion binding");
+  }
+  const [identifier] = identifiers;
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const assignments = [
+    ...bundle.matchAll(new RegExp(`(?:\\bvar\\s+|[,;])${escaped}="([^"]+)"(?=[,;])`, "gu"))
+  ].map((match) => match[1]);
+  if (assignments.length !== 1) {
+    throw new Error("Archived Figma runtime bundle has no unambiguous exporterVersion literal");
+  }
+  return assignments[0];
+}
+
 export async function verifyRelease({
   archivePath = join(rootFromScript, "release", RELEASE_ARCHIVE_NAME),
   checksumPath = join(rootFromScript, "release", RELEASE_CHECKSUM_NAME)
@@ -202,34 +309,22 @@ export async function verifyRelease({
   }
   const sha256 = createHash("sha256").update(archive).digest("hex");
   if (sha256 !== checksumMatch[1]) throw new Error("Release archive checksum does not match");
-  if (
-    archive[0] !== 0x1f ||
-    archive[1] !== 0x8b ||
-    archive[2] !== 8 ||
-    archive[3] !== 0 ||
-    !archive.subarray(4, 8).every((byte) => byte === 0) ||
-    archive[8] !== 2 ||
-    archive[9] !== 255
-  ) {
-    throw new Error("Release archive is not a canonical zero-time gzip stream");
-  }
-  let tar;
-  try {
-    tar = gunzipSync(archive);
-  } catch (error) {
-    throw new Error("Release archive gzip stream is invalid", { cause: error });
-  }
+  const tar = inflateCanonicalGzip(archive);
   const members = parseUstar(tar);
   const packageValue = JSON.parse(memberText(members, "package.json"));
   const lockValue = JSON.parse(memberText(members, "package-lock.json"));
   const controller = memberText(members, "src/figma/controller.ts");
+  const runtimeVersion = runtimeExporterVersion(memberText(members, "dist/figma/code.js"));
   if (
     packageValue.version !== RELEASE_VERSION ||
     lockValue.version !== RELEASE_VERSION ||
     lockValue.packages?.[""]?.version !== RELEASE_VERSION ||
-    !controller.includes(`const EXPORTER_VERSION = "${RELEASE_VERSION}";`)
+    !controller.includes(`const EXPORTER_VERSION = "${RELEASE_VERSION}";`) ||
+    runtimeVersion !== RELEASE_VERSION
   ) {
-    throw new Error(`Archive package, lockfile, and runtime versions must all be ${RELEASE_VERSION}`);
+    throw new Error(
+      `Archive package, lockfile, source runtime, and bundled runtime versions must all be ${RELEASE_VERSION}`
+    );
   }
   return { sha256, members: members.map(({ name }) => name) };
 }
