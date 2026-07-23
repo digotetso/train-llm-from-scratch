@@ -12,7 +12,7 @@ That experience raises the larger question for this course:
 
 > **How can AI learn from written examples?**
 
-We will build the answer one step at a time. Before AI can learn from text, software must first be able to identify the characters, store the text, and prepare it consistently. Later stages can divide the prepared text into reusable pieces and turn those pieces into the numerical input used during training.
+We will build the answer one step at a time. Before AI can learn from text, software must first be able to identify the characters, store the text, and prepare it consistently. Later stages can split the prepared text into reusable pieces and turn those pieces into the numerical input used during training.
 
 So this video focuses on one prerequisite question:
 
@@ -20,14 +20,14 @@ So this video focuses on one prerequisite question:
 
 By the end, you will be able to explain:
 
-1. how Unicode gives characters stable numerical identifiers;
+1. how Unicode gives characters  numerical identifiers;
 2. how UTF-8 stores text as bytes;
 3. how the repository normalizes and cleans source text; and
 4. why these early numerical forms are not yet token IDs, embeddings, or the numerical input used during later training.
 
 ## 01:00 Where This Video Fits in AI Training
 
-Here is the course route. Each stage supplies something a later stage needs. Treat this as a dependency map, not a complete explanation.
+Here is the course route. Each stage supplies something a later stage needs. Treat this as a dependency map, not a complete explanation. We will details of each stage as the course progresses.
 
 ```text
 Written source text
@@ -74,6 +74,9 @@ The text must be stored or sent. UTF-8 represents it as one or more **bytes**.
 
 ### Job 3: Prepare the text
 
+
+[show messy text example]
+
 Source text can contain different Unicode forms, newline styles, trailing spaces, or repeated blank lines. A preparation policy decides which features to make consistent.
 
 The jobs connect, but they are not interchangeable:
@@ -94,27 +97,35 @@ All four involve numbers, but the numbers do different work.
 
 We will begin by giving each character a stable identity. That building block will let us ask a different question about storage.
 
-## 04:20 Representing Characters with Unicode
+## 04:20 Identifying Characters with Code-Point Numbers
 
-Consider the character `A`. Before checking, predict what Python will do with:
+Look at `A`. You and I recognize it immediately, but software still needs a dependable way to tell it apart from `B`, `a`, or `🐱`.
+
+That gives us a small question. If two computers inspect `A`, should they invent separate numbers, or should they follow the same fixed assignment?
+
+Before we name the rule, make a prediction: does Python invent a new number for `A`, or follow a fixed number?
+
+[On screen: If Python is not installed, visit https://www.python.org/downloads/]
+
+Unicode is a character-numbering standard. For each single character in today’s examples, it assigns a code-point number.
+
+Python already includes a function named `ord`. It reports the code-point number for one character.
 
 ```python
 ord("A")
 ```
 
-Does Python invent a number for this `A`, or follow a shared agreement?
+Python reports:
 
 ```text
 65
 ```
 
-Python follows Unicode, a shared standard that assigns agreed numbers to characters. The assigned number is called a **code point**, so `65` is the code point for `A`.
+The number `65` identifies `A`. It does not explain what `A` means.
 
-The code point identifies the written character. It does not contain the character’s meaning.
+In one sentence, `A` could be a grade. In another, it could be a musical note or part of a name. The context changes, but the code-point number stays the same.
 
-Depending on context, `A` might be a school grade, a musical note, a blood type, or part of a name. Its Unicode code point remains `65` in every case.
-
-Now trace the word `Cat` one character at a time:
+Now trace `Cat` one character at a time:
 
 ```text
 C -> 67
@@ -122,37 +133,57 @@ a -> 97
 t -> 116
 ```
 
-That gives us:
+So the three code-point numbers are:
 
 ```text
 [67, 97, 116]
 ```
 
-This is an early numerical representation of the text. It is not yet the numerical input used during later AI training.
+Some visible symbols are built from several code points. We will leave that case for a later lesson.
 
-A code point now gives each character a stable identity. It still does not tell us which storage units represent the text, so that becomes our next question.
+We can now identify the example characters. But identification creates the next question: how can software store or send those characters?
 
-## 05:50 Storing Unicode Text with UTF-8
+## 05:50 Representing Text with UTF-8 Bytes
 
-A byte is a small unit of storage. When we display its unsigned value, it is a number from `0` through `255`. UTF-8 is a common rule for representing Unicode text as one or more bytes.
+Before we name the storage method, predict: will every single character always need exactly one small storage unit?
 
-You know the code points for `Cat`. Before looking, will its UTF-8 byte values match or differ?
+A byte is a small unit of storage. Python displays each byte as a non-negative number from `0` through `255`.
 
-For `Cat`, Python shows this UTF-8 byte list:
+UTF-8 turns text into an ordered sequence of bytes that software can store or send.
+
+For `Cat`, the code-point numbers are:
 
 ```text
 [67, 97, 116]
 ```
 
-For these basic Latin characters, UTF-8 uses one byte with the same value as the code point.
+Its UTF-8 byte numbers are also:
 
-These characters are in a range historically called ASCII. The matching values are convenient, but they are not a universal rule. Other characters can use several UTF-8 bytes.
+```text
+[67, 97, 116]
+```
 
-The values match here, but their jobs differ. A code point identifies a character. A byte stores part of its UTF-8 representation.
+That match can tempt us into treating the two lists as the same thing. Let’s test that idea with `🐱`.
 
-Neither the code-point list nor the byte list is a list of token IDs or embeddings.
+The emoji has this code-point number:
 
-We can now identify and store the characters. Yet source files can still differ in Unicode form, newlines, or invisible controls. How should the repository make those differences consistent?
+```text
+[128049]
+```
+
+Its UTF-8 representation has four byte numbers:
+
+```text
+[240, 159, 144, 177]
+```
+
+The four byte numbers work together, in order, to store or send `🐱`.
+
+For `Cat`, the code-point numbers happen to match the UTF-8 byte numbers. The cat emoji proves that this match is not a rule.
+
+A code-point number identifies an example character. A UTF-8 byte sequence represents the text for storage or transmission.
+
+Now we can identify the characters and represent the text as bytes. Yet the same visible text can still arrive with extra spaces, empty lines, or special character forms. That creates our preparation question.
 
 ## 07:00 Preparing Text Consistently
 
@@ -252,86 +283,56 @@ We have traced the policy from input to output. Before moving farther, let’s t
 
 ## 10:45 Predict, Run, and Explain
 
-Use this companion file to inspect the representation of `Cat`:
+Create a file named `character_representation.py`, then place this complete example inside it:
 
 ```python
 text = "Cat"
+print("Text:", text)
+print("Code-point numbers:", [ord(character) for character in text])
+print("UTF-8 byte numbers:", list(text.encode("utf-8")))
 
-print("Human-readable text:", text)
-print("Unicode code points:", [ord(character) for character in text])
-print("UTF-8 bytes:", list(text.encode("utf-8")))
-print("Ready for later AI training? Not yet")
-print("Tokens, token IDs, and embeddings belong to later stages.")
+print()
+
+text = "🐱"
+print("Text:", text)
+print("Code-point numbers:", [ord(character) for character in text])
+print("UTF-8 byte numbers:", list(text.encode("utf-8")))
 ```
 
-Before you run it, pause. Predict both lists:
+Before we run the file, predict both lists for `Cat`. Then predict whether `🐱` will have one code-point number and whether it will use one byte or several.
 
-- the Unicode code-point list; and
-- the UTF-8 byte list.
-
-Can you also explain why the values should match for these three characters? Now run:
+Run:
 
 ```bash
-python course/templates/video/final_script_v1_lab.py
+python character_representation.py
 ```
 
-You should observe five lines:
+The program prints:
 
 ```text
-Human-readable text: Cat
-Unicode code points: [67, 97, 116]
-UTF-8 bytes: [67, 97, 116]
-Ready for later AI training? Not yet
-Tokens, token IDs, and embeddings belong to later stages.
+Text: Cat
+Code-point numbers: [67, 97, 116]
+UTF-8 byte numbers: [67, 97, 116]
+
+Text: 🐱
+Code-point numbers: [128049]
+UTF-8 byte numbers: [240, 159, 144, 177]
 ```
 
-Now explain the result from the rules:
+Trace the first half. Python visits `C`, `a`, and `t` in order. `ord` reports the code-point number for each character, while `encode` creates the ordered UTF-8 byte sequence.
 
-- `ord(character)` follows the Unicode agreement from each character to its code point;
-- `text.encode("utf-8")` converts the Unicode string into UTF-8 bytes; and
-- `list(...)` exposes the individual byte values so that we can inspect them.
+Then trace the emoji. One code-point number identifies it in this example, while four byte numbers represent it for storage or transmission.
 
-For `Cat`, the two lists match because these characters are in the ASCII range. The final two lines remind us that representation and preparation are only the early stages.
-
-Now change only this line:
-
-```python
-text = "A"
-```
-
-Before running the program again, predict the result:
+Now replace the first `Cat` with `A`. Before you run it, predict the two lines:
 
 ```text
-Unicode code points: [65]
-UTF-8 bytes: [65]
+Code-point numbers: [65]
+UTF-8 byte numbers: [65]
 ```
 
-Run the same command, compare the result with your prediction, and explain it using the same Unicode and UTF-8 rules. Then restore `Cat`.
+Run the same command and compare the result with your prediction. Then restore `Cat`.
 
-This companion lab does not call `normalize_text`; it tests character representation and byte encoding. Keep the preparation prediction separate.
-
-Under the repository’s NFKC policy, predict both results:
-
-```text
-① -> ?
-ﬀ -> ?
-```
-
-The prepared forms are:
-
-```text
-① -> 1
-ﬀ -> ff
-```
-
-These examples still test different jobs:
-
-```text
-ord and UTF-8 encoding -> inspect character representation and storage
-normalize_text         -> prepare source text according to repository rules
-```
-
-Predict, run, observe, explain, change, and compare. That cycle tests the rules instead of your memory of one output.
+This loop gives us evidence for two separate jobs: code-point numbers identify the example characters, while UTF-8 byte sequences represent the text for storage or transmission.
 
 ## 13:20 Return to the Whole Route
 
