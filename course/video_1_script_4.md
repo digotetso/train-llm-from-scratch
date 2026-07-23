@@ -26,9 +26,9 @@ Training text
 -> repeat across examples
 ```
 
-Start with training text: written examples provide the material for the journey. A later dividing rule turns that material into reusable text pieces; we call each resulting piece a token. Each defined piece receives one identifier, a token ID. That identifier lets the system select a learned number list, called an embedding. The learned list can then enter model calculations: the model is the mathematical prediction system whose internal numbers can change.
+Start with training text: written examples provide the material for the journey. A later dividing rule turns that material into reusable text pieces; we call each resulting piece a token. Each defined piece receives one identifier, a token ID. That identifier lets the system select a learned number list, called an embedding. The learned list can then enter a mathematical system that makes an answer using internal numbers that can change; we call that system the model, and its work model calculations.
 
-Those calculations produce a prediction, a numerical answer for the current training task. We compare that answer with the known training target already supplied by the example, which gives us a measured error: a number that says how far apart they are. A later update method uses that information to change the model's adjustable internal numbers, its parameters. Repeating that process across examples can make later answers less wrong.
+The system makes a numerical answer for the current training task; we call that answer a prediction. We compare that answer with the known training target already supplied by the example, which gives us a measured error: a number that says how far apart they are. A later process uses that information to change the model's adjustable internal numbers, its parameters; that process is the update method. Repeating that process across examples can make later answers less wrong.
 
 Notice the discipline of this map. Each label gives us a job and a name, not the mechanism hiding inside it. `Cat` could enter as a label at the left of this route, but we will not make up a dividing rule, an identifier, a learned list, or a numerical answer for it. The arrows show dependency order, and any one arrow can hide a whole later lesson.
 
