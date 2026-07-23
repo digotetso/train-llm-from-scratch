@@ -27,6 +27,10 @@ FULL_LESSON_ASSEMBLER_PATH = (
     EXPORTER_DIR / "scripts/assemble-full-lesson-evidence.mjs"
 )
 FIGMA_UI_PROTOCOL_TEST_PATH = EXPORTER_DIR / "tests/ui-protocol.test.ts"
+RELEASE_TEST_PATH = EXPORTER_DIR / "tests/release.test.ts"
+RELEASE_BUILD_PATH = EXPORTER_DIR / "scripts/build-release.mjs"
+RELEASE_VERIFY_PATH = EXPORTER_DIR / "scripts/verify-release.mjs"
+README_PATH = EXPORTER_DIR / "README.md"
 
 
 def ae_sources() -> dict[Path, str]:
@@ -119,7 +123,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
     )
     package = {
         "schemaVersion": "2.0.0",
-        "exporterVersion": "0.1.0",
+        "exporterVersion": "0.2.0",
         "exportedAt": "2026-07-23T00:00:00.000Z",
         "contentHash": "",
         "source": {
@@ -1297,3 +1301,58 @@ def test_ae_host_runtime_harness_and_read_only_audit_guards_are_present():
     ]:
         assert prohibited not in audit
     assert 'fallback.type === "raster-fallback"' in audit
+
+
+def test_reproducible_source_release_and_operator_runbook_are_required():
+    for path in [
+        RELEASE_TEST_PATH,
+        RELEASE_BUILD_PATH,
+        RELEASE_VERIFY_PATH,
+        README_PATH,
+    ]:
+        assert path.is_file(), f"missing release deliverable: {path.name}"
+
+    package = load_json(EXPORTER_DIR / "package.json")
+    lock = load_json(EXPORTER_DIR / "package-lock.json")
+    controller = (EXPORTER_DIR / "src/figma/controller.ts").read_text(encoding="utf-8")
+    assert package["version"] == "0.2.0"
+    assert lock["version"] == "0.2.0"
+    assert lock["packages"][""]["version"] == "0.2.0"
+    assert 'const EXPORTER_VERSION = "0.2.0";' in controller
+    assert package["scripts"]["release:build"] == "node scripts/build-release.mjs"
+    assert package["scripts"]["release:verify"] == "node scripts/verify-release.mjs"
+
+    release_test = RELEASE_TEST_PATH.read_text(encoding="utf-8")
+    for required in [
+        "byte-identical deterministic releases",
+        "fixed safe ustar metadata",
+        "allowlisted source symlinks",
+        "independent verifier",
+        "versions cannot drift",
+        "historical Shot 32 evidence",
+    ]:
+        assert required in release_test
+
+    readme = README_PATH.read_text(encoding="utf-8")
+    prerequisites = readme.index("## Prerequisites")
+    workflow = readme.index("## Build and operate")
+    assert prerequisites < workflow
+    for required in [
+        "macOS",
+        "Figma desktop",
+        "After Effects 25+",
+        "Node.js 20+",
+        "No Adobe Creative Cloud",
+        "npm ci",
+        ".figma-plugin-id",
+        "npm run build",
+        "dist/figma/manifest.json",
+        "dist/ae/Video001-Figma-AE-Exporter.jsx",
+        "Build full lesson (48 shots)",
+        "Import next",
+        "DUPLICATE_CONTENT",
+        "missing font",
+        "raster fallback",
+        "npm run release:verify",
+    ]:
+        assert required in readme

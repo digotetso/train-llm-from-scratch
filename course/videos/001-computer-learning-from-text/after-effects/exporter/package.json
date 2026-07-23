@@ -1,6 +1,6 @@
 {
   "name": "video-001-figma-ae-exporter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
@@ -8,7 +8,9 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:controller": "tsc --project tsconfig.controller.json --noEmit",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "release:build": "node scripts/build-release.mjs",
+    "release:verify": "node scripts/verify-release.mjs"
   },
   "devDependencies": {
     "@figma/plugin-typings": "1.131.0",

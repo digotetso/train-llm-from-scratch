@@ -1412,7 +1412,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
   const requestId = "11111111-1111-4111-8111-111111111111";
   const packageValue = {
     schemaVersion: "2.0.0",
-    exporterVersion: "0.1.0",
+    exporterVersion: "0.2.0",
     exportedAt: "2026-07-23T00:00:00.000Z",
     contentHash: "",
     source: {

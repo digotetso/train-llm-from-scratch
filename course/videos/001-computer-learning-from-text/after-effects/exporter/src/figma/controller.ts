@@ -19,7 +19,7 @@ export const BRIDGE_BASE_URL = FIGMA_BRIDGE_ORIGIN;
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
 export const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
 
-const EXPORTER_VERSION = "0.1.0";
+const EXPORTER_VERSION = "0.2.0";
 const FRAME_LIKE_TYPES = new Set(["FRAME", "COMPONENT", "INSTANCE"]);
 const MAX_FRAMES = 48;
 const PAIRING_CODE_PATTERN = /^\d{6}$/;
