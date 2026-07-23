@@ -18,6 +18,7 @@ type CanonicalTiming = {
 };
 type ImporterHarnessBehavior = {
   failShapeLayerCreation?: boolean;
+  failMasterCompCreation?: boolean;
   failMasterLayerAt?: number;
 };
 
@@ -177,6 +178,7 @@ function makeImporterHarness(
   const systemCommands: string[] = [];
   const fontsByPostScriptName = new Map<string, Array<{ postScriptName: string; hasGlyphsFor(value: string): boolean }>>();
   let beginUndoCount = 0;
+  let endUndoCount = 0;
   let masterLayerAddCount = 0;
 
   function parentPath(path: string): string {
@@ -300,6 +302,12 @@ function makeImporterHarness(
         duration: number,
         frameRate: number
       ): CompItemMock {
+        if (
+          behavior.failMasterCompCreation &&
+          name.indexOf("VIDEO001_MASTER_v") === 0
+        ) {
+          throw new Error("mock master comp creation failure");
+        }
         const item = new CompItemMock(
           name,
           removalLog,
@@ -371,7 +379,9 @@ function makeImporterHarness(
       beginUndoGroup() {
         beginUndoCount += 1;
       },
-      endUndoGroup() {}
+      endUndoGroup() {
+        endUndoCount += 1;
+      }
     },
     system: {
       callSystem(command: string) {
@@ -488,6 +498,9 @@ function makeImporterHarness(
     trustedQueuePath,
     get beginUndoCount() {
       return beginUndoCount;
+    },
+    get endUndoCount() {
+      return endUndoCount;
     }
   };
 }
@@ -661,6 +674,41 @@ test("rolls back the master and all frame roots when master layer creation fails
   assert.equal(harness.beginUndoCount, 1);
   assert.equal(harness.removalLog[0], "VIDEO001_MASTER_v001");
   assert.equal(harness.preexisting.removed, false);
+  assert.deepEqual(
+    harness.projectItems.filter((item) => !item.removed).map((item) => item.name),
+    ["preexisting"]
+  );
+});
+
+test("rolls back all frame roots when master comp creation fails before the master exists", () => {
+  const harness = makeImporterHarness(undefined, false, {
+    failMasterCompCreation: true
+  });
+  const { timing, value } = makeFullLessonPackage(harness);
+  const packageFile = harness.put(
+    "/manual/master-comp-creation-failure.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /mock master comp creation failure/
+  );
+
+  const createdItems = harness.projectItems.filter((item) => item !== harness.preexisting);
+  assert.equal(createdItems.length, 1 + timing.shots.length * 3);
+  assert.ok(createdItems.every((item) => item.removed));
+  assert.equal(harness.removalLog.length, createdItems.length);
+  assert.equal(harness.removalLog[0], timing.shots[47]!.name + "_v001");
+  assert.equal(harness.removalLog[harness.removalLog.length - 1], "01_Exporter_Imports");
+  assert.equal(harness.preexisting.removed, false);
+  assert.equal(harness.removalLog.indexOf(harness.preexisting.name), -1);
+  assert.equal(
+    harness.projectItems.some((item) => item.name.indexOf("VIDEO001_MASTER_v") === 0),
+    false
+  );
+  assert.equal(harness.beginUndoCount, 1);
+  assert.equal(harness.endUndoCount, 1);
   assert.deepEqual(
     harness.projectItems.filter((item) => !item.removed).map((item) => item.name),
     ["preexisting"]
