@@ -27,7 +27,7 @@ By the end, you will be able to explain:
 
 ## 01:00 Where This Video Fits in AI Training
 
-Here is the larger route that this course will follow. Read it as a dependency map: each stage supplies something a later stage needs. The map shows those dependencies without pretending that every arrow is already explained.
+Here is the course route. Each stage supplies something a later stage needs. Treat this as a dependency map, not a complete explanation.
 
 ```text
 Written source text
@@ -44,7 +44,7 @@ Written source text
         -> later AI-training stages [closed]
 ```
 
-You do not need to memorize the route. We will use it to keep today’s work in the right place.
+Use the map only to place today’s work.
 
 First, software needs a stable way to tell one written character from another. A shared system supplies that identifier; we call the system **Unicode**, and we call each identifier a **code point**.
 
@@ -102,10 +102,10 @@ Consider the character `A`. Before checking, predict what Python will do with:
 ord("A")
 ```
 
-Does Python invent a number for this particular `A`, or follow a shared agreement?
+Does Python invent a number for this `A`, or follow a shared agreement?
 
-```python
-ord("A") == 65
+```text
+65
 ```
 
 Python follows Unicode, a shared standard that assigns agreed numbers to characters. The assigned number is called a **code point**, so `65` is the code point for `A`.
@@ -223,7 +223,7 @@ str(text)
 
 After `str(text)` supplies a string, `unicodedata.normalize("NFKC", ...)` applies the compatibility rule we just tested with `①` and `ﬀ`.
 
-The next line standardizes Windows and older Mac newlines as `\n`. `_CONTROL_RE` then removes the selected control characters, and the list step removes trailing whitespace from each line.
+The next line turns Windows-style `\r\n` and standalone `\r` into `\n`. `_CONTROL_RE` then removes selected control characters, and the list step removes trailing whitespace from each line.
 
 Joining rebuilds the text, while `strip()` removes outer whitespace. Finally, `_BLANK_LINES_RE` limits each run of blank lines to one blank line, and the function returns the prepared string.
 
@@ -239,7 +239,7 @@ Both the stored text and `num_chars` describe the normalized result, not the unt
 
 The output of `normalize_text` is still Unicode text. It has been prepared according to the repository's policy, but later stages have not yet divided it into reusable pieces or produced the numerical input used during training.
 
-A precise description is:
+So:
 
 ```text
 source text
