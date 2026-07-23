@@ -65,3 +65,82 @@ Here is a tiny picture of possible improvement. Imagine ten comparable answers w
 That gives us two compact rules we can reuse. Representation changes the form of the data. Learning changes adjustable model parameters using examples and measured error. The character and byte trace belongs to the first rule; the map's answer, target, error, and closed update chain belongs to the second.
 
 We can now spend that distinction on a concrete repository question. When `normalize_text` makes source text consistent, which side does it belong to: representation or learning? Keep that prediction in mind as we open the repository's preparation step next.
+
+## 08:00 Apply the Distinction to the Repository
+
+Here is the function. As you read it, keep our question narrow: does `normalize_text` change data, model parameters, or both?
+
+```python
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", str(text))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _CONTROL_RE.sub("", text)
+    lines = [line.rstrip() for line in text.split("\n")]
+    text = "\n".join(lines).strip()
+    text = _BLANK_LINES_RE.sub("\n\n", text)
+    return text
+```
+
+Trace the data from top to bottom. `str(text)` produces a string. NFKC normalization makes selected Unicode forms consistent. Newline replacement turns two newline styles into `\n`. `_CONTROL_RE` removes selected control characters. The list step removes trailing whitespace from each line. Joining rebuilds the lines, and `strip` removes outer whitespace. `_BLANK_LINES_RE` limits a run of blank lines to one blank line. Then the function returns the prepared text.
+
+NFKC is deliberate and not lossless. For example, `①` can become `1`. A distinction present in the source can collapse, and character count can change. That is a preparation policy, not a neutral copy.
+
+The annotation `text: str` communicates the intended input type, and `-> str` communicates the intended return type. Python does not automatically enforce those annotations at runtime. In fact, the first operation explicitly calls `str`.
+
+The preparation code then uses the result:
+
+```python
+normalized = normalize_text(text)
+"text": normalized,
+"num_chars": len(normalized),
+```
+
+The stored text and its measured length therefore describe the normalized result. Our prediction can now be precise: this is preparation on the text-representation side. The data changed, but no measured error changed a model parameter.
+
+## 10:30 Predict, Run, and Explain
+
+Now use a tiny program to test the representation rule:
+
+```python
+text = "Cat"
+
+print("Human text:", text)
+print("Character numbers:", [ord(character) for character in text])
+print("UTF-8 bytes:", list(text.encode("utf-8")))
+print("Can the mathematical model use this raw Python string as numeric input? No")
+print("Learning begins after text is represented as numbers.")
+```
+
+Before running it, predict both lists for `Cat`: the character-number list and the UTF-8 byte list. Then run:
+
+```bash
+python course/videos/001-computer-learning-from-text/lab.py
+```
+
+The observed output is:
+
+```text
+Human text: Cat
+Character numbers: [67, 97, 116]
+UTF-8 bytes: [67, 97, 116]
+Can the mathematical model use this raw Python string as numeric input? No
+Learning begins after text is represented as numbers.
+```
+
+Line by line, `ord` follows the Unicode agreement from each character to its code point. `encode("utf-8")` converts the string into stored bytes according to UTF-8. `list` exposes those byte values so we can compare them. For these three characters, the values match; that match is not guaranteed for every character.
+
+Change only `"Cat"` to `"A"`. Predict again before running: the code-point list should be `[65]`, and the UTF-8 byte list should also be `[65]`. Rerun the same command, observe the two lists, and explain them with the same fixed agreements. Then restore `"Cat"`. This predict-run-observe-explain-change-predict-compare loop tests the rule rather than your memory of one output.
+
+These character numbers are not token IDs or embeddings. We have proved an early representation step, so we return to the map without opening those later boxes.
+
+## 13:00 Return to the Whole Map
+
+Here is the whole route in ordinary language. Training text is divided into reusable pieces. Each piece receives an identifier that selects a learned number list. Model calculations use those lists to make an answer. The answer is compared with the known target to measure error. A closed update method uses that information to change adjustable parameters, and the process repeats across examples.
+
+The exact path we earned today is: written character -> stable code point -> stored UTF-8 bytes -> prepared numerical data. The later boxes now have a valid input dependency, but their mechanisms remain closed.
+
+Keep the dividing line: Representation changes the form of the data. Learning changes adjustable model parameters using examples and measured error.
+
+Try one transfer exercise. Classify each action before checking your reasoning: applying a fixed rule that turns a newline style into `\n`; using examples and measured error to change an adjustable parameter. The first is representation and preparation because it changes data under a fixed rule. The second is learning because it changes adjustable model state through the learning chain.
+
+We can now ask Video 2's question without pretending text is already numeric: how can software use stable character numbers to build a dependable character set?
