@@ -185,101 +185,96 @@ A code-point number identifies an example character. A UTF-8 byte sequence repre
 
 Now we can identify the characters and represent the text as bytes. Yet the same visible text can still arrive with extra spaces, empty lines, or special character forms. That creates our preparation question.
 
-## 07:00 Preparing Text Consistently
+## 07:00 Preparing Text with Explicit Cleanup Steps
 
-Representation identifies and stores the text. **Preparation** applies the project’s chosen consistency rules before later processing.
+We can now identify the characters and store the text. But stored text can still contain differences that matter to software, even when a reader barely notices them.
 
-A text-preparation policy may:
+[On screen: a short text sample with extra spaces, mixed line endings, `①`, and `ﬀ`]
 
-- normalize selected Unicode forms;
-- make newline styles consistent;
-- remove selected control characters;
-- remove trailing or outer whitespace; or
-- reduce repeated blank lines.
+Look at the sample. It has spaces around the lines, an empty line, a circled digit, and a joined `ﬀ` symbol.
 
-A preparation rule can deliberately remove a distinction from the source.
+Should every difference remain? There is no universal answer. We first choose what the next use of the text requires.
 
-For example, NFKC changes the circled digit `①` into the ordinary digit `1`. Both results contain one Python character, but a distinction in the source has disappeared.
+Suppose we want two non-empty lines with no surrounding whitespace. We also choose to replace the two special-looking forms with simpler forms.
+
+We can choose one fixed cleanup step, such as removing the extra spaces around a line.
+
+Each cleanup step follows a fixed choice. The complete sequence of steps is called **text preparation**.
+
+Now consider the circled digit. Before we name the operation, predict whether our chosen cleanup leaves it alone or changes it.
+
+First, look only at this change: `①` becomes `1`.
+
+One possible cleanup step replaces certain special-looking characters with simpler equivalents. Changing text into a chosen standard form is called **normalization**.
+
+**NFKC** is the name of one Unicode normalization rule. In these examples, it changes `①` to `1` and `ﬀ` to `ff`.
+
+Trace both changes:
 
 ```text
 ① -> 1
-```
+length 1 -> 1
 
-Character count can change in a different example. NFKC changes the single typographic ligature `ﬀ` into the two characters `ff`, so the Python string length changes from `1` to `2`.
-
-```text
 ﬀ -> ff
 length 1 -> 2
 ```
 
-The rule does not ask what the writer meant. It applies the chosen policy consistently.
+The first change keeps the same length. The second turns one character into two, so the length changes.
 
-> **Prepared text follows a chosen policy. It is not necessarily a lossless copy of the source.**
+Normalization is one preparation step. It is not the whole preparation job.
 
-Now the name **text preparation** refers to a job we understand. How does this repository perform that job, step by step?
+These cleanup steps may change or remove details from the original text.
 
-> **What changes in the text before it becomes prepared training data?**
+We have named the larger job and one step inside it. Now we need a complete example that shows every chosen step from source text to prepared text.
 
-## 08:15 Apply Text Preparation in the Repository
+## 08:15 Build a Self-Contained Text-Preparation Example
 
-Here is the function:
+Our source string contains extra spaces and two ways of marking a new line. Those marks are easy to miss when a terminal prints the string normally.
 
-```python
-def normalize_text(text: str) -> str:
-    text = unicodedata.normalize("NFKC", str(text))
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = _CONTROL_RE.sub("", text)
-    lines = [line.rstrip() for line in text.split("\n")]
-    text = "\n".join(lines).strip()
-    text = _BLANK_LINES_RE.sub("\n\n", text)
-    return text
-```
+`repr` makes hidden marks such as `\r\n` and surrounding spaces visible in the terminal.
 
-Trace the text from top to bottom.
-
-The annotations tell readers that this function expects and returns text; `str(text)` is the operation that explicitly asks Python for a string.
-
-Now follow every operation in source order:
-
-```text
-str(text)
--> NFKC
--> newline standardization
--> selected control-character removal
--> per-line trailing-whitespace removal
--> outer stripping
--> blank-line-run limiting
--> return prepared string
-```
-
-After `str(text)` supplies a string, `unicodedata.normalize("NFKC", ...)` applies the compatibility rule we just tested with `①` and `ﬀ`.
-
-The next line turns Windows-style `\r\n` and standalone `\r` into `\n`. `_CONTROL_RE` then removes selected control characters, and the list step removes trailing whitespace from each line.
-
-Joining rebuilds the text, while `strip()` removes outer whitespace. Finally, `_BLANK_LINES_RE` limits each run of blank lines to one blank line, and the function returns the prepared string.
-
-The repository then uses the prepared result:
+Create a file named `text_preparation.py` with this complete example:
 
 ```python
-normalized = normalize_text(text)
-"text": normalized,
-"num_chars": len(normalized),
+import unicodedata
+
+
+def prepare_text(text):
+    text = unicodedata.normalize("NFKC", text)
+    lines = [line.strip() for line in text.splitlines()]
+    non_empty_lines = [line for line in lines if line]
+    return "\n".join(non_empty_lines)
+
+
+source = "  ① cat ﬀ  \r\n\r\n  second line  "
+
+print("Source text:", repr(source))
+print("Prepared text:", repr(prepare_text(source)))
 ```
 
-Both the stored text and `num_chars` describe the normalized result, not the untouched source.
+Follow the function from top to bottom.
 
-The output of `normalize_text` is still Unicode text. It has been prepared according to the repository's policy, but later stages have not yet divided it into reusable pieces or produced the numerical input used during training.
+The first line inside the function applies the NFKC change we just traced. Next, `splitlines` splits the string wherever Python recognizes a common line-ending mark.
 
-So:
+For each line, `strip` removes surrounding whitespace. The next line keeps only lines that still contain something.
+
+Finally, `join` puts the remaining lines back together. It places one `\n` between them.
+
+The complete trace is:
 
 ```text
-source text
--> apply fixed preparation rules
--> prepared Unicode text
--> later AI-training stages [closed]
+source string
+-> NFKC normalization
+-> split into lines using common line-ending marks
+-> remove surrounding whitespace from each line
+-> remove empty lines
+-> join the remaining lines with \n
+-> prepared string
 ```
 
-We have traced the policy from input to output. Before moving farther, let’s test whether we can predict the simpler representation steps ourselves.
+These are the cleanup choices in this example. Code, poetry, or other text may need different choices.
+
+The mechanism is now visible. Let’s predict the result, run both files, and compare the evidence with our mental model.
 
 ## 10:45 Predict, Run, and Explain
 
@@ -298,6 +293,8 @@ print("Text:", text)
 print("Code-point numbers:", [ord(character) for character in text])
 print("UTF-8 byte numbers:", list(text.encode("utf-8")))
 ```
+
+Open a terminal in the folder containing the two files.
 
 Before we run the file, predict both lists for `Cat`. Then predict whether `🐱` will have one code-point number and whether it will use one byte or several.
 
@@ -333,6 +330,33 @@ UTF-8 byte numbers: [65]
 Run the same command and compare the result with your prediction. Then restore `Cat`.
 
 This loop gives us evidence for two separate jobs: code-point numbers identify the example characters, while UTF-8 byte sequences represent the text for storage or transmission.
+
+Now turn to `text_preparation.py`.
+
+Before we run the second file, predict which parts of the source text will change.
+
+Run:
+
+```bash
+python text_preparation.py
+```
+
+The program prints:
+
+```text
+Source text: '  ① cat ﬀ  \r\n\r\n  second line  '
+Prepared text: '1 cat ff\nsecond line'
+```
+
+Follow the source through the function. NFKC changes `①` and `ﬀ`. Then `splitlines` creates three lines, including the empty middle line.
+
+`strip` removes the surrounding spaces. The filter removes the empty line. Finally, `join` rebuilds the two remaining lines with one `\n`.
+
+Now replace `①` with `Cat`. Before you run the file again, predict which parts of the output will change and which cleanup steps will behave the same way.
+
+Run, compare, and explain the result. Then restore `①`.
+
+We have now completed both loops: predict, run, observe, trace, change one input, and predict again.
 
 ## 13:20 Return to the Whole Route
 
