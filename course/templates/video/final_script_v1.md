@@ -212,7 +212,7 @@ We have named the larger job and one step inside it. Now we need a complete exam
 
 ## 08:15 Build a Self-Contained Text-Preparation Example
 
-Our source string contains extra spaces and two ways of marking a new line. Those marks are easy to miss when a terminal prints the string normally.
+Our source string contains extra spaces and two consecutive line endings. Those marks are easy to miss when a terminal prints the string normally.
 
 `repr` makes hidden marks such as `\r\n` and surrounding spaces visible in the terminal.
 
@@ -393,7 +393,9 @@ The rule gives:
 
 The first string keeps its length. The second changes from length `1` to length `2`.
 
-Finally, predict what `prepare_text` does with surrounding spaces, the empty line, and the mixed line endings. It removes the surrounding whitespace, removes the empty line, and joins the two remaining lines with `\n`.
+Finally, imagine the same text arrives with mixed line endings. Predict what `prepare_text` does with those marks, the surrounding spaces, and the empty line.
+
+`splitlines` separates the lines. The remaining steps remove surrounding whitespace, remove the empty line, and join the two kept lines with `\n`.
 
 Notice what you can now distinguish. A character number identifies. A byte sequence stores or sends. A cleanup step changes one selected feature. Text preparation combines the chosen steps.
 
