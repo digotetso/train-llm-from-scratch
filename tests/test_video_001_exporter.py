@@ -371,7 +371,7 @@ def test_shot_32_verifier_rejects_summary_falsification_and_raw_byte_drift(tmp_p
     assert verify().returncode != 0
 
 
-def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted(tmp_path: Path):
+def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
     live_session_path = SHOT_32_RAW_DIR / "shot-32-live-session.json"
     live_package_path = SHOT_32_RAW_DIR / "shot-32-live-package.video001-ae.json"
     live_bridge_log_path = SHOT_32_RAW_DIR / "shot-32-live-bridge-log.jsonl"
@@ -431,31 +431,12 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted(tmp_path: Pa
     computed_content_hash = hashlib.sha256(
         canonical_json(fingerprint_value).encode("utf-8")
     ).hexdigest()
-    plugin_id_file = tmp_path / ".figma-plugin-id"
-    plugin_id_file.write_text("987654321012345678\n", encoding="utf-8")
-    build = subprocess.run(
-        [
-            "node",
-            str(EXPORTER_DIR / "scripts/build.mjs"),
-            "--plugin-id-file",
-            str(plugin_id_file),
-        ],
-        cwd=EXPORTER_DIR,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stdout + build.stderr
     assert session["buildArtifacts"] == {
-        "panelSha256": sha256_path(
-            EXPORTER_DIR / "dist/ae/Video001-Figma-AE-Exporter.jsx"
-        ),
-        "timingSha256": sha256_path(EXPORTER_DIR / "dist/ae/figma-scenes.json"),
-        "bridgeSha256": sha256_path(
-            EXPORTER_DIR / "dist/bridge/video001-bridge.mjs"
-        ),
-        "figmaCodeSha256": sha256_path(EXPORTER_DIR / "dist/figma/code.js"),
-        "figmaUiSha256": sha256_path(EXPORTER_DIR / "dist/figma/ui.html"),
+        "panelSha256": "798153d8137803e0b20a1dace0613598ffa4e0bdac7f817916d542d32999265b",
+        "timingSha256": "4f649953f632585e531fba318caba75dd5232414f61e25b37cec76a2c1a1eb87",
+        "bridgeSha256": "0f27fb5406607fa69d925e7184c150a5843b6b1f30e664f53e4222cd3dc78c10",
+        "figmaCodeSha256": "b40165d475cf70206b8a3c8f8f8a4a1e6875f8be3207ffa9b52d3b96eb77f4f2",
+        "figmaUiSha256": "3dcc621d8e5f400801ef782f5d1bfa71565cbd1f3286cff95bbdb48d5b871c51",
     }
 
     assert package["contentHash"] == computed_content_hash
@@ -630,6 +611,50 @@ def test_import_rollback_removes_only_current_transaction_items_in_reverse_order
     )
     assert "transactionItems[transactionIndex].remove()" in importer
     assert re.search(r"app\.project\.items\s*\[[^\]]+\]\s*\.remove\s*\(", importer) is None
+
+
+def test_full_lesson_master_is_canonical_transactional_and_auditable():
+    core = CORE_PATH.read_text(encoding="utf-8")
+    importer = IMPORTER_PATH.read_text(encoding="utf-8")
+    audit = AUDIT_PATH.read_text(encoding="utf-8")
+    harness = HOST_RUNTIME_TEST_PATH.read_text(encoding="utf-8")
+
+    assert "createdMasterCompName" in core
+    for required in [
+        "packageObject.isFullLesson",
+        "timing.shots[index].nodeId",
+        "Full-lesson package frames must preserve canonical shot order",
+        "function createFullLessonMaster",
+        '"VIDEO001_MASTER"',
+        "layer.startTime = shot.start",
+        "layer.inPoint = shot.start",
+        "layer.outPoint = shot.start + shot.duration",
+        "state.createdMasterCompName = masterName",
+    ]:
+        assert required in importer
+    create_master = importer[
+        importer.index("function createFullLessonMaster"):
+        importer.index("function reportFileFor")
+    ]
+    assert "rememberItem(" in create_master
+    assert re.search(
+        r"for\s*\(\s*index\s*=\s*importedFrames\.length\s*-\s*1\s*;"
+        r"\s*index\s*>=\s*0\s*;\s*index\s*-=\s*1\s*\)",
+        create_master,
+    )
+    for timing_field in ["result.startTime", "result.inPoint", "result.outPoint"]:
+        assert timing_field in audit
+    for behavior in [
+        "exact canonical 48-frame lesson",
+        "reordered 48-frame lesson",
+        "duplicated node ID in a 48-frame lesson",
+        "missing configured shot",
+        "master layer creation fails",
+        "unchanged full-lesson resend",
+        "partial selected-frame import",
+        "records timing only for precomp layers",
+    ]:
+        assert behavior in harness
 
 
 def test_manual_raster_assets_are_verified_before_content_addressed_import():

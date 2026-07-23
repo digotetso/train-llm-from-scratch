@@ -327,9 +327,11 @@ var Video001ExporterImporter = (function (core) {
         var canvas = requireObject(timing.canvas, "Video 001 timing canvas");
         var source = requireObject(timing.source, "Video 001 timing source");
         var shots = requireArray(timing.shots, "Video 001 timing shots");
+        var orderedShots = [];
         var byNodeId = {};
         var index;
         var shot;
+        var value;
 
         if (
             canvas.width !== 1920 ||
@@ -343,18 +345,24 @@ var Video001ExporterImporter = (function (core) {
         requireString(source.figmaFileKey, "Video 001 Figma file key", false);
         requireString(source.figmaPageNodeId, "Video 001 Figma page ID", false);
         for (index = 0; index < shots.length; index += 1) {
-            shot = requireObject(shots[index], "Video 001 shot " + index);
-            requireString(shot.figmaNodeId, "Video 001 shot node ID", false);
-            requireString(shot.name, "Video 001 shot name", false);
-            requirePositiveNumber(shot.duration, "Video 001 shot duration");
-            if (byNodeId[shot.figmaNodeId] !== undefined) {
+            value = requireObject(shots[index], "Video 001 shot " + index);
+            shot = {
+                index: index + 1,
+                nodeId: requireString(value.figmaNodeId, "Video 001 shot node ID", false),
+                name: requireString(value.name, "Video 001 shot name", false),
+                start: requireNumber(value.start, "Video 001 shot start", 0),
+                duration: requirePositiveNumber(value.duration, "Video 001 shot duration")
+            };
+            if (byNodeId[shot.nodeId] !== undefined) {
                 throw new Error("Video 001 timing contains a duplicate shot node ID");
             }
-            byNodeId[shot.figmaNodeId] = shot;
+            orderedShots[orderedShots.length] = shot;
+            byNodeId[shot.nodeId] = shot;
         }
         return {
             canvas: canvas,
             source: source,
+            shots: orderedShots,
             shotsByNodeId: byNodeId
         };
     }
@@ -560,6 +568,14 @@ var Video001ExporterImporter = (function (core) {
         for (index = 0; index < assets.length; index += 1) {
             asset = assets[index];
             validateAssetPath(asset, expectedAssetRoot);
+        }
+        packageObject.isFullLesson = frames.length === timing.shots.length;
+        if (packageObject.isFullLesson) {
+            for (index = 0; index < timing.shots.length; index += 1) {
+                if (frames[index].nodeId !== timing.shots[index].nodeId) {
+                    throw new Error("Full-lesson package frames must preserve canonical shot order");
+                }
+            }
         }
         packageObject.assetByHash = assetByHash;
         return packageObject;
@@ -1064,6 +1080,29 @@ var Video001ExporterImporter = (function (core) {
         return comp;
     }
 
+    function createFullLessonMaster(importedFrames, timing, packageObject, target, rootFolder, state, transactionItems) {
+        var masterName = core.nextVersionName(allProjectItemNames(), "VIDEO001_MASTER");
+        var master = rememberItem(
+            transactionItems,
+            app.project.items.addComp(masterName, target.width, target.height, 1, 840, target.fps)
+        );
+        var index;
+        var shot;
+        var layer;
+        master.parentFolder = rootFolder;
+        master.comment = "Video001Export sha256:" + packageObject.contentHash;
+        for (index = importedFrames.length - 1; index >= 0; index -= 1) {
+            shot = timing.shots[index];
+            layer = master.layers.add(importedFrames[index]);
+            layer.name = importedFrames[index].name;
+            layer.startTime = shot.start;
+            layer.inPoint = shot.start;
+            layer.outPoint = shot.start + shot.duration;
+        }
+        state.createdMasterCompName = masterName;
+        return master;
+    }
+
     function reportFileFor(reportFolder, contentHash) {
         if (!reportFolder.exists && !reportFolder.create()) {
             throw new Error("Cannot create exporter report directory");
@@ -1079,6 +1118,7 @@ var Video001ExporterImporter = (function (core) {
         var duplicate = core.isDuplicateHash(allProjectItems(), packageObject.contentHash);
         var state;
         var rootFolder;
+        var importedFrames = [];
         var report;
         var reportFile;
         var index;
@@ -1094,6 +1134,7 @@ var Video001ExporterImporter = (function (core) {
 
         state = {
             createdCompNames: [],
+            createdMasterCompName: null,
             layerCount: 0,
             nativeCount: 0,
             rasterCount: 0,
@@ -1106,8 +1147,19 @@ var Video001ExporterImporter = (function (core) {
         try {
             rootFolder = ensureRootFolder(transactionItems);
             for (index = 0; index < packageObject.frames.length; index += 1) {
-                importFrame(
+                importedFrames[importedFrames.length] = importFrame(
                     packageObject.frames[index],
+                    packageObject,
+                    packageObject.target,
+                    rootFolder,
+                    state,
+                    transactionItems
+                );
+            }
+            if (packageObject.isFullLesson) {
+                createFullLessonMaster(
+                    importedFrames,
+                    timing,
                     packageObject,
                     packageObject.target,
                     rootFolder,
@@ -1118,6 +1170,7 @@ var Video001ExporterImporter = (function (core) {
             report = core.makeImportReport({
                 contentHash: packageObject.contentHash,
                 createdCompNames: state.createdCompNames,
+                createdMasterCompName: state.createdMasterCompName,
                 layerCount: state.layerCount,
                 nativeCount: state.nativeCount,
                 rasterCount: state.rasterCount,

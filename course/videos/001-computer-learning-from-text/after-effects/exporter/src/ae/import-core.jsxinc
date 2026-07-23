@@ -136,6 +136,7 @@ var Video001ExporterCore = (function () {
         return {
             contentHash: options.contentHash,
             createdCompNames: copyArray(options.createdCompNames),
+            createdMasterCompName: options.createdMasterCompName,
             layerCount: options.layerCount,
             nativeCount: options.nativeCount,
             rasterCount: options.rasterCount,

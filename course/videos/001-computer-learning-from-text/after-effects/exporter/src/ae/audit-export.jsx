@@ -133,6 +133,9 @@
         }
         if (type === "precomp") {
             result.sourceComp = layer.source.name;
+            result.startTime = layer.startTime;
+            result.inPoint = layer.inPoint;
+            result.outPoint = layer.outPoint;
         }
         return result;
     }

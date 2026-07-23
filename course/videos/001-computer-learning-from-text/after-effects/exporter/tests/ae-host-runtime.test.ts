@@ -5,9 +5,25 @@ import test from "node:test";
 import vm from "node:vm";
 
 type FileRecord = { contents: string; exists: boolean; length?: number };
+type CanonicalShot = {
+  figmaNodeId: string;
+  name: string;
+  start: number;
+  duration: number;
+};
+type CanonicalTiming = {
+  canvas: { width: number; height: number; fps: number; timeUnit: string; duration: number };
+  source: { figmaFileKey: string; figmaPageNodeId: string };
+  shots: CanonicalShot[];
+};
+type ImporterHarnessBehavior = {
+  failShapeLayerCreation?: boolean;
+  failMasterLayerAt?: number;
+};
 
 class FolderItemMock {
   name: string;
+  comment = "";
   parentFolder: unknown = null;
   removed = false;
   readonly removalLog: string[];
@@ -23,11 +39,47 @@ class FolderItemMock {
   }
 }
 
+class PropertyMock {
+  numProperties = 0;
+
+  property(_name: string | number): PropertyMock {
+    return new PropertyMock();
+  }
+
+  addProperty(_name: string): PropertyMock {
+    return new PropertyMock();
+  }
+
+  setValue(_value: unknown): void {}
+}
+
+class LayerMock {
+  name = "";
+  comment = "";
+  startTime = 0;
+  inPoint = 0;
+  outPoint = 0;
+  readonly source: CompItemMock | null;
+
+  constructor(source: CompItemMock | null) {
+    this.source = source;
+  }
+
+  property(_name: string): PropertyMock {
+    return new PropertyMock();
+  }
+}
+
 class CompItemMock extends FolderItemMock {
   width = 0;
   height = 0;
   duration = 0;
   frameRate = 0;
+  private readonly timelineLayers: LayerMock[] = [];
+  readonly layers: {
+    add: (source: CompItemMock) => LayerMock;
+    addShape: () => LayerMock;
+  };
 
   constructor(
     name: string,
@@ -35,13 +87,41 @@ class CompItemMock extends FolderItemMock {
     width = 0,
     height = 0,
     duration = 0,
-    frameRate = 0
+    frameRate = 0,
+    onAddSource?: () => void,
+    onAddShape?: () => void
   ) {
     super(name, removalLog);
     this.width = width;
     this.height = height;
     this.duration = duration;
     this.frameRate = frameRate;
+    this.layers = {
+      add: (source: CompItemMock) => {
+        if (onAddSource !== undefined) onAddSource();
+        const layer = new LayerMock(source);
+        this.timelineLayers.unshift(layer);
+        return layer;
+      },
+      addShape: () => {
+        if (onAddShape !== undefined) onAddShape();
+        const layer = new LayerMock(null);
+        this.timelineLayers.unshift(layer);
+        return layer;
+      }
+    };
+  }
+
+  get numLayers(): number {
+    return this.timelineLayers.length;
+  }
+
+  get layersInTimelineOrder(): LayerMock[] {
+    return this.timelineLayers.slice();
+  }
+
+  layer(index: number): LayerMock {
+    return this.timelineLayers[index - 1]!;
   }
 }
 class FootageItemMock extends FolderItemMock {}
@@ -84,7 +164,11 @@ function instrumentImporter(source: string): string {
 }(Video001ExporterCore));\n`;
 }
 
-function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
+function makeImporterHarness(
+  forcedSystemHash?: string,
+  duplicateHash = false,
+  behavior: ImporterHarnessBehavior = {}
+) {
   const sourceUrl = new URL("../src/ae/importer.jsxinc", import.meta.url);
   const source = instrumentImporter(readFileSync(sourceUrl, "utf8"));
   const records = new Map<string, FileRecord>();
@@ -93,6 +177,7 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
   const systemCommands: string[] = [];
   const fontsByPostScriptName = new Map<string, Array<{ postScriptName: string; hasGlyphsFor(value: string): boolean }>>();
   let beginUndoCount = 0;
+  let masterLayerAddCount = 0;
 
   function parentPath(path: string): string {
     const slash = path.lastIndexOf("/");
@@ -215,7 +300,25 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
         duration: number,
         frameRate: number
       ): CompItemMock {
-        const item = new CompItemMock(name, removalLog, width, height, duration, frameRate);
+        const item = new CompItemMock(
+          name,
+          removalLog,
+          width,
+          height,
+          duration,
+          frameRate,
+          name.indexOf("VIDEO001_MASTER_v") === 0
+            ? () => {
+                masterLayerAddCount += 1;
+                if (masterLayerAddCount === behavior.failMasterLayerAt) {
+                  throw new Error("mock master layer creation failure");
+                }
+              }
+            : undefined,
+          behavior.failShapeLayerCreation
+            ? () => { throw new Error("mock shape layer creation failure"); }
+            : undefined
+        );
         projectItems.push(item);
         return item;
       }
@@ -249,8 +352,10 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
       nextVersionName(_names: string[], name: string) {
         return name + "_v001";
       },
-      isDuplicateHash() {
-        return duplicateHash;
+      isDuplicateHash(items: Array<{ comment?: string }>, contentHash: string) {
+        return duplicateHash || items.some(
+          (item) => item.comment === "Video001Export sha256:" + contentHash
+        );
       },
       makeImportReport(value: unknown) {
         return value;
@@ -288,6 +393,10 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
   const importer = context.Video001ExporterImporter as {
     importPackage(value: unknown, options: Record<string, unknown>, untrustedBypass?: boolean): unknown;
     importPackageFile(file: InstanceType<typeof FileMock>, options: Record<string, unknown>): unknown;
+    loadTiming(file: InstanceType<typeof FileMock>): {
+      shots: Array<{ index: number; nodeId: string; name: string; start: number; duration: number }>;
+      shotsByNodeId: Record<string, { index: number; nodeId: string; name: string; start: number; duration: number }>;
+    };
     __test: {
       rememberItem(items: FolderItemMock[], item: FolderItemMock): FolderItemMock;
       rollbackItems(items: FolderItemMock[]): void;
@@ -313,7 +422,7 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
   const timingFile = put("/timing/figma-scenes.json", {
     canvas: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds", duration: 840 },
     source: { figmaFileKey: "file-key", figmaPageNodeId: "page-id" },
-    shots: [{ figmaNodeId: "1:1", name: "Shot", duration: 30 }]
+    shots: [{ figmaNodeId: "1:1", name: "Shot", start: 0, duration: 30 }]
   });
   const trustedQueuePath = "/user-data/Video001FigmaAEExporter";
   const assetRoot = new FolderMock(trustedQueuePath + "/assets");
@@ -382,6 +491,232 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
     }
   };
 }
+
+function canonicalTiming(): CanonicalTiming {
+  const sourceUrl = new URL("../config/video001-figma-scenes.json", import.meta.url);
+  return JSON.parse(readFileSync(sourceUrl, "utf8")) as CanonicalTiming;
+}
+
+function makeFullLessonPackage(harness: ReturnType<typeof makeImporterHarness>) {
+  const timing = canonicalTiming();
+  harness.put("/timing/figma-scenes.json", timing);
+  const value = harness.validPackage();
+  const templateFrame = value.frames[0]!;
+  const templateShape = templateFrame.children[0]!;
+  value.source = {
+    fileKey: timing.source.figmaFileKey,
+    pageId: timing.source.figmaPageNodeId
+  };
+  value.frames = timing.shots.map((shot, index) => ({
+    ...templateFrame,
+    nodeId: shot.figmaNodeId,
+    name: shot.name,
+    duration: shot.duration,
+    children: [{
+      ...templateShape,
+      id: "shape-" + String(index + 1),
+      name: "Shape " + String(index + 1)
+    }]
+  }));
+  return { timing, value };
+}
+
+test("retains canonical timing order and seconds metadata for full-lesson assembly", () => {
+  const harness = makeImporterHarness();
+  const timing = canonicalTiming();
+  const timingFile = harness.put("/timing/canonical-figma-scenes.json", timing);
+
+  const loaded = harness.importer.loadTiming(timingFile);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(loaded.shots)),
+    timing.shots.map((shot, index) => ({
+      index: index + 1,
+      nodeId: shot.figmaNodeId,
+      name: shot.name,
+      start: shot.start,
+      duration: shot.duration
+    }))
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(loaded.shotsByNodeId[timing.shots[31]!.figmaNodeId])),
+    {
+      index: 32,
+      nodeId: timing.shots[31]!.figmaNodeId,
+      name: timing.shots[31]!.name,
+      start: timing.shots[31]!.start,
+      duration: timing.shots[31]!.duration
+    }
+  );
+});
+
+test("imports the exact canonical 48-frame lesson into one chronological 14-minute master", () => {
+  const harness = makeImporterHarness();
+  const { timing, value } = makeFullLessonPackage(harness);
+  const packageFile = harness.put(
+    "/manual/full-lesson.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  const result = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as {
+    status: string;
+    report: { createdCompNames: string[]; createdMasterCompName: string | null };
+  };
+  const master = harness.projectItems.find(
+    (item): item is CompItemMock => item instanceof CompItemMock && item.name === "VIDEO001_MASTER_v001"
+  );
+
+  assert.equal(result.status, "IMPORTED");
+  assert.equal(result.report.createdCompNames.length, 48);
+  assert.equal(result.report.createdMasterCompName, "VIDEO001_MASTER_v001");
+  assert.ok(master);
+  assert.equal(master.duration, 840);
+  assert.equal(master.frameRate, 30);
+  assert.equal(master.numLayers, 48);
+  assert.deepEqual(master.layersInTimelineOrder.map((layer) => ({
+    source: layer.source!.name,
+    startTime: layer.startTime,
+    inPoint: layer.inPoint,
+    outPoint: layer.outPoint
+  })), timing.shots.map((shot) => ({
+    source: `${shot.name}_v001`,
+    startTime: shot.start,
+    inPoint: shot.start,
+    outPoint: shot.start + shot.duration
+  })));
+  assert.equal(master.comment, "Video001Export sha256:" + value.contentHash);
+});
+
+test("rejects a reordered 48-frame lesson before After Effects mutation", () => {
+  const harness = makeImporterHarness();
+  const { value } = makeFullLessonPackage(harness);
+  const first = value.frames[0]!;
+  value.frames[0] = value.frames[1]!;
+  value.frames[1] = first;
+  const packageFile = harness.put(
+    "/manual/reordered-full-lesson.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /full-lesson package frames must preserve canonical shot order/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+  assert.deepEqual(harness.projectItems.map((item) => item.name), ["preexisting"]);
+});
+
+test("rejects a duplicated node ID in a 48-frame lesson before After Effects mutation", () => {
+  const harness = makeImporterHarness();
+  const { value } = makeFullLessonPackage(harness);
+  value.frames[1] = JSON.parse(JSON.stringify(value.frames[0]!)) as typeof value.frames[number];
+  const packageFile = harness.put(
+    "/manual/duplicated-full-lesson.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /full-lesson package frames must preserve canonical shot order/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+  assert.deepEqual(harness.projectItems.map((item) => item.name), ["preexisting"]);
+});
+
+test("rejects a 48-frame lesson with a missing configured shot before After Effects mutation", () => {
+  const harness = makeImporterHarness();
+  const { value } = makeFullLessonPackage(harness);
+  value.frames[20] = {
+    ...value.frames[20]!,
+    nodeId: "missing:shot"
+  };
+  const packageFile = harness.put(
+    "/manual/missing-shot-full-lesson.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /does not match the approved Video 001 timing/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+  assert.deepEqual(harness.projectItems.map((item) => item.name), ["preexisting"]);
+});
+
+test("rolls back the master and all frame roots when master layer creation fails", () => {
+  const harness = makeImporterHarness(undefined, false, { failMasterLayerAt: 24 });
+  const { value } = makeFullLessonPackage(harness);
+  const packageFile = harness.put(
+    "/manual/master-failure.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /mock master layer creation failure/
+  );
+  assert.equal(harness.beginUndoCount, 1);
+  assert.equal(harness.removalLog[0], "VIDEO001_MASTER_v001");
+  assert.equal(harness.preexisting.removed, false);
+  assert.deepEqual(
+    harness.projectItems.filter((item) => !item.removed).map((item) => item.name),
+    ["preexisting"]
+  );
+});
+
+test("unchanged full-lesson resend remains a duplicate no-op", () => {
+  const harness = makeImporterHarness();
+  const { value } = makeFullLessonPackage(harness);
+  const packageFile = harness.put(
+    "/manual/unchanged-full-lesson.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+  const first = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as { status: string };
+  const itemCountAfterFirst = harness.projectItems.filter((item) => !item.removed).length;
+  const duplicate = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as { status: string; report: null };
+
+  assert.equal(first.status, "IMPORTED");
+  assert.equal(duplicate.status, "DUPLICATE_CONTENT");
+  assert.equal(duplicate.report, null);
+  assert.equal(harness.projectItems.filter((item) => !item.removed).length, itemCountAfterFirst);
+  assert.equal(harness.beginUndoCount, 1);
+});
+
+test("partial selected-frame import remains valid without creating a master", () => {
+  const harness = makeImporterHarness();
+  const { value } = makeFullLessonPackage(harness);
+  value.frames = [value.frames[31]!];
+  stampCanonicalContentHash(value);
+  const packageFile = harness.put("/manual/partial.video001-ae.json", value);
+
+  const result = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as {
+    status: string;
+    report: { createdCompNames: string[]; createdMasterCompName: string | null };
+  };
+
+  assert.equal(result.status, "IMPORTED");
+  assert.deepEqual(
+    Array.from(result.report.createdCompNames),
+    ["S001_SH32_Repo_PreparationNotLearning_v001"]
+  );
+  assert.equal(result.report.createdMasterCompName, null);
+  assert.equal(
+    harness.projectItems.some((item) => item.name.indexOf("VIDEO001_MASTER_v") === 0),
+    false
+  );
+});
 
 test("font resolution rejects an installed font that cannot render the exact run text", () => {
   const harness = makeImporterHarness();
@@ -731,7 +1066,7 @@ test("transaction tracking accepts concrete AE items and rolls back only new ide
 });
 
 test("public file importer automatically rolls back only its new items in reverse after a post-creation failure", () => {
-  const harness = makeImporterHarness();
+  const harness = makeImporterHarness(undefined, false, { failShapeLayerCreation: true });
   const packageFile = harness.put(
     "/manual/rollback.video001-ae.json",
     stampCanonicalContentHash(harness.validPackage())
@@ -739,7 +1074,7 @@ test("public file importer automatically rolls back only its new items in revers
 
   assert.throws(
     () => harness.importer.importPackageFile(packageFile, harness.options(false)),
-    /layers|addShape/
+    /mock shape layer creation failure/
   );
 
   assert.equal(harness.beginUndoCount, 1);
@@ -752,7 +1087,7 @@ test("public file importer automatically rolls back only its new items in revers
 });
 
 test("top-level and recursive group comps use frame duration as seconds", () => {
-  const harness = makeImporterHarness();
+  const harness = makeImporterHarness(undefined, false, { failShapeLayerCreation: true });
   const value = harness.validPackage() as unknown as {
     exportedAt: string;
     contentHash: string;
@@ -792,7 +1127,7 @@ test("top-level and recursive group comps use frame duration as seconds", () => 
 
   assert.throws(
     () => harness.importer.importPackageFile(packageFile, harness.options(false)),
-    /layers|addShape/
+    /mock shape layer creation failure/
   );
 
   const createdComps = harness.projectItems.filter((item): item is CompItemMock => item instanceof CompItemMock);
@@ -843,21 +1178,18 @@ test("After Effects accepts a fractional-second duration on an exact frame bound
   harness.put("/timing/figma-scenes.json", {
     canvas: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds", duration: 840 },
     source: { figmaFileKey: "file-key", figmaPageNodeId: "page-id" },
-    shots: [{ figmaNodeId: "1:1", name: "Shot", duration: 1 / 30 }]
+    shots: [{ figmaNodeId: "1:1", name: "Shot", start: 0, duration: 1 / 30 }]
   });
   const packageFile = harness.put(
     "/manual/fractional-seconds.video001-ae.json",
     stampCanonicalContentHash(value)
   );
-  let error: unknown;
-  try {
-    harness.importer.importPackageFile(packageFile, harness.options(false));
-  } catch (caught) {
-    error = caught;
-  }
+  const result = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as { status: string };
 
-  assert.equal(typeof (error as { message?: unknown } | undefined)?.message, "string");
-  assert.doesNotMatch((error as { message: string }).message, /whole frame|duration/i);
+  assert.equal(result.status, "IMPORTED");
   assert.equal(harness.beginUndoCount, 1);
   const createdComp = harness.projectItems.find((item): item is CompItemMock => item instanceof CompItemMock);
   assert.ok(createdComp);
@@ -1017,14 +1349,11 @@ test("manual packages use the shared canonical content fingerprint before import
   const harness = makeImporterHarness();
   const value = stampCanonicalContentHash(harness.validPackage());
   const packageFile = harness.put("/manual/package.video001-ae.json", value);
-  let error: unknown;
-  try {
-    harness.importer.importPackageFile(packageFile, harness.options(false));
-  } catch (caught) {
-    error = caught;
-  }
-  assert.equal(typeof (error as { message?: unknown } | undefined)?.message, "string", "the intentionally partial AE layer mock must fail after preflight");
-  assert.doesNotMatch((error as { message: string }).message, /content fingerprint|content hash/i);
+  const result = harness.importer.importPackageFile(
+    packageFile,
+    harness.options(false)
+  ) as { status: string };
+  assert.equal(result.status, "IMPORTED");
   assert.equal(harness.beginUndoCount, 1);
   assert.ok(harness.systemCommands.some((command) => command.startsWith("/bin/chmod 600 ")));
 });
@@ -1560,4 +1889,130 @@ test("read-only audit deeply preserves project, comp, layer, and property state 
     shapeMatchNames: [],
     sourceComp: null
   }]);
+});
+
+test("read-only audit records timing only for precomp layers without changing project item count", () => {
+  const sourceUrl = new URL("../src/ae/audit-export.jsx", import.meta.url);
+  const source = readFileSync(sourceUrl, "utf8");
+  const hash = "b".repeat(64);
+  let output = "";
+
+  class FolderMock {
+    static userData = new FolderMock("/user-data");
+    readonly fsName: string;
+    constructor(path: string) { this.fsName = path; }
+  }
+  class FileMock {
+    static encoding = "UTF-8";
+    readonly fsName: string;
+    encoding = "UTF-8";
+    constructor(path: string) { this.fsName = path; }
+    get parent(): FolderMock { return new FolderMock(this.fsName.slice(0, this.fsName.lastIndexOf("/"))); }
+    get exists(): boolean { return false; }
+    open(): boolean { return true; }
+    read(): string { return ""; }
+    write(value: string): boolean { output = value; return true; }
+    close(): void {}
+  }
+  class CompItemMockLocal {
+    readonly name: string;
+    readonly width = 1920;
+    readonly height = 1080;
+    readonly frameRate = 30;
+    readonly duration: number;
+    readonly comment: string;
+    readonly layers: object[];
+
+    constructor(name: string, duration: number, comment: string, layers: object[]) {
+      this.name = name;
+      this.duration = duration;
+      this.comment = comment;
+      this.layers = layers;
+    }
+
+    get numLayers(): number { return this.layers.length; }
+    layer(index: number): object { return this.layers[index - 1]!; }
+  }
+  class AVLayerMockLocal {
+    readonly name: string;
+    readonly comment = "";
+    readonly source: CompItemMockLocal;
+    readonly startTime: number;
+    readonly inPoint: number;
+    readonly outPoint: number;
+
+    constructor(
+      name: string,
+      sourceComp: CompItemMockLocal,
+      startTime: number,
+      inPoint: number,
+      outPoint: number
+    ) {
+      this.name = name;
+      this.source = sourceComp;
+      this.startTime = startTime;
+      this.inPoint = inPoint;
+      this.outPoint = outPoint;
+    }
+  }
+  class EmptyClass {}
+  const shot = mutationRejectingProxy(
+    new CompItemMockLocal("S001_SH32_Repo_PreparationNotLearning_v001", 28, "", []),
+    "shot"
+  );
+  const precompLayer = mutationRejectingProxy(
+    new AVLayerMockLocal("S001_SH32_Repo_PreparationNotLearning_v001", shot, 512, 512, 540),
+    "precompLayer"
+  );
+  const master = mutationRejectingProxy(
+    new CompItemMockLocal(
+      "VIDEO001_MASTER_v001",
+      840,
+      "Video001Export sha256:" + hash,
+      [precompLayer]
+    ),
+    "master"
+  );
+  const project = mutationRejectingProxy({
+    activeItem: master,
+    file: null,
+    numItems: 2
+  }, "project");
+  const context = {
+    $: { fileName: "/bundle/ae/audit-export.jsx" },
+    File: FileMock,
+    Folder: FolderMock,
+    CompItem: CompItemMockLocal,
+    TextLayer: EmptyClass,
+    ShapeLayer: EmptyClass,
+    CameraLayer: EmptyClass,
+    LightLayer: EmptyClass,
+    AVLayer: AVLayerMockLocal,
+    app: { project }
+  };
+
+  vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
+
+  const audit = JSON.parse(output) as {
+    itemCountBefore: number;
+    itemCountAfter: number;
+    layers: Array<Record<string, unknown>>;
+  };
+  assert.equal(audit.itemCountBefore, 2);
+  assert.equal(audit.itemCountAfter, 2);
+  assert.deepEqual(audit.layers[0], {
+    comp: "VIDEO001_MASTER_v001",
+    name: "S001_SH32_Repo_PreparationNotLearning_v001",
+    type: "precomp",
+    comment: "",
+    text: null,
+    font: null,
+    fontSize: null,
+    boxDimensions: null,
+    shapeMatchNames: [],
+    sourceComp: "S001_SH32_Repo_PreparationNotLearning_v001",
+    startTime: 512,
+    inPoint: 512,
+    outPoint: 540
+  });
 });

@@ -6,6 +6,7 @@ import vm from "node:vm";
 interface ImportReportOptions {
   contentHash: string;
   createdCompNames: string[];
+  createdMasterCompName: string | null;
   layerCount: number;
   nativeCount: number;
   rasterCount: number;
@@ -151,6 +152,7 @@ test("creates an isolated import report with the required audit fields", () => {
   const options: ImportReportOptions = {
     contentHash: "b".repeat(64),
     createdCompNames: ["S001_SH32_Repo_PreparationNotLearning_v001"],
+    createdMasterCompName: "VIDEO001_MASTER_v001",
     layerCount: 8,
     nativeCount: 7,
     rasterCount: 1,
@@ -175,6 +177,7 @@ test("copies fallback records so later mutations cannot rewrite the audit report
   const options: ImportReportOptions = {
     contentHash: "b".repeat(64),
     createdCompNames: [],
+    createdMasterCompName: null,
     layerCount: 1,
     nativeCount: 0,
     rasterCount: 1,
