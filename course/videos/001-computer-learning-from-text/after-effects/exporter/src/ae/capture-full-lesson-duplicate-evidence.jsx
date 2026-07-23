@@ -259,9 +259,15 @@
     function normalizePropertyValue(value) {
         var result = [];
         var fields = [
-            "text", "font", "fontSize", "fillColor", "leading", "tracking",
-            "fauxBold", "fauxItalic", "applyFill", "applyStroke", "justification",
-            "vertices", "inTangents", "outTangents", "closed"
+            "text", "font", "fontSize", "fauxBold", "fauxItalic",
+            "allCaps", "smallCaps", "superscript", "subscript", "applyFill",
+            "fillColor", "applyStroke", "strokeColor", "strokeWidth",
+            "strokeOverFill", "justification", "leading", "autoLeading",
+            "tracking", "baselineShift", "horizontalScale", "verticalScale",
+            "tsume", "noBreak", "autoHyphenate", "hangingRoman", "startIndent",
+            "endIndent", "firstLineIndent", "spaceBefore", "spaceAfter", "boxText",
+            "boxTextSize", "boxTextPos", "pointText", "vertices", "inTangents",
+            "outTangents", "closed"
         ];
         var objectValue;
         var index;
@@ -425,7 +431,41 @@
         for (index = 1; index <= comp.numLayers; index += 1) {
             layers[layers.length] = layerFingerprint(comp.layer(index));
         }
-        return { layers: layers };
+        return {
+            comment: String(comp.comment || ""),
+            displayStartTime: comp.displayStartTime === undefined
+                ? null
+                : comp.displayStartTime,
+            displayStartFrame: comp.displayStartFrame === undefined
+                ? null
+                : comp.displayStartFrame,
+            workAreaStart: comp.workAreaStart === undefined
+                ? null
+                : comp.workAreaStart,
+            workAreaDuration: comp.workAreaDuration === undefined
+                ? null
+                : comp.workAreaDuration,
+            pixelAspect: comp.pixelAspect === undefined
+                ? null
+                : comp.pixelAspect,
+            frameDuration: comp.frameDuration === undefined
+                ? null
+                : comp.frameDuration,
+            hideShyLayers: comp.hideShyLayers === true,
+            motionBlur: comp.motionBlur === true,
+            frameBlending: comp.frameBlending === true,
+            draft3d: comp.draft3d === true,
+            resolutionFactor: comp.resolutionFactor === undefined
+                ? null
+                : normalizePropertyValue(comp.resolutionFactor),
+            bgColor: comp.bgColor === undefined
+                ? null
+                : normalizePropertyValue(comp.bgColor),
+            renderer: comp.renderer === undefined
+                ? null
+                : String(comp.renderer),
+            layers: layers
+        };
     }
 
     function itemRecord(item, index) {

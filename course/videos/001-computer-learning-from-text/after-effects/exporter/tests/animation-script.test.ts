@@ -581,6 +581,118 @@ test("visual provenance rejects changed Source Text and static transforms", () =
   );
 });
 
+function captureItemRecordHarness() {
+  const sourceUrl = new URL(
+    "../src/ae/capture-full-lesson-duplicate-evidence.jsx",
+    import.meta.url
+  );
+  const source = readFileSync(sourceUrl, "utf8");
+  class CompItemMock {
+    name = "VIDEO001_MASTER_v001";
+    comment = "Video001Export sha256:" + "a".repeat(64);
+    parentFolder: unknown = null;
+    width = 1920;
+    height = 1080;
+    duration = 840;
+    frameRate = 30;
+    displayStartTime = 0;
+    workAreaStart = 0;
+    workAreaDuration = 840;
+    private readonly layers: unknown[];
+
+    constructor(documentValue: Record<string, unknown>) {
+      const sourceText = {
+        name: "Source Text",
+        matchName: "ADBE Text Document",
+        numKeys: 0,
+        numProperties: 0,
+        canSetExpression: false,
+        value: documentValue,
+      };
+      const layer = {
+        index: 1,
+        name: "TXT_Title",
+        comment: "Figma native text 99:1",
+        enabled: true,
+        locked: false,
+        solo: false,
+        shy: false,
+        guideLayer: false,
+        adjustmentLayer: false,
+        threeDLayer: false,
+        startTime: 0,
+        inPoint: 0,
+        outPoint: 840,
+        stretch: 100,
+        source: null,
+        numKeys: 0,
+        numProperties: 1,
+        canSetExpression: false,
+        property(index: number) {
+          return index === 1 ? sourceText : null;
+        },
+      };
+      this.layers = [layer];
+    }
+
+    get numLayers() {
+      return this.layers.length;
+    }
+
+    layer(index: number) {
+      return this.layers[index - 1]!;
+    }
+  }
+  class FootageItemMock {}
+  class FolderItemMock {}
+  const context = {
+    CompItem: CompItemMock,
+    FootageItem: FootageItemMock,
+    FolderItem: FolderItemMock,
+    app: { project: { numItems: 0, rootFolder: {}, item() { return null; } } },
+    record: undefined as undefined | ((item: unknown, index: number) => unknown),
+  };
+  vm.runInNewContext(
+    [
+      extractFunction(source, "itemKind"),
+      extractFunction(source, "normalizePropertyValue"),
+      extractFunction(source, "propertyFingerprint"),
+      extractFunction(source, "projectItemIndex"),
+      extractFunction(source, "sourceFingerprint"),
+      extractFunction(source, "layerFingerprint"),
+      extractFunction(source, "compContentFingerprint"),
+      extractFunction(source, "itemRecord"),
+      "record = itemRecord;",
+    ].join("\n"),
+    context
+  );
+  assert.ok(context.record);
+  return {
+    CompItemMock,
+    record: context.record,
+  };
+}
+
+test("duplicate capture fingerprint changes when the master comp comment changes", () => {
+  const documentValue = { text: "cat", boxTextSize: [100, 20] };
+  const harness = captureItemRecordHarness();
+  const comp = new harness.CompItemMock(documentValue);
+  const before = JSON.stringify(harness.record(comp, 1));
+  comp.comment = "Video001Export sha256:" + "b".repeat(64);
+  const after = JSON.stringify(harness.record(comp, 1));
+  assert.notEqual(after, before);
+});
+
+test("duplicate capture fingerprint changes when TextDocument box size changes", () => {
+  const documentValue = { text: "cat", boxTextSize: [100, 20] };
+  const harness = captureItemRecordHarness();
+  const comp = new harness.CompItemMock(documentValue);
+  const before = JSON.stringify(harness.record(comp, 1));
+  documentValue.boxTextSize = [101, 20];
+  const after = JSON.stringify(harness.record(comp, 1));
+  assert.notEqual(after, before);
+});
+
 test("assertCompMatchesFrame accepts a partial-glyph fallback with its surrounding requested font", () => {
   const source = readFileSync(visualProvenanceUrl, "utf8");
   class CompItemMock {}
