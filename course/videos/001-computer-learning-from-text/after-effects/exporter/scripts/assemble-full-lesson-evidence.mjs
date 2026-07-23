@@ -237,9 +237,25 @@ function prohibitedCredentialKey(key) {
   );
 }
 
-function scanStructuredCredentials(value, fileLabel) {
+function scanDecodedString(value, fileLabel) {
+  if (/\/Users\//.test(value)) {
+    throw new Error(fileLabel + " contains a prohibited mutable user path");
+  }
+  if (
+    /\bBearer\s+[A-Za-z0-9._~+/=-]+/i.test(value) ||
+    /\bAuthorization\s*[:=]/i.test(value)
+  ) {
+    throw new Error(fileLabel + " contains prohibited authorization or bearer material");
+  }
+}
+
+function scanStructuredEvidence(value, fileLabel) {
+  if (typeof value === "string") {
+    scanDecodedString(value, fileLabel);
+    return;
+  }
   if (Array.isArray(value)) {
-    for (const child of value) scanStructuredCredentials(child, fileLabel);
+    for (const child of value) scanStructuredEvidence(child, fileLabel);
     return;
   }
   if (value === null || typeof value !== "object") return;
@@ -247,7 +263,7 @@ function scanStructuredCredentials(value, fileLabel) {
     if (prohibitedCredentialKey(key)) {
       throw new Error(fileLabel + " contains a prohibited credential field");
     }
-    scanStructuredCredentials(child, fileLabel);
+    scanStructuredEvidence(child, fileLabel);
   }
 }
 
@@ -268,7 +284,24 @@ function scanRedaction(filePath) {
   } catch {
     throw new Error(fileLabel + " is not valid structured JSON evidence");
   }
-  scanStructuredCredentials(values, fileLabel);
+  scanStructuredEvidence(values, fileLabel);
+}
+
+function scanGeneratedJsonBytes(bytes, label) {
+  const source = bytes.toString("utf8");
+  if (/\/Users\//.test(source)) {
+    throw new Error(label + " contains a prohibited mutable user path");
+  }
+  if (/Bearer\s+[A-Za-z0-9._~+/=-]+/i.test(source)) {
+    throw new Error(label + " contains prohibited bearer material");
+  }
+  let value;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new Error(label + " is not valid generated JSON evidence");
+  }
+  scanStructuredEvidence(value, label);
 }
 
 function validateTiming() {
@@ -585,9 +618,14 @@ function derive() {
   const packageWarningRasterIds = [];
   const packageRasterById = new Map();
   const packageWarningById = new Map();
+  const packageShotExpectations = [];
+  const packageNodeIds = new Set();
   frames.forEach((rawFrame, index) => {
     const frame = object(rawFrame, "Package frame " + String(index + 1));
     const shot = timing.shots[index];
+    const frameNativeNodeIds = [];
+    const frameRasterById = new Map();
+    const frameWarningById = new Map();
     if (frame.nodeId !== shot.nodeId) {
       throw new Error("Full-lesson package node IDs must preserve canonical order");
     }
@@ -603,9 +641,11 @@ function derive() {
     }
     expectedStart += frame.duration;
     for (const node of flattenNodes(frame.children)) {
+      const nodeId = string(node.id, "Package node ID");
+      if (packageNodeIds.has(nodeId)) throw new Error("Package node IDs must be unique");
+      packageNodeIds.add(nodeId);
       if (node.kind === "raster") {
         packageRasterCount += 1;
-        const nodeId = string(node.id, "Raster node ID");
         const assetHash = string(node.assetHash, "Raster asset hash");
         if (!/^[0-9a-f]{64}$/.test(assetHash) || !packageAssetByHash.has(assetHash)) {
           throw new Error("Raster node references a missing or invalid exact asset SHA-256");
@@ -616,8 +656,10 @@ function derive() {
           assetHash,
           name: string(node.name, "Raster node name")
         });
+        frameRasterById.set(nodeId, packageRasterById.get(nodeId));
       } else {
         packageNativeCount += 1;
+        frameNativeNodeIds.push(nodeId);
       }
     }
     for (const rawWarning of array(frame.warnings, "Package frame warnings")) {
@@ -631,7 +673,20 @@ function derive() {
       }
       packageWarningRasterIds.push(nodeId);
       packageWarningById.set(nodeId, warning);
+      frameWarningById.set(nodeId, warning);
     }
+    const frameRasterIds = [...frameRasterById.keys()].sort();
+    const frameWarningIds = [...frameWarningById.keys()].sort();
+    if (canonicalJson(frameRasterIds) !== canonicalJson(frameWarningIds)) {
+      throw new Error(
+        "Package frame " + String(index + 1) +
+        " raster nodes and warnings do not match within the same shot"
+      );
+    }
+    packageShotExpectations.push({
+      nativeNodeIds: frameNativeNodeIds.sort(),
+      rasterById: frameRasterById
+    });
   });
   if (expectedStart !== 840) {
     throw new Error("Full-lesson package durations and starts must cover exactly 840 seconds");
@@ -712,6 +767,7 @@ function derive() {
   const auditedRasterById = new Map();
   for (let index = 0; index < timing.shots.length; index += 1) {
     const timingShot = timing.shots[index];
+    const packageShot = packageShotExpectations[index];
     const layer = object(masterLayers[index], "Master layer " + String(index + 1));
     const shot = object(auditedShots[index], "Audited shot " + String(index + 1));
     const expectedCompPattern = new RegExp(
@@ -758,8 +814,25 @@ function derive() {
       30,
       "Audited shot " + String(index + 1)
     );
-    auditedNativeCount += finiteNumber(shot.nativeCount, "Audited native count");
-    auditedRasterCount += finiteNumber(shot.rasterCount, "Audited raster count");
+    const shotNativeCount = finiteNumber(shot.nativeCount, "Audited native count");
+    const shotNativeNodeIds = array(
+      shot.nativeNodeIds,
+      "Audited native node IDs"
+    ).map((nodeId) => string(nodeId, "Audited native node ID")).sort();
+    if (
+      new Set(shotNativeNodeIds).size !== shotNativeNodeIds.length ||
+      shotNativeCount !== packageShot.nativeNodeIds.length ||
+      canonicalJson(shotNativeNodeIds) !== canonicalJson(packageShot.nativeNodeIds)
+    ) {
+      throw new Error(
+        "Audited shot " + String(index + 1) +
+        " native count or node IDs do not match its package frame"
+      );
+    }
+    const shotRasterCount = finiteNumber(shot.rasterCount, "Audited raster count");
+    const shotRasterById = new Map();
+    auditedNativeCount += shotNativeCount;
+    auditedRasterCount += shotRasterCount;
     for (const rawRaster of array(shot.rasterFallbacks, "Audited raster fallbacks")) {
       const raster = object(rawRaster, "Audited raster fallback");
       const nodeId = string(raster.nodeId, "Audited raster node ID");
@@ -771,7 +844,28 @@ function derive() {
       if (auditedRasterById.has(nodeId)) {
         throw new Error("AE audit contains duplicate raster fallback identities");
       }
+      if (shotRasterById.has(nodeId)) {
+        throw new Error("Audited shot contains duplicate raster fallback identities");
+      }
       auditedRasterById.set(nodeId, assetHash);
+      shotRasterById.set(nodeId, assetHash);
+    }
+    if (
+      shotRasterCount !== packageShot.rasterById.size ||
+      shotRasterById.size !== packageShot.rasterById.size
+    ) {
+      throw new Error(
+        "Audited shot " + String(index + 1) +
+        " raster count or node IDs do not match its package frame"
+      );
+    }
+    for (const [nodeId, raster] of packageShot.rasterById) {
+      if (shotRasterById.get(nodeId) !== raster.assetHash) {
+        throw new Error(
+          "Audited shot " + String(index + 1) +
+          " raster node ID or asset hash does not match its package frame"
+        );
+      }
     }
   }
   auditedRasterIds.sort();
@@ -884,13 +978,15 @@ const manifestRelativePaths = [
   "evidence/full-lesson/summary.json"
 ];
 
-function artifactManifest() {
+function artifactManifest(byteOverrides = new Map()) {
   return {
     schemaVersion: 1,
     generatedBy: "scripts/assemble-full-lesson-evidence.mjs",
     sha256: Object.fromEntries(manifestRelativePaths.map((relativePath) => [
       relativePath,
-      sha256File(path.join(exporterRoot, relativePath))
+      byteOverrides.has(relativePath)
+        ? sha256(byteOverrides.get(relativePath))
+        : sha256File(path.join(exporterRoot, relativePath))
     ]))
   };
 }
@@ -945,14 +1041,24 @@ function atomicWriteDerived(filePath, bytes, label) {
 
 function writeDerived(derived) {
   assertEvidenceDirectories();
+  const auditBytes = jsonBytes(derived.audit);
+  const summaryBytes = jsonBytes(derived.summary);
+  const derivedByteOverrides = new Map([
+    ["evidence/full-lesson/audit.json", auditBytes],
+    ["evidence/full-lesson/summary.json", summaryBytes]
+  ]);
+  const manifestBytes = jsonBytes(artifactManifest(derivedByteOverrides));
+  scanGeneratedJsonBytes(auditBytes, "Derived audit output");
+  scanGeneratedJsonBytes(summaryBytes, "Derived summary output");
+  scanGeneratedJsonBytes(manifestBytes, "Derived manifest output");
   assertSafeOutputPath(derivedPaths.audit, "Derived audit output");
   assertSafeOutputPath(derivedPaths.summary, "Derived summary output");
   assertSafeOutputPath(derivedPaths.manifest, "Derived manifest output");
-  atomicWriteDerived(derivedPaths.audit, jsonBytes(derived.audit), "Derived audit output");
-  atomicWriteDerived(derivedPaths.summary, jsonBytes(derived.summary), "Derived summary output");
+  atomicWriteDerived(derivedPaths.audit, auditBytes, "Derived audit output");
+  atomicWriteDerived(derivedPaths.summary, summaryBytes, "Derived summary output");
   atomicWriteDerived(
     derivedPaths.manifest,
-    jsonBytes(artifactManifest()),
+    manifestBytes,
     "Derived manifest output"
   );
 }

@@ -1510,6 +1510,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
       durationSeconds: shot.duration,
       durationFrames: shot.duration * 30,
       nativeCount: 1,
+      nativeNodeIds: [shot.figmaNodeId + "::shape"],
       rasterCount: index === 30 ? 1 : 0,
       rasterFallbacks: index === 30 ? [{
         nodeId: shot.figmaNodeId + "::raster",
@@ -1519,13 +1520,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
         name: shot.name + "_v001",
         durationSeconds: shot.duration,
         durationFrames: shot.duration * 30,
-        children: [{
-          name: shot.name + "_v001__SyntheticGroup",
-          nodeId: shot.figmaNodeId + "::group",
-          durationSeconds: shot.duration,
-          durationFrames: shot.duration * 30,
-          children: []
-        }]
+        children: []
       }
     })),
     missingFonts: [],
@@ -1774,7 +1769,7 @@ for (const [label, mutate, expected] of [
   }, /out point/i],
   ["wrong recursive duration", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
-    value.shots[10].hierarchy.children[0].durationSeconds -= 1;
+    value.shots[10].hierarchy.durationSeconds -= 1;
     writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /recursive|duration/i],
   ["unexpected raster fallback", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
@@ -1796,6 +1791,25 @@ for (const [label, mutate, expected] of [
     value.shots[30].rasterFallbacks[0].assetHash = "a".repeat(64);
     writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /asset hash|raster/i],
+  ["a raster fallback moved to the wrong audited shot with global totals preserved", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    value.shots[29].rasterCount = 1;
+    value.shots[29].rasterFallbacks = value.shots[30].rasterFallbacks;
+    value.shots[30].rasterCount = 0;
+    value.shots[30].rasterFallbacks = [];
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /shot|raster|node/i],
+  ["native node IDs swapped between audited shots with counts preserved", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
+    [
+      value.shots[0].nativeNodeIds,
+      value.shots[1].nativeNodeIds
+    ] = [
+      value.shots[1].nativeNodeIds,
+      value.shots[0].nativeNodeIds
+    ];
+    writeFileSync(fixture.paths.audit, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /shot|native|node/i],
   ["a v000 shot comp", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     const importReport = JSON.parse(readFileSync(fixture.paths.importReport, "utf8"));
     const audit = JSON.parse(readFileSync(fixture.paths.audit, "utf8"));
@@ -1935,6 +1949,47 @@ for (const credentialKey of ["apiKey", "credential", "bridgeToken", "pairing_cod
       assert.notEqual(result.status, 0, output);
       assert.match(output, /credential|secret|prohibited/i);
       assert.equal(output.includes(secretValue), false, "diagnostics disclosed the credential value");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [format, label, escapedValue, decodedValue] of [
+  ["json", "escaped mutable user path", "\\u002fUsers\\u002falice\\u002fproject.aep", "/Users/alice/project.aep"],
+  ["json", "escaped bearer material", "B\\u0065arer opaque-secret", "Bearer opaque-secret"],
+  ["jsonl", "escaped mutable user path", "\\u002fUsers\\u002falice\\u002fproject.aep", "/Users/alice/project.aep"],
+  ["jsonl", "escaped bearer material", "B\\u0065arer opaque-secret", "Bearer opaque-secret"]
+] as const) {
+  test("full-lesson evidence semantically rejects " + label + " in " + format, () => {
+    const root = mkdtempSync(join(tmpdir(), "video001-full-evidence-semantic-redaction-"));
+    try {
+      const fixture = writeSyntheticFullLessonEvidence(root);
+      let source: string;
+      if (format === "json") {
+        const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+        value.metadata = { note: "SEMANTIC_REDACTION_PLACEHOLDER" };
+        source = (JSON.stringify(value, null, 2) + "\n").replace(
+          "SEMANTIC_REDACTION_PLACEHOLDER",
+          escapedValue
+        );
+        writeFileSync(fixture.paths.session, source, "utf8");
+      } else {
+        source = readFileSync(fixture.paths.bridge, "utf8") + JSON.stringify({
+          timestamp: "2026-07-23T00:00:01.000Z",
+          event: "http_request",
+          route: "health",
+          status: 200,
+          note: "SEMANTIC_REDACTION_PLACEHOLDER"
+        }).replace("SEMANTIC_REDACTION_PLACEHOLDER", escapedValue) + "\n";
+        writeFileSync(fixture.paths.bridge, source, "utf8");
+      }
+      assert.equal(source.includes(decodedValue), false, "fixture accidentally contains raw prohibited text");
+      const result = runFullLessonEvidence(root, "--write");
+      const output = result.stdout + "\n" + result.stderr;
+      assert.notEqual(result.status, 0, output);
+      assert.match(output, /mutable user path|bearer|credential|prohibited/i);
+      assert.equal(output.includes(decodedValue), false, "diagnostics disclosed the prohibited value");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

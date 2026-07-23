@@ -243,6 +243,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                 "durationSeconds": shot["duration"],
                 "durationFrames": shot["duration"] * 30,
                 "nativeCount": 1,
+                "nativeNodeIds": [f'{shot["figmaNodeId"]}::shape'],
                 "rasterCount": 1 if shot["index"] == 31 else 0,
                 "rasterFallbacks": (
                     [
@@ -258,15 +259,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                     "name": f'{shot["name"]}_v001',
                     "durationSeconds": shot["duration"],
                     "durationFrames": shot["duration"] * 30,
-                    "children": [
-                        {
-                            "name": f'{shot["name"]}_v001__SyntheticGroup',
-                            "nodeId": f'{shot["figmaNodeId"]}::group',
-                            "durationSeconds": shot["duration"],
-                            "durationFrames": shot["duration"] * 30,
-                            "children": [],
-                        }
-                    ],
+                    "children": [],
                 },
             }
             for shot in timing["shots"]
@@ -505,6 +498,98 @@ def test_full_lesson_evidence_rejects_normalized_credential_key_families(
         assert result.returncode != 0
         assert re.search(r"credential|secret|prohibited", output, re.IGNORECASE)
         assert secret_value not in output
+
+
+def test_full_lesson_evidence_rejects_decoded_json_and_jsonl_secrets(tmp_path):
+    cases = [
+        ("json", r"\u002fUsers\u002falice\u002fproject.aep", "/Users/alice/project.aep"),
+        ("json", r"B\u0065arer opaque-secret", "Bearer opaque-secret"),
+        ("jsonl", r"\u002fUsers\u002falice\u002fproject.aep", "/Users/alice/project.aep"),
+        ("jsonl", r"B\u0065arer opaque-secret", "Bearer opaque-secret"),
+    ]
+    for index, (format_name, escaped_value, decoded_value) in enumerate(cases):
+        root = tmp_path / f"semantic-{index}"
+        write_synthetic_full_lesson_evidence_tree(root)
+        raw_dir = root / "evidence/full-lesson/raw"
+        if format_name == "json":
+            evidence_path = raw_dir / "full-lesson-live-session.json"
+            value = load_json(evidence_path)
+            value["metadata"] = {"note": "SEMANTIC_REDACTION_PLACEHOLDER"}
+            source = (
+                json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+            ).replace("SEMANTIC_REDACTION_PLACEHOLDER", escaped_value)
+        else:
+            evidence_path = raw_dir / "full-lesson-bridge-log.jsonl"
+            generic_event = {
+                "timestamp": "2026-07-23T00:00:01.000Z",
+                "event": "http_request",
+                "route": "health",
+                "status": 200,
+                "note": "SEMANTIC_REDACTION_PLACEHOLDER",
+            }
+            source = evidence_path.read_text(encoding="utf-8") + json.dumps(
+                generic_event,
+                ensure_ascii=False,
+            ).replace("SEMANTIC_REDACTION_PLACEHOLDER", escaped_value) + "\n"
+        assert decoded_value not in source
+        evidence_path.write_text(source, encoding="utf-8")
+
+        result = subprocess.run(
+            [
+                "node",
+                str(FULL_LESSON_ASSEMBLER_PATH),
+                "--write",
+                "--root",
+                str(root),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert re.search(
+            r"mutable user path|bearer|credential|prohibited",
+            output,
+            re.IGNORECASE,
+        )
+        assert decoded_value not in output
+
+
+def test_full_lesson_evidence_rejects_cross_shot_raster_rebinding(tmp_path):
+    root = tmp_path / "cross-shot-raster"
+    write_synthetic_full_lesson_evidence_tree(root)
+    audit_path = root / "evidence/full-lesson/raw/full-lesson-ae-audit.json"
+    audit = load_json(audit_path)
+    audit["shots"][29]["rasterCount"] = 1
+    audit["shots"][29]["rasterFallbacks"] = audit["shots"][30][
+        "rasterFallbacks"
+    ]
+    audit["shots"][30]["rasterCount"] = 0
+    audit["shots"][30]["rasterFallbacks"] = []
+    audit_path.write_text(
+        json.dumps(audit, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "node",
+            str(FULL_LESSON_ASSEMBLER_PATH),
+            "--write",
+            "--root",
+            str(root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert re.search(
+        r"shot|raster|node",
+        result.stdout + result.stderr,
+        re.IGNORECASE,
+    )
 
 
 def test_synthetic_full_lesson_evidence_is_explicitly_test_only_and_redacted(

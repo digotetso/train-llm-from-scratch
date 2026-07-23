@@ -279,6 +279,17 @@
         }
     }
 
+    function appendNativeNode(stats, nodeId) {
+        var nodeIndex;
+        for (nodeIndex = 0; nodeIndex < stats.nativeNodeIds.length; nodeIndex += 1) {
+            if (stats.nativeNodeIds[nodeIndex] === nodeId) {
+                throw new Error("Duplicate native node " + nodeId);
+            }
+        }
+        stats.nativeNodeIds[stats.nativeNodeIds.length] = nodeId;
+        stats.nativeCount += 1;
+    }
+
     function auditHierarchy(ownerComp, expectedDuration, stack, stats, root) {
         var hierarchy;
         var layer;
@@ -312,6 +323,7 @@
                 if (!(layer instanceof AVLayer) || !(layer.source instanceof CompItem)) {
                     throw new Error("Figma group precomp " + parsed.nodeId + " has the wrong source comp");
                 }
+                appendNativeNode(stats, parsed.nodeId);
                 childComment = String(layer.source.comment || "");
                 childMatch = /^Figma recursive precomp ([^ ]+)$/.exec(childComment);
                 if (childMatch === null || childMatch[1] !== parsed.nodeId) {
@@ -330,7 +342,6 @@
                     parsed.nodeId = childComment;
                     hierarchy.children[hierarchy.children.length] = parsed;
                 }
-                stats.nativeCount += 1;
             } else if (parsed.type === "raster-fallback") {
                 if (!(layer instanceof AVLayer) || layer.source instanceof CompItem) {
                     throw new Error("Raster fallback " + parsed.nodeId + " does not source footage");
@@ -348,7 +359,7 @@
                     assetHash: parsed.assetHash
                 };
             } else {
-                stats.nativeCount += 1;
+                appendNativeNode(stats, parsed.nodeId);
             }
         }
         return hierarchy;
@@ -358,6 +369,7 @@
         var shotHash = parseContentHash(comp.comment, "Shot source comp " + comp.name);
         var stats = {
             nativeCount: 0,
+            nativeNodeIds: [],
             rasterCount: 0,
             rasterFallbacks: []
         };
@@ -378,6 +390,7 @@
             durationSeconds: comp.duration,
             durationFrames: Math.round(comp.duration * comp.frameRate),
             nativeCount: stats.nativeCount,
+            nativeNodeIds: stats.nativeNodeIds,
             rasterCount: stats.rasterCount,
             rasterFallbacks: stats.rasterFallbacks,
             hierarchy: hierarchy

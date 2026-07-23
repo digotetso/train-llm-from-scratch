@@ -2292,6 +2292,7 @@ function runFullLessonAudit(defect?: FullLessonAuditDefect) {
         nodeId: string;
         durationSeconds: number;
         durationFrames: number;
+        nativeNodeIds: string[];
         hierarchy: { children: unknown[] };
       }>;
     },
@@ -2311,6 +2312,10 @@ test("full-lesson audit traverses all 48 root comps and recursive precomps witho
     shot.durationSeconds === timingById.get(shot.nodeId)!.duration
   ));
   assert.ok(audit.shots.every((shot) => shot.hierarchy.children.length === 1));
+  assert.deepEqual(audit.shots[0]!.nativeNodeIds, [
+    timing.shots[0]!.figmaNodeId + "::group",
+    timing.shots[0]!.figmaNodeId + "::shape"
+  ]);
   assert.equal(audit.itemCountBefore, audit.itemCountAfter);
   assert.equal(audit.projectStateUnchanged, true);
 });
