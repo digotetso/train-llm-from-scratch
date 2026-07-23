@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/assemble-full-lesson-evidence.mjs",
+  "sha256": {
+    "evidence/full-lesson/raw/full-lesson-package.video001-ae.json": "e00533e4bb05140b2c4b6a8de4635f726722e84c2e33c4a6466b0364a88cb97f",
+    "evidence/full-lesson/raw/full-lesson-import-report.json": "2127e39adb3d7a8d33835232eb28b1e6b9046492eb271429e89b01db82cffe3c",
+    "evidence/full-lesson/raw/full-lesson-ae-audit.json": "de8507e599682f55765a7d4ae9c5202e46e435ef8507679102a9e03026598fbc",
+    "evidence/full-lesson/raw/full-lesson-live-session.json": "480ba6318e0d539f95d481f228cf13280db39215838b1ac84046988b208f9b27",
+    "evidence/full-lesson/raw/full-lesson-bridge-log.jsonl": "b72959c7a79742a06f8e4858bcb46ae95ea0dd833d5768e0927ccb312313fde8",
+    "evidence/full-lesson/audit.json": "b4f9cc4ff18e6d31b402578e33aac977b66b8e9b12f675740dc3d4ac41a4cdeb",
+    "evidence/full-lesson/summary.json": "a1008d76885602acea964a0ef9179ecdc404a9015ac695fdc34d1e0b1aaf3bd9"
+  }
+}

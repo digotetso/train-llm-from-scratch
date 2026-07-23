@@ -477,6 +477,27 @@ function validateLiveEvidence({
   ) {
     throw new Error("Live Figma export request identity, route, or accepted status is invalid");
   }
+  const unchangedResend = object(figma.unchangedResend, "Live Figma unchanged resend");
+  const duplicateRequestId = string(
+    unchangedResend.requestId,
+    "Live Figma unchanged resend request ID"
+  );
+  if (
+    unchangedResend.sessionId !== sessionId ||
+    duplicateRequestId === requestId ||
+    unchangedResend.method !== "POST" ||
+    unchangedResend.route !== "export" ||
+    unchangedResend.status !== 202 ||
+    unchangedResend.code !== "EXPORT_ACCEPTED" ||
+    unchangedResend.contentHash !== expectedHash
+  ) {
+    throw new Error("Live Figma unchanged resend identity, route, or accepted status is invalid");
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    duplicateRequestId
+  )) {
+    throw new Error("Live Figma unchanged resend request ID must be a server UUID");
+  }
 
   const bridge = object(liveSession.bridge, "Live bridge reference");
   if (bridge.requestId !== requestId || bridge.contentHash !== expectedHash) {
@@ -524,6 +545,9 @@ function validateLiveEvidence({
   if (acceptedEvents.filter((event) => event.requestId === requestId).length !== 1) {
     throw new Error("Bridge log must contain exactly one accepted event for the live request identity");
   }
+  if (acceptedEvents.filter((event) => event.requestId === duplicateRequestId).length !== 1) {
+    throw new Error("Bridge log must contain exactly one accepted event for the unchanged resend request identity");
+  }
 
   const afterEffects = object(liveSession.afterEffects, "Live After Effects evidence");
   const imported = object(afterEffects.import, "Live After Effects import");
@@ -539,6 +563,24 @@ function validateLiveEvidence({
   }
   if (afterEffects.queueCountAfterImport !== 0) {
     throw new Error("Live After Effects queue must be drained after import");
+  }
+  const duplicate = object(afterEffects.duplicate, "Live After Effects duplicate resend");
+  if (
+    duplicate.status !== "DUPLICATE_CONTENT" ||
+    duplicate.sessionId !== sessionId ||
+    duplicate.requestId !== duplicateRequestId ||
+    duplicate.contentHash !== expectedHash ||
+    duplicate.itemCountBefore !== duplicate.itemCountAfter ||
+    duplicate.queueCountBefore !== 1 ||
+    duplicate.queueCountAfter !== 0 ||
+    duplicate.v002Before !== 0 ||
+    duplicate.v002After !== 0 ||
+    duplicate.masterV001Count !== 1 ||
+    duplicate.shotV001Count !== 48
+  ) {
+    throw new Error(
+      "Live After Effects duplicate resend must be an unchanged DUPLICATE_CONTENT queue no-op"
+    );
   }
   if (afterEffects.projectPath !== "/private/tmp/Video001-Exporter-Full-Lesson.aep") {
     throw new Error(

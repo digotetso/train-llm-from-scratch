@@ -113,6 +113,7 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
     raster_hash = hashlib.sha256(b"\x89PNG\r\n\x1a\n").hexdigest()
     session_id = "full-lesson-session-synthetic-001"
     request_id = "11111111-1111-4111-8111-111111111111"
+    duplicate_request_id = "22222222-2222-4222-8222-222222222222"
     raw_dir = root / "evidence/full-lesson/raw"
     raw_dir.mkdir(parents=True)
     config_dir = root / "config"
@@ -320,6 +321,15 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                     "code": "EXPORT_ACCEPTED",
                     "contentHash": content_hash,
                 },
+                "unchangedResend": {
+                    "sessionId": session_id,
+                    "requestId": duplicate_request_id,
+                    "method": "POST",
+                    "route": "export",
+                    "status": 202,
+                    "code": "EXPORT_ACCEPTED",
+                    "contentHash": content_hash,
+                },
             },
             "bridge": {
                 "requestId": request_id,
@@ -334,6 +344,20 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
                     "createdCompCount": 48,
                     "createdMasterCompName": "VIDEO001_MASTER_v001",
                 },
+                "duplicate": {
+                    "status": "DUPLICATE_CONTENT",
+                    "sessionId": session_id,
+                    "requestId": duplicate_request_id,
+                    "contentHash": content_hash,
+                    "itemCountBefore": 275,
+                    "itemCountAfter": 275,
+                    "queueCountBefore": 1,
+                    "queueCountAfter": 0,
+                    "v002Before": 0,
+                    "v002After": 0,
+                    "masterV001Count": 1,
+                    "shotV001Count": 48,
+                },
                 "queueCountAfterImport": 0,
                 "projectPath": "/private/tmp/Video001-Exporter-Full-Lesson.aep",
             },
@@ -344,21 +368,27 @@ def write_synthetic_full_lesson_evidence_tree(root: Path):
             json.dumps(value, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+    accepted_event = {
+        "timestamp": "2026-07-23T00:00:00.000Z",
+        "event": "export_accepted",
+        "requestId": request_id,
+        "method": "POST",
+        "route": "export",
+        "status": 202,
+        "remoteAddress": "127.0.0.1",
+        "remoteFamily": "IPv4",
+        "authenticated": True,
+        "contentHash": content_hash,
+    }
+    duplicate_event = {
+        **accepted_event,
+        "timestamp": "2026-07-23T00:01:00.000Z",
+        "requestId": duplicate_request_id,
+    }
     (raw_dir / "full-lesson-bridge-log.jsonl").write_text(
-        json.dumps(
-            {
-                "timestamp": "2026-07-23T00:00:00.000Z",
-                "event": "export_accepted",
-                "requestId": request_id,
-                "method": "POST",
-                "route": "export",
-                "status": 202,
-                "remoteAddress": "127.0.0.1",
-                "remoteFamily": "IPv4",
-                "authenticated": True,
-                "contentHash": content_hash,
-            },
-            ensure_ascii=False,
+        "\n".join(
+            json.dumps(event, ensure_ascii=False)
+            for event in (accepted_event, duplicate_event)
         )
         + "\n",
         encoding="utf-8",

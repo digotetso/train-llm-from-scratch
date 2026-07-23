@@ -1,0 +1,4377 @@
+{
+  "auditSchemaVersion": 1,
+  "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+  "itemCountBefore": 275,
+  "itemCountAfter": 275,
+  "projectStateUnchanged": true,
+  "master": {
+    "name": "VIDEO001_MASTER_v001",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "durationSeconds": 840,
+    "durationFrames": 25200,
+    "layers": [
+      {
+        "index": 1,
+        "nodeId": "94:2",
+        "name": "S001_SH01_Hook_CatWord_v001",
+        "sourceComp": "S001_SH01_Hook_CatWord_v001",
+        "startTime": 0,
+        "inPoint": 0,
+        "outPoint": 8
+      },
+      {
+        "index": 2,
+        "nodeId": "94:5",
+        "name": "S001_SH02_Hook_HumanAssociations_v001",
+        "sourceComp": "S001_SH02_Hook_HumanAssociations_v001",
+        "startTime": 8,
+        "inPoint": 8,
+        "outPoint": 18
+      },
+      {
+        "index": 3,
+        "nodeId": "94:8",
+        "name": "S001_SH03_Hook_ProgramData_v001",
+        "sourceComp": "S001_SH03_Hook_ProgramData_v001",
+        "startTime": 18,
+        "inPoint": 18,
+        "outPoint": 30
+      },
+      {
+        "index": 4,
+        "nodeId": "94:11",
+        "name": "S001_SH04_Hook_LessonPromise_v001",
+        "sourceComp": "S001_SH04_Hook_LessonPromise_v001",
+        "startTime": 30,
+        "inPoint": 30,
+        "outPoint": 45
+      },
+      {
+        "index": 5,
+        "nodeId": "94:14",
+        "name": "S001_SH05_Direct_DefinedStandards_v001",
+        "sourceComp": "S001_SH05_Direct_DefinedStandards_v001",
+        "startTime": 45,
+        "inPoint": 45,
+        "outPoint": 58
+      },
+      {
+        "index": 6,
+        "nodeId": "94:17",
+        "name": "S001_SH06_Direct_Ato65_v001",
+        "sourceComp": "S001_SH06_Direct_Ato65_v001",
+        "startTime": 58,
+        "inPoint": 58,
+        "outPoint": 72
+      },
+      {
+        "index": 7,
+        "nodeId": "94:20",
+        "name": "S001_SH07_Direct_AContexts_v001",
+        "sourceComp": "S001_SH07_Direct_AContexts_v001",
+        "startTime": 72,
+        "inPoint": 72,
+        "outPoint": 88
+      },
+      {
+        "index": 8,
+        "nodeId": "94:23",
+        "name": "S001_SH08_Direct_RepresentationNotMeaning_v001",
+        "sourceComp": "S001_SH08_Direct_RepresentationNotMeaning_v001",
+        "startTime": 88,
+        "inPoint": 88,
+        "outPoint": 103
+      },
+      {
+        "index": 9,
+        "nodeId": "94:26",
+        "name": "S001_SH09_Direct_FixedVsAdjustable_v001",
+        "sourceComp": "S001_SH09_Direct_FixedVsAdjustable_v001",
+        "startTime": 103,
+        "inPoint": 103,
+        "outPoint": 120
+      },
+      {
+        "index": 10,
+        "nodeId": "94:29",
+        "name": "S001_SH10_Technical_CharacterStrip_v001",
+        "sourceComp": "S001_SH10_Technical_CharacterStrip_v001",
+        "startTime": 120,
+        "inPoint": 120,
+        "outPoint": 134
+      },
+      {
+        "index": 11,
+        "nodeId": "94:32",
+        "name": "S001_SH11_Technical_UnicodeDefinition_v001",
+        "sourceComp": "S001_SH11_Technical_UnicodeDefinition_v001",
+        "startTime": 134,
+        "inPoint": 134,
+        "outPoint": 148
+      },
+      {
+        "index": 12,
+        "nodeId": "94:35",
+        "name": "S001_SH12_Technical_OrdFunction_v001",
+        "sourceComp": "S001_SH12_Technical_OrdFunction_v001",
+        "startTime": 148,
+        "inPoint": 148,
+        "outPoint": 163
+      },
+      {
+        "index": 13,
+        "nodeId": "94:38",
+        "name": "S001_SH13_Technical_CatCodePoints_v001",
+        "sourceComp": "S001_SH13_Technical_CatCodePoints_v001",
+        "startTime": 163,
+        "inPoint": 163,
+        "outPoint": 178
+      },
+      {
+        "index": 14,
+        "nodeId": "94:41",
+        "name": "S001_SH14_Technical_ByteRange_v001",
+        "sourceComp": "S001_SH14_Technical_ByteRange_v001",
+        "startTime": 178,
+        "inPoint": 178,
+        "outPoint": 192
+      },
+      {
+        "index": 15,
+        "nodeId": "94:44",
+        "name": "S001_SH15_Technical_UTF8Cat_v001",
+        "sourceComp": "S001_SH15_Technical_UTF8Cat_v001",
+        "startTime": 192,
+        "inPoint": 192,
+        "outPoint": 207
+      },
+      {
+        "index": 16,
+        "nodeId": "94:47",
+        "name": "S001_SH16_Technical_ModelParameters_v001",
+        "sourceComp": "S001_SH16_Technical_ModelParameters_v001",
+        "startTime": 207,
+        "inPoint": 207,
+        "outPoint": 223
+      },
+      {
+        "index": 17,
+        "nodeId": "94:50",
+        "name": "S001_SH17_Technical_TwoReasons_v001",
+        "sourceComp": "S001_SH17_Technical_TwoReasons_v001",
+        "startTime": 223,
+        "inPoint": 223,
+        "outPoint": 240
+      },
+      {
+        "index": 18,
+        "nodeId": "95:2",
+        "name": "S001_SH18_Example_ThreeSentences_v001",
+        "sourceComp": "S001_SH18_Example_ThreeSentences_v001",
+        "startTime": 240,
+        "inPoint": 240,
+        "outPoint": 254
+      },
+      {
+        "index": 19,
+        "nodeId": "95:5",
+        "name": "S001_SH19_Example_RepeatedPattern_v001",
+        "sourceComp": "S001_SH19_Example_RepeatedPattern_v001",
+        "startTime": 254,
+        "inPoint": 254,
+        "outPoint": 268
+      },
+      {
+        "index": 20,
+        "nodeId": "95:8",
+        "name": "S001_SH20_Example_CatHandCheck_v001",
+        "sourceComp": "S001_SH20_Example_CatHandCheck_v001",
+        "startTime": 268,
+        "inPoint": 268,
+        "outPoint": 283
+      },
+      {
+        "index": 21,
+        "nodeId": "95:11",
+        "name": "S001_SH21_Example_NumericOperations_v001",
+        "sourceComp": "S001_SH21_Example_NumericOperations_v001",
+        "startTime": 283,
+        "inPoint": 283,
+        "outPoint": 298
+      },
+      {
+        "index": 22,
+        "nodeId": "95:14",
+        "name": "S001_SH22_Example_DistanceNotMeaning_v001",
+        "sourceComp": "S001_SH22_Example_DistanceNotMeaning_v001",
+        "startTime": 298,
+        "inPoint": 298,
+        "outPoint": 312
+      },
+      {
+        "index": 23,
+        "nodeId": "95:17",
+        "name": "S001_SH23_Example_BeforeTraining_v001",
+        "sourceComp": "S001_SH23_Example_BeforeTraining_v001",
+        "startTime": 312,
+        "inPoint": 312,
+        "outPoint": 328
+      },
+      {
+        "index": 24,
+        "nodeId": "95:20",
+        "name": "S001_SH24_Example_AfterTraining_v001",
+        "sourceComp": "S001_SH24_Example_AfterTraining_v001",
+        "startTime": 328,
+        "inPoint": 328,
+        "outPoint": 344
+      },
+      {
+        "index": 25,
+        "nodeId": "95:23",
+        "name": "S001_SH25_Example_PatternVsMemorization_v001",
+        "sourceComp": "S001_SH25_Example_PatternVsMemorization_v001",
+        "startTime": 344,
+        "inPoint": 344,
+        "outPoint": 360
+      },
+      {
+        "index": 26,
+        "nodeId": "95:26",
+        "name": "S001_SH26_Repo_PreparationOverview_v001",
+        "sourceComp": "S001_SH26_Repo_PreparationOverview_v001",
+        "startTime": 360,
+        "inPoint": 360,
+        "outPoint": 382
+      },
+      {
+        "index": 27,
+        "nodeId": "95:29",
+        "name": "S001_SH27_Repo_NormalizeFunction_v001",
+        "sourceComp": "S001_SH27_Repo_NormalizeFunction_v001",
+        "startTime": 382,
+        "inPoint": 382,
+        "outPoint": 408
+      },
+      {
+        "index": 28,
+        "nodeId": "95:32",
+        "name": "S001_SH28_Repo_NFKCStep_v001",
+        "sourceComp": "S001_SH28_Repo_NFKCStep_v001",
+        "startTime": 408,
+        "inPoint": 408,
+        "outPoint": 432
+      },
+      {
+        "index": 29,
+        "nodeId": "95:35",
+        "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001",
+        "sourceComp": "S001_SH29_Repo_NewlinesAndWhitespace_v001",
+        "startTime": 432,
+        "inPoint": 432,
+        "outPoint": 458
+      },
+      {
+        "index": 30,
+        "nodeId": "95:38",
+        "name": "S001_SH30_Repo_NormalizationWarning_v001",
+        "sourceComp": "S001_SH30_Repo_NormalizationWarning_v001",
+        "startTime": 458,
+        "inPoint": 458,
+        "outPoint": 485
+      },
+      {
+        "index": 31,
+        "nodeId": "95:41",
+        "name": "S001_SH31_Repo_PrepareRecord_v001",
+        "sourceComp": "S001_SH31_Repo_PrepareRecord_v001",
+        "startTime": 485,
+        "inPoint": 485,
+        "outPoint": 512
+      },
+      {
+        "index": 32,
+        "nodeId": "95:44",
+        "name": "S001_SH32_Repo_PreparationNotLearning_v001",
+        "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001",
+        "startTime": 512,
+        "inPoint": 512,
+        "outPoint": 540
+      },
+      {
+        "index": 33,
+        "nodeId": "95:47",
+        "name": "S001_SH33_Lab_FileOverview_v001",
+        "sourceComp": "S001_SH33_Lab_FileOverview_v001",
+        "startTime": 540,
+        "inPoint": 540,
+        "outPoint": 564
+      },
+      {
+        "index": 34,
+        "nodeId": "95:50",
+        "name": "S001_SH34_Lab_PredictCat_v001",
+        "sourceComp": "S001_SH34_Lab_PredictCat_v001",
+        "startTime": 564,
+        "inPoint": 564,
+        "outPoint": 588
+      },
+      {
+        "index": 35,
+        "nodeId": "95:53",
+        "name": "S001_SH35_Lab_RunCommand_v001",
+        "sourceComp": "S001_SH35_Lab_RunCommand_v001",
+        "startTime": 588,
+        "inPoint": 588,
+        "outPoint": 618
+      },
+      {
+        "index": 36,
+        "nodeId": "95:56",
+        "name": "S001_SH36_Lab_CompareCatLists_v001",
+        "sourceComp": "S001_SH36_Lab_CompareCatLists_v001",
+        "startTime": 618,
+        "inPoint": 618,
+        "outPoint": 644
+      },
+      {
+        "index": 37,
+        "nodeId": "95:59",
+        "name": "S001_SH37_Lab_EqualityCaveat_v001",
+        "sourceComp": "S001_SH37_Lab_EqualityCaveat_v001",
+        "startTime": 644,
+        "inPoint": 644,
+        "outPoint": 665
+      },
+      {
+        "index": 38,
+        "nodeId": "95:62",
+        "name": "S001_SH38_Lab_EditToA_v001",
+        "sourceComp": "S001_SH38_Lab_EditToA_v001",
+        "startTime": 665,
+        "inPoint": 665,
+        "outPoint": 692
+      },
+      {
+        "index": 39,
+        "nodeId": "95:65",
+        "name": "S001_SH39_Lab_RunAAndRestore_v001",
+        "sourceComp": "S001_SH39_Lab_RunAAndRestore_v001",
+        "startTime": 692,
+        "inPoint": 692,
+        "outPoint": 720
+      },
+      {
+        "index": 40,
+        "nodeId": "95:68",
+        "name": "S001_SH40_Mistake_65IsMeaning_v001",
+        "sourceComp": "S001_SH40_Mistake_65IsMeaning_v001",
+        "startTime": 720,
+        "inPoint": 720,
+        "outPoint": 734
+      },
+      {
+        "index": 41,
+        "nodeId": "95:71",
+        "name": "S001_SH41_Mistake_AContextWheel_v001",
+        "sourceComp": "S001_SH41_Mistake_AContextWheel_v001",
+        "startTime": 734,
+        "inPoint": 734,
+        "outPoint": 750
+      },
+      {
+        "index": 42,
+        "nodeId": "95:74",
+        "name": "S001_SH42_Mistake_MappingSwapTest_v001",
+        "sourceComp": "S001_SH42_Mistake_MappingSwapTest_v001",
+        "startTime": 750,
+        "inPoint": 750,
+        "outPoint": 764
+      },
+      {
+        "index": 43,
+        "nodeId": "95:77",
+        "name": "S001_SH43_Mistake_EncodingVsLearning_v001",
+        "sourceComp": "S001_SH43_Mistake_EncodingVsLearning_v001",
+        "startTime": 764,
+        "inPoint": 764,
+        "outPoint": 780
+      },
+      {
+        "index": 44,
+        "nodeId": "95:80",
+        "name": "S001_SH44_Recap_Objective_v001",
+        "sourceComp": "S001_SH44_Recap_Objective_v001",
+        "startTime": 780,
+        "inPoint": 780,
+        "outPoint": 792
+      },
+      {
+        "index": 45,
+        "nodeId": "95:83",
+        "name": "S001_SH45_Recap_FourSteps_v001",
+        "sourceComp": "S001_SH45_Recap_FourSteps_v001",
+        "startTime": 792,
+        "inPoint": 792,
+        "outPoint": 808
+      },
+      {
+        "index": 46,
+        "nodeId": "95:86",
+        "name": "S001_SH46_Recap_SelfCheck_v001",
+        "sourceComp": "S001_SH46_Recap_SelfCheck_v001",
+        "startTime": 808,
+        "inPoint": 808,
+        "outPoint": 822
+      },
+      {
+        "index": 47,
+        "nodeId": "95:89",
+        "name": "S001_SH47_Recap_Exercise_v001",
+        "sourceComp": "S001_SH47_Recap_Exercise_v001",
+        "startTime": 822,
+        "inPoint": 822,
+        "outPoint": 834
+      },
+      {
+        "index": 48,
+        "nodeId": "95:92",
+        "name": "S001_SH48_Recap_NextLesson_v001",
+        "sourceComp": "S001_SH48_Recap_NextLesson_v001",
+        "startTime": 834,
+        "inPoint": 834,
+        "outPoint": 840
+      }
+    ]
+  },
+  "shots": [
+    {
+      "index": 1,
+      "nodeId": "94:2",
+      "configuredName": "S001_SH01_Hook_CatWord",
+      "name": "S001_SH01_Hook_CatWord_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 8,
+      "durationFrames": 240,
+      "nativeCount": 6,
+      "nativeNodeIds": [
+        "99:7",
+        "99:6",
+        "99:5",
+        "99:4",
+        "94:3",
+        "94:2::root-solid-background"
+      ],
+      "rasterCount": 2,
+      "rasterFallbacks": [
+        {
+          "nodeId": "99:3",
+          "assetHash": "c66bae134668306bb62d1e18d6b46c21c36e098743654c6b771868eea1dce15c"
+        },
+        {
+          "nodeId": "99:2",
+          "assetHash": "8fa966ac04d7072d788c54c95b58363c63afbdab0c23be792b313f17fd2a40df"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH01_Hook_CatWord_v001",
+        "durationSeconds": 8,
+        "durationFrames": 240,
+        "children": []
+      }
+    },
+    {
+      "index": 2,
+      "nodeId": "94:5",
+      "configuredName": "S001_SH02_Hook_HumanAssociations",
+      "name": "S001_SH02_Hook_HumanAssociations_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 10,
+      "durationFrames": 300,
+      "nativeCount": 6,
+      "nativeNodeIds": [
+        "99:26",
+        "99:10",
+        "99:9",
+        "99:8",
+        "94:6",
+        "94:5::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "99:11",
+          "assetHash": "06f075a1b03381ff77857b1fd7e1b3a48e9cbe219f6db9274ecd2c5f0892e2b0"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH02_Hook_HumanAssociations_v001",
+        "durationSeconds": 10,
+        "durationFrames": 300,
+        "children": []
+      }
+    },
+    {
+      "index": 3,
+      "nodeId": "94:8",
+      "configuredName": "S001_SH03_Hook_ProgramData",
+      "name": "S001_SH03_Hook_ProgramData_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 12,
+      "durationFrames": 360,
+      "nativeCount": 6,
+      "nativeNodeIds": [
+        "99:48",
+        "99:29",
+        "99:28",
+        "99:27",
+        "94:9",
+        "94:8::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "99:30",
+          "assetHash": "02c7e0230aa49cada22fc53e860023184e15ba0d4a62fc196ee6f3fe924ad259"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH03_Hook_ProgramData_v001",
+        "durationSeconds": 12,
+        "durationFrames": 360,
+        "children": []
+      }
+    },
+    {
+      "index": 4,
+      "nodeId": "94:11",
+      "configuredName": "S001_SH04_Hook_LessonPromise",
+      "name": "S001_SH04_Hook_LessonPromise_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "99:60",
+        "99:61",
+        "99:60::container-solid-background",
+        "99:55",
+        "99:59",
+        "99:58",
+        "99:57",
+        "99:56",
+        "99:55::container-solid-background",
+        "99:50",
+        "99:54",
+        "99:53",
+        "99:52",
+        "99:51",
+        "99:50::container-solid-background",
+        "99:49",
+        "94:12",
+        "94:11::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH04_Hook_LessonPromise_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": [
+          {
+            "name": "S001_SH04_Hook_LessonPromise_v001__PROG_LessonObjective",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "99:60"
+          },
+          {
+            "name": "S001_SH04_Hook_LessonPromise_v001__DATA_ProgramLane",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "99:55"
+          },
+          {
+            "name": "S001_SH04_Hook_LessonPromise_v001__LOSS_HumanLane",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "99:50"
+          }
+        ]
+      }
+    },
+    {
+      "index": 5,
+      "nodeId": "94:14",
+      "configuredName": "S001_SH05_Direct_DefinedStandards",
+      "name": "S001_SH05_Direct_DefinedStandards_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 13,
+      "durationFrames": 390,
+      "nativeCount": 19,
+      "nativeNodeIds": [
+        "100:49",
+        "100:48",
+        "100:47",
+        "100:46",
+        "100:45",
+        "100:44",
+        "100:43",
+        "100:42",
+        "100:41",
+        "100:40",
+        "100:39",
+        "100:38",
+        "100:37",
+        "100:36",
+        "100:35",
+        "100:34",
+        "100:33",
+        "94:15",
+        "94:14::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH05_Direct_DefinedStandards_v001",
+        "durationSeconds": 13,
+        "durationFrames": 390,
+        "children": []
+      }
+    },
+    {
+      "index": 6,
+      "nodeId": "94:17",
+      "configuredName": "S001_SH06_Direct_Ato65",
+      "name": "S001_SH06_Direct_Ato65_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 21,
+      "nativeNodeIds": [
+        "100:63",
+        "I100:63;96:57",
+        "I100:63;96:56",
+        "I100:63;96:55",
+        "I100:63;96:54",
+        "I100:63;96:53",
+        "I100:63;96:52",
+        "I100:63;96:51",
+        "100:63::container-solid-background",
+        "100:58",
+        "I100:58;96:16",
+        "I100:58;96:15",
+        "I100:58;96:13",
+        "I100:58;96:14",
+        "I100:58;96:13::container-solid-background",
+        "100:58::container-solid-background",
+        "100:57",
+        "100:51",
+        "100:50",
+        "94:18",
+        "94:17::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "100:52",
+          "assetHash": "e884f685ff38e3d593512af2b3faac0d59990d720c419f1b68b39e0692abb0b4"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH06_Direct_Ato65_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH06_Direct_Ato65_v001__CODE_OrdEvidence",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "100:63"
+          },
+          {
+            "name": "S001_SH06_Direct_Ato65_v001__DATA_Number_65",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [
+              {
+                "name": "S001_SH06_Direct_Ato65_v001__DATA_ValueWell",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "I100:58;96:13"
+              }
+            ],
+            "nodeId": "100:58"
+          }
+        ]
+      }
+    },
+    {
+      "index": 7,
+      "nodeId": "94:20",
+      "configuredName": "S001_SH07_Direct_AContexts",
+      "name": "S001_SH07_Direct_AContexts_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 25,
+      "nativeNodeIds": [
+        "100:88",
+        "100:85",
+        "100:87",
+        "100:86",
+        "100:85::container-solid-background",
+        "100:82",
+        "100:84",
+        "100:83",
+        "100:82::container-solid-background",
+        "100:79",
+        "100:81",
+        "100:80",
+        "100:79::container-solid-background",
+        "100:76",
+        "100:78",
+        "100:77",
+        "100:76::container-solid-background",
+        "100:73",
+        "100:75",
+        "100:74",
+        "100:73::container-solid-background",
+        "100:72",
+        "100:71",
+        "94:21",
+        "94:20::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH07_Direct_AContexts_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH07_Direct_AContexts_v001__LOSS_Context_04",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "100:85"
+          },
+          {
+            "name": "S001_SH07_Direct_AContexts_v001__LOSS_Context_03",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "100:82"
+          },
+          {
+            "name": "S001_SH07_Direct_AContexts_v001__LOSS_Context_02",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "100:79"
+          },
+          {
+            "name": "S001_SH07_Direct_AContexts_v001__LOSS_Context_01",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "100:76"
+          },
+          {
+            "name": "S001_SH07_Direct_AContexts_v001__DATA_FixedCenter",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "100:73"
+          }
+        ]
+      }
+    },
+    {
+      "index": 8,
+      "nodeId": "94:23",
+      "configuredName": "S001_SH08_Direct_RepresentationNotMeaning",
+      "name": "S001_SH08_Direct_RepresentationNotMeaning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 15,
+      "nativeNodeIds": [
+        "100:99",
+        "100:95",
+        "100:98",
+        "100:97",
+        "100:96",
+        "100:95::container-solid-background",
+        "100:90",
+        "100:94",
+        "100:93",
+        "100:92",
+        "100:91",
+        "100:90::container-solid-background",
+        "100:89",
+        "94:24",
+        "94:23::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH08_Direct_RepresentationNotMeaning_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": [
+          {
+            "name": "S001_SH08_Direct_RepresentationNotMeaning_v001__DATA_CorrectEquation",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "100:95"
+          },
+          {
+            "name": "S001_SH08_Direct_RepresentationNotMeaning_v001__LOSS_WrongEquation",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "100:90"
+          }
+        ]
+      }
+    },
+    {
+      "index": 9,
+      "nodeId": "94:26",
+      "configuredName": "S001_SH09_Direct_FixedVsAdjustable",
+      "name": "S001_SH09_Direct_FixedVsAdjustable_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 17,
+      "durationFrames": 510,
+      "nativeCount": 15,
+      "nativeNodeIds": [
+        "100:106",
+        "100:110",
+        "100:109",
+        "100:108",
+        "100:107",
+        "100:106::container-solid-background",
+        "100:101",
+        "100:105",
+        "100:104",
+        "100:103",
+        "100:102",
+        "100:101::container-solid-background",
+        "100:100",
+        "94:27",
+        "94:26::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH09_Direct_FixedVsAdjustable_v001",
+        "durationSeconds": 17,
+        "durationFrames": 510,
+        "children": [
+          {
+            "name": "S001_SH09_Direct_FixedVsAdjustable_v001__MODEL_AdjustableCategory",
+            "durationSeconds": 17,
+            "durationFrames": 510,
+            "children": [],
+            "nodeId": "100:106"
+          },
+          {
+            "name": "S001_SH09_Direct_FixedVsAdjustable_v001__DATA_FixedCategory",
+            "durationSeconds": 17,
+            "durationFrames": 510,
+            "children": [],
+            "nodeId": "100:101"
+          }
+        ]
+      }
+    },
+    {
+      "index": 10,
+      "nodeId": "94:29",
+      "configuredName": "S001_SH10_Technical_CharacterStrip",
+      "name": "S001_SH10_Technical_CharacterStrip_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 26,
+      "nativeNodeIds": [
+        "102:66",
+        "102:63",
+        "102:65",
+        "102:64",
+        "102:63::container-solid-background",
+        "102:60",
+        "102:62",
+        "102:61",
+        "102:60::container-solid-background",
+        "102:57",
+        "102:59",
+        "102:58",
+        "102:57::container-solid-background",
+        "102:54",
+        "102:56",
+        "102:55",
+        "102:54::container-solid-background",
+        "102:51",
+        "102:53",
+        "102:52",
+        "102:51::container-solid-background",
+        "102:50",
+        "102:49",
+        "102:48",
+        "94:30",
+        "94:29::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH10_Technical_CharacterStrip_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH10_Technical_CharacterStrip_v001__DATA_CharacterUnit_05",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "102:63"
+          },
+          {
+            "name": "S001_SH10_Technical_CharacterStrip_v001__DATA_CharacterUnit_04",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "102:60"
+          },
+          {
+            "name": "S001_SH10_Technical_CharacterStrip_v001__DATA_CharacterUnit_03",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "102:57"
+          },
+          {
+            "name": "S001_SH10_Technical_CharacterStrip_v001__DATA_CharacterUnit_02",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "102:54"
+          },
+          {
+            "name": "S001_SH10_Technical_CharacterStrip_v001__DATA_CharacterUnit_01",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "102:51"
+          }
+        ]
+      }
+    },
+    {
+      "index": 11,
+      "nodeId": "94:32",
+      "configuredName": "S001_SH11_Technical_UnicodeDefinition",
+      "name": "S001_SH11_Technical_UnicodeDefinition_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 21,
+      "nativeNodeIds": [
+        "102:70",
+        "102:79",
+        "102:81",
+        "102:80",
+        "102:79::container-solid-background",
+        "102:76",
+        "102:78",
+        "102:77",
+        "102:76::container-solid-background",
+        "102:73",
+        "102:75",
+        "102:74",
+        "102:73::container-solid-background",
+        "102:72",
+        "102:71",
+        "102:70::container-solid-background",
+        "102:69",
+        "102:68",
+        "102:67",
+        "94:33",
+        "94:32::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH11_Technical_UnicodeDefinition_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH11_Technical_UnicodeDefinition_v001__DATA_UnicodeDefinitionCard",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [
+              {
+                "name": "S001_SH11_Technical_UnicodeDefinition_v001__DATA_Property_03",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:79"
+              },
+              {
+                "name": "S001_SH11_Technical_UnicodeDefinition_v001__DATA_Property_02",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:76"
+              },
+              {
+                "name": "S001_SH11_Technical_UnicodeDefinition_v001__DATA_Property_01",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:73"
+              }
+            ],
+            "nodeId": "102:70"
+          }
+        ]
+      }
+    },
+    {
+      "index": 12,
+      "nodeId": "94:35",
+      "configuredName": "S001_SH12_Technical_OrdFunction",
+      "name": "S001_SH12_Technical_OrdFunction_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 7,
+      "nativeNodeIds": [
+        "102:98",
+        "102:97",
+        "102:84",
+        "102:83",
+        "102:82",
+        "94:36",
+        "94:35::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "102:85",
+          "assetHash": "a0f1c288b771c35596e6bb6454605ab44f4b0b45c56d5411cb3c5b0339f1572d"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH12_Technical_OrdFunction_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": []
+      }
+    },
+    {
+      "index": 13,
+      "nodeId": "94:38",
+      "configuredName": "S001_SH13_Technical_CatCodePoints",
+      "name": "S001_SH13_Technical_CatCodePoints_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 7,
+      "nativeNodeIds": [
+        "102:121",
+        "102:120",
+        "102:101",
+        "102:100",
+        "102:99",
+        "94:39",
+        "94:38::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "102:102",
+          "assetHash": "02c7e0230aa49cada22fc53e860023184e15ba0d4a62fc196ee6f3fe924ad259"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH13_Technical_CatCodePoints_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": []
+      }
+    },
+    {
+      "index": 14,
+      "nodeId": "94:41",
+      "configuredName": "S001_SH14_Technical_ByteRange",
+      "name": "S001_SH14_Technical_ByteRange_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 34,
+      "nativeNodeIds": [
+        "102:144",
+        "102:143",
+        "102:125",
+        "102:142",
+        "102:140",
+        "102:141",
+        "102:140::container-solid-background",
+        "102:138",
+        "102:139",
+        "102:138::container-solid-background",
+        "102:136",
+        "102:137",
+        "102:136::container-solid-background",
+        "102:134",
+        "102:135",
+        "102:134::container-solid-background",
+        "102:132",
+        "102:133",
+        "102:132::container-solid-background",
+        "102:130",
+        "102:131",
+        "102:130::container-solid-background",
+        "102:128",
+        "102:129",
+        "102:128::container-solid-background",
+        "102:126",
+        "102:127",
+        "102:126::container-solid-background",
+        "102:125::container-solid-background",
+        "102:124",
+        "102:123",
+        "102:122",
+        "94:42",
+        "94:41::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH14_Technical_ByteRange_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH14_Technical_ByteRange_v001__DATA_ByteGroup",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_08",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:140"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_07",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:138"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_06",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:136"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_05",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:134"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_04",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:132"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_03",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:130"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_02",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:128"
+              },
+              {
+                "name": "S001_SH14_Technical_ByteRange_v001__DATA_BitCell_01",
+                "durationSeconds": 14,
+                "durationFrames": 420,
+                "children": [],
+                "nodeId": "102:126"
+              }
+            ],
+            "nodeId": "102:125"
+          }
+        ]
+      }
+    },
+    {
+      "index": 15,
+      "nodeId": "94:44",
+      "configuredName": "S001_SH15_Technical_UTF8Cat",
+      "name": "S001_SH15_Technical_UTF8Cat_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "102:157",
+        "102:158",
+        "102:157::container-solid-background",
+        "102:148",
+        "102:156",
+        "102:155",
+        "102:154",
+        "102:153",
+        "102:152",
+        "102:151",
+        "102:150",
+        "102:149",
+        "102:148::container-solid-background",
+        "102:147",
+        "102:146",
+        "102:145",
+        "94:45",
+        "94:44::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH15_Technical_UTF8Cat_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": [
+          {
+            "name": "S001_SH15_Technical_UTF8Cat_v001__LOSS_Caveat",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "102:157"
+          },
+          {
+            "name": "S001_SH15_Technical_UTF8Cat_v001__DATA_UTF8Comparison",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "102:148"
+          }
+        ]
+      }
+    },
+    {
+      "index": 16,
+      "nodeId": "94:47",
+      "configuredName": "S001_SH16_Technical_ModelParameters",
+      "name": "S001_SH16_Technical_ModelParameters_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 13,
+      "nativeNodeIds": [
+        "102:185",
+        "102:184",
+        "102:183",
+        "102:165",
+        "102:162",
+        "102:164",
+        "102:163",
+        "102:162::container-solid-background",
+        "102:161",
+        "102:160",
+        "102:159",
+        "94:48",
+        "94:47::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "102:166",
+          "assetHash": "8a7aa310d43a52070390ee3e6bacaafc74cf7f3cdca7d1f96cb73cfacd00395c"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH16_Technical_ModelParameters_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH16_Technical_ModelParameters_v001__DATA_NumericInput",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "102:162"
+          }
+        ]
+      }
+    },
+    {
+      "index": 17,
+      "nodeId": "94:50",
+      "configuredName": "S001_SH17_Technical_TwoReasons",
+      "name": "S001_SH17_Technical_TwoReasons_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 17,
+      "durationFrames": 510,
+      "nativeCount": 17,
+      "nativeNodeIds": [
+        "102:196",
+        "102:197",
+        "102:196::container-solid-background",
+        "102:192",
+        "102:195",
+        "102:194",
+        "102:193",
+        "102:192::container-solid-background",
+        "102:188",
+        "102:191",
+        "102:190",
+        "102:189",
+        "102:188::container-solid-background",
+        "102:187",
+        "102:186",
+        "94:51",
+        "94:50::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH17_Technical_TwoReasons_v001",
+        "durationSeconds": 17,
+        "durationFrames": 510,
+        "children": [
+          {
+            "name": "S001_SH17_Technical_TwoReasons_v001__PROG_Convergence",
+            "durationSeconds": 17,
+            "durationFrames": 510,
+            "children": [],
+            "nodeId": "102:196"
+          },
+          {
+            "name": "S001_SH17_Technical_TwoReasons_v001__MODEL_MathReason",
+            "durationSeconds": 17,
+            "durationFrames": 510,
+            "children": [],
+            "nodeId": "102:192"
+          },
+          {
+            "name": "S001_SH17_Technical_TwoReasons_v001__DATA_StorageReason",
+            "durationSeconds": 17,
+            "durationFrames": 510,
+            "children": [],
+            "nodeId": "102:188"
+          }
+        ]
+      }
+    },
+    {
+      "index": 18,
+      "nodeId": "95:2",
+      "configuredName": "S001_SH18_Example_ThreeSentences",
+      "name": "S001_SH18_Example_ThreeSentences_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 21,
+      "nativeNodeIds": [
+        "104:107",
+        "104:103",
+        "104:106",
+        "104:105",
+        "104:104",
+        "104:103::container-solid-background",
+        "104:99",
+        "104:102",
+        "104:101",
+        "104:100",
+        "104:99::container-solid-background",
+        "104:95",
+        "104:98",
+        "104:97",
+        "104:96",
+        "104:95::container-solid-background",
+        "104:94",
+        "104:93",
+        "104:92",
+        "95:3",
+        "95:2::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH18_Example_ThreeSentences_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH18_Example_ThreeSentences_v001__DATA_SentenceRow_03",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:103"
+          },
+          {
+            "name": "S001_SH18_Example_ThreeSentences_v001__DATA_SentenceRow_02",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:99"
+          },
+          {
+            "name": "S001_SH18_Example_ThreeSentences_v001__DATA_SentenceRow_01",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:95"
+          }
+        ]
+      }
+    },
+    {
+      "index": 19,
+      "nodeId": "95:5",
+      "configuredName": "S001_SH19_Example_RepeatedPattern",
+      "name": "S001_SH19_Example_RepeatedPattern_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 22,
+      "nativeNodeIds": [
+        "104:124",
+        "104:125",
+        "104:124::container-solid-background",
+        "104:111",
+        "104:123",
+        "104:122",
+        "104:121",
+        "104:120",
+        "104:119",
+        "104:118",
+        "104:117",
+        "104:116",
+        "104:115",
+        "104:114",
+        "104:113",
+        "104:112",
+        "104:111::container-solid-background",
+        "104:110",
+        "104:109",
+        "104:108",
+        "95:6",
+        "95:5::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH19_Example_RepeatedPattern_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH19_Example_RepeatedPattern_v001__LOSS_NoConclusion",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:124"
+          },
+          {
+            "name": "S001_SH19_Example_RepeatedPattern_v001__DATA_AlignedPatternGrid",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:111"
+          }
+        ]
+      }
+    },
+    {
+      "index": 20,
+      "nodeId": "95:8",
+      "configuredName": "S001_SH20_Example_CatHandCheck",
+      "name": "S001_SH20_Example_CatHandCheck_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 9,
+      "nativeNodeIds": [
+        "104:147",
+        "104:149",
+        "104:148",
+        "104:147::container-solid-background",
+        "104:128",
+        "104:127",
+        "104:126",
+        "95:9",
+        "95:8::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "104:129",
+          "assetHash": "02c7e0230aa49cada22fc53e860023184e15ba0d4a62fc196ee6f3fe924ad259"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH20_Example_CatHandCheck_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": [
+          {
+            "name": "S001_SH20_Example_CatHandCheck_v001__PROG_Verified",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "104:147"
+          }
+        ]
+      }
+    },
+    {
+      "index": 21,
+      "nodeId": "95:11",
+      "configuredName": "S001_SH21_Example_NumericOperations",
+      "name": "S001_SH21_Example_NumericOperations_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 15,
+      "durationFrames": 450,
+      "nativeCount": 24,
+      "nativeNodeIds": [
+        "104:168",
+        "104:163",
+        "104:167",
+        "104:166",
+        "104:165",
+        "104:164",
+        "104:163::container-solid-background",
+        "104:158",
+        "104:162",
+        "104:161",
+        "104:160",
+        "104:159",
+        "104:158::container-solid-background",
+        "104:153",
+        "104:157",
+        "104:156",
+        "104:155",
+        "104:154",
+        "104:153::container-solid-background",
+        "104:152",
+        "104:151",
+        "104:150",
+        "95:12",
+        "95:11::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH21_Example_NumericOperations_v001",
+        "durationSeconds": 15,
+        "durationFrames": 450,
+        "children": [
+          {
+            "name": "S001_SH21_Example_NumericOperations_v001__MODEL_OperationCard_03",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "104:163"
+          },
+          {
+            "name": "S001_SH21_Example_NumericOperations_v001__DATA_OperationCard_02",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "104:158"
+          },
+          {
+            "name": "S001_SH21_Example_NumericOperations_v001__PROG_OperationCard_01",
+            "durationSeconds": 15,
+            "durationFrames": 450,
+            "children": [],
+            "nodeId": "104:153"
+          }
+        ]
+      }
+    },
+    {
+      "index": 22,
+      "nodeId": "95:14",
+      "configuredName": "S001_SH22_Example_DistanceNotMeaning",
+      "name": "S001_SH22_Example_DistanceNotMeaning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 19,
+      "nativeNodeIds": [
+        "104:183",
+        "104:184",
+        "104:183::container-solid-background",
+        "104:182",
+        "104:181",
+        "104:180",
+        "104:179",
+        "104:178",
+        "104:177",
+        "104:176",
+        "104:175",
+        "104:174",
+        "104:173",
+        "104:172",
+        "104:171",
+        "104:170",
+        "104:169",
+        "95:15",
+        "95:14::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH22_Example_DistanceNotMeaning_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH22_Example_DistanceNotMeaning_v001__LOSS_SemanticDisconnect",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "104:183"
+          }
+        ]
+      }
+    },
+    {
+      "index": 23,
+      "nodeId": "95:17",
+      "configuredName": "S001_SH23_Example_BeforeTraining",
+      "name": "S001_SH23_Example_BeforeTraining_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 32,
+      "nativeNodeIds": [
+        "104:213",
+        "104:212",
+        "104:188",
+        "I104:188;97:88",
+        "I104:188;97:87",
+        "I104:188;97:86",
+        "I104:188;97:85",
+        "I104:188;97:84",
+        "I104:188;97:83",
+        "I104:188;97:82",
+        "I104:188;97:81",
+        "I104:188;97:80",
+        "I104:188;97:79",
+        "I104:188;97:78",
+        "I104:188;97:77",
+        "I104:188;97:76",
+        "I104:188;97:75",
+        "I104:188;97:74",
+        "I104:188;97:73",
+        "I104:188;97:72",
+        "I104:188;97:71",
+        "I104:188;97:70",
+        "I104:188;97:69",
+        "I104:188;97:68",
+        "I104:188;97:67",
+        "I104:188;97:66",
+        "104:188::container-solid-background",
+        "104:187",
+        "104:186",
+        "104:185",
+        "95:18",
+        "95:17::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH23_Example_BeforeTraining_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH23_Example_BeforeTraining_v001__LOSS_BeforePredictionRow",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:188"
+          }
+        ]
+      }
+    },
+    {
+      "index": 24,
+      "nodeId": "95:20",
+      "configuredName": "S001_SH24_Example_AfterTraining",
+      "name": "S001_SH24_Example_AfterTraining_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 34,
+      "nativeNodeIds": [
+        "104:241",
+        "104:243",
+        "104:242",
+        "104:241::container-solid-background",
+        "104:217",
+        "104:240",
+        "104:239",
+        "104:238",
+        "104:237",
+        "104:236",
+        "104:235",
+        "104:234",
+        "104:233",
+        "104:232",
+        "104:231",
+        "104:230",
+        "104:229",
+        "104:228",
+        "104:227",
+        "104:226",
+        "104:225",
+        "104:224",
+        "104:223",
+        "104:222",
+        "104:221",
+        "104:220",
+        "104:219",
+        "104:218",
+        "104:217::container-solid-background",
+        "104:216",
+        "104:215",
+        "104:214",
+        "95:21",
+        "95:20::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH24_Example_AfterTraining_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH24_Example_AfterTraining_v001__PROG_ImprovementDelta",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:241"
+          },
+          {
+            "name": "S001_SH24_Example_AfterTraining_v001__PROG_AfterPredictionRow",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:217"
+          }
+        ]
+      }
+    },
+    {
+      "index": 25,
+      "nodeId": "95:23",
+      "configuredName": "S001_SH25_Example_PatternVsMemorization",
+      "name": "S001_SH25_Example_PatternVsMemorization_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 23,
+      "nativeNodeIds": [
+        "104:259",
+        "104:260",
+        "104:259::container-solid-background",
+        "104:255",
+        "104:258",
+        "104:257",
+        "104:256",
+        "104:255::container-solid-background",
+        "104:251",
+        "104:254",
+        "104:253",
+        "104:252",
+        "104:251::container-solid-background",
+        "104:247",
+        "104:250",
+        "104:249",
+        "104:248",
+        "104:247::container-solid-background",
+        "104:246",
+        "104:245",
+        "104:244",
+        "95:24",
+        "95:23::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH25_Example_PatternVsMemorization_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH25_Example_PatternVsMemorization_v001__LOSS_DeferredTopic",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:259"
+          },
+          {
+            "name": "S001_SH25_Example_PatternVsMemorization_v001__PROG_HeldOutEvaluation",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:255"
+          },
+          {
+            "name": "S001_SH25_Example_PatternVsMemorization_v001__LOSS_MemorizationRisk",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:251"
+          },
+          {
+            "name": "S001_SH25_Example_PatternVsMemorization_v001__DATA_RepeatedPattern",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "104:247"
+          }
+        ]
+      }
+    },
+    {
+      "index": 26,
+      "nodeId": "95:26",
+      "configuredName": "S001_SH26_Repo_PreparationOverview",
+      "name": "S001_SH26_Repo_PreparationOverview_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 22,
+      "durationFrames": 660,
+      "nativeCount": 25,
+      "nativeNodeIds": [
+        "105:149",
+        "105:150",
+        "105:149::container-solid-background",
+        "105:145",
+        "105:148",
+        "105:147",
+        "105:146",
+        "105:145::container-solid-background",
+        "105:144",
+        "105:140",
+        "105:143",
+        "105:142",
+        "105:141",
+        "105:140::container-solid-background",
+        "105:139",
+        "105:135",
+        "105:138",
+        "105:137",
+        "105:136",
+        "105:135::container-solid-background",
+        "105:134",
+        "105:133",
+        "105:132",
+        "95:27",
+        "95:26::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH26_Repo_PreparationOverview_v001",
+        "durationSeconds": 22,
+        "durationFrames": 660,
+        "children": [
+          {
+            "name": "S001_SH26_Repo_PreparationOverview_v001__DATA_PreparationBoundary",
+            "durationSeconds": 22,
+            "durationFrames": 660,
+            "children": [],
+            "nodeId": "105:149"
+          },
+          {
+            "name": "S001_SH26_Repo_PreparationOverview_v001__PROG_PreparationStep_03",
+            "durationSeconds": 22,
+            "durationFrames": 660,
+            "children": [],
+            "nodeId": "105:145"
+          },
+          {
+            "name": "S001_SH26_Repo_PreparationOverview_v001__DATA_PreparationStep_02",
+            "durationSeconds": 22,
+            "durationFrames": 660,
+            "children": [],
+            "nodeId": "105:140"
+          },
+          {
+            "name": "S001_SH26_Repo_PreparationOverview_v001__TXT_PreparationStep_01",
+            "durationSeconds": 22,
+            "durationFrames": 660,
+            "children": [],
+            "nodeId": "105:135"
+          }
+        ]
+      }
+    },
+    {
+      "index": 27,
+      "nodeId": "95:29",
+      "configuredName": "S001_SH27_Repo_NormalizeFunction",
+      "name": "S001_SH27_Repo_NormalizeFunction_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 26,
+      "durationFrames": 780,
+      "nativeCount": 7,
+      "nativeNodeIds": [
+        "105:167",
+        "105:166",
+        "105:153",
+        "105:152",
+        "105:151",
+        "95:30",
+        "95:29::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "105:154",
+          "assetHash": "d44aecd186fea63eac6b8b1bb3f530372ade8609c38f938b4c500175b9fca67a"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH27_Repo_NormalizeFunction_v001",
+        "durationSeconds": 26,
+        "durationFrames": 780,
+        "children": []
+      }
+    },
+    {
+      "index": 28,
+      "nodeId": "95:32",
+      "configuredName": "S001_SH28_Repo_NFKCStep",
+      "name": "S001_SH28_Repo_NFKCStep_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 24,
+      "durationFrames": 720,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "105:180",
+        "105:177",
+        "105:179",
+        "105:178",
+        "105:177::container-solid-background",
+        "105:176",
+        "105:173",
+        "105:175",
+        "105:174",
+        "105:173::container-solid-background",
+        "105:171",
+        "105:172",
+        "105:171::container-solid-background",
+        "105:170",
+        "105:169",
+        "105:168",
+        "95:33",
+        "95:32::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH28_Repo_NFKCStep_v001",
+        "durationSeconds": 24,
+        "durationFrames": 720,
+        "children": [
+          {
+            "name": "S001_SH28_Repo_NFKCStep_v001__DATA_NFKCOutput",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "105:177"
+          },
+          {
+            "name": "S001_SH28_Repo_NFKCStep_v001__TXT_NFKCInput",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "105:173"
+          },
+          {
+            "name": "S001_SH28_Repo_NFKCStep_v001__CODE_NFKCLine",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "105:171"
+          }
+        ]
+      }
+    },
+    {
+      "index": 29,
+      "nodeId": "95:35",
+      "configuredName": "S001_SH29_Repo_NewlinesAndWhitespace",
+      "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 26,
+      "durationFrames": 780,
+      "nativeCount": 33,
+      "nativeNodeIds": [
+        "105:205",
+        "105:202",
+        "105:204",
+        "105:203",
+        "105:202::container-solid-background",
+        "105:201",
+        "105:198",
+        "105:200",
+        "105:199",
+        "105:198::container-solid-background",
+        "105:195",
+        "105:197",
+        "105:196",
+        "105:195::container-solid-background",
+        "105:194",
+        "105:191",
+        "105:193",
+        "105:192",
+        "105:191::container-solid-background",
+        "105:188",
+        "105:190",
+        "105:189",
+        "105:188::container-solid-background",
+        "105:187",
+        "105:184",
+        "105:186",
+        "105:185",
+        "105:184::container-solid-background",
+        "105:183",
+        "105:182",
+        "105:181",
+        "95:36",
+        "95:35::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001",
+        "durationSeconds": 26,
+        "durationFrames": 780,
+        "children": [
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__DATA_NormalizedForm_03",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:202"
+          },
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__TXT_SourceForm_03",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:198"
+          },
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__DATA_NormalizedForm_02",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:195"
+          },
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__TXT_SourceForm_02",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:191"
+          },
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__DATA_NormalizedForm_01",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:188"
+          },
+          {
+            "name": "S001_SH29_Repo_NewlinesAndWhitespace_v001__TXT_SourceForm_01",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "105:184"
+          }
+        ]
+      }
+    },
+    {
+      "index": 30,
+      "nodeId": "95:38",
+      "configuredName": "S001_SH30_Repo_NormalizationWarning",
+      "name": "S001_SH30_Repo_NormalizationWarning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 27,
+      "durationFrames": 810,
+      "nativeCount": 9,
+      "nativeNodeIds": [
+        "105:218",
+        "105:211",
+        "105:210",
+        "105:209",
+        "105:208",
+        "105:207",
+        "105:206",
+        "95:39",
+        "95:38::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "105:212",
+          "assetHash": "93d761ecbaa416a069eb4e010c1967bc41fc68c0d4a0eda32ce38cb1686a7384"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH30_Repo_NormalizationWarning_v001",
+        "durationSeconds": 27,
+        "durationFrames": 810,
+        "children": []
+      }
+    },
+    {
+      "index": 31,
+      "nodeId": "95:41",
+      "configuredName": "S001_SH31_Repo_PrepareRecord",
+      "name": "S001_SH31_Repo_PrepareRecord_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 27,
+      "durationFrames": 810,
+      "nativeCount": 17,
+      "nativeNodeIds": [
+        "105:240",
+        "105:242",
+        "105:241",
+        "105:240::container-solid-background",
+        "105:237",
+        "105:239",
+        "105:238",
+        "105:237::container-solid-background",
+        "105:234",
+        "105:236",
+        "105:235",
+        "105:234::container-solid-background",
+        "105:221",
+        "105:220",
+        "105:219",
+        "95:42",
+        "95:41::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "105:222",
+          "assetHash": "e7499a9432dab4dc9a3aedafd5a5df9891f51ae110b07c04b18d54ce3893ab24"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH31_Repo_PrepareRecord_v001",
+        "durationSeconds": 27,
+        "durationFrames": 810,
+        "children": [
+          {
+            "name": "S001_SH31_Repo_PrepareRecord_v001__MODEL_RecordField_03",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "105:240"
+          },
+          {
+            "name": "S001_SH31_Repo_PrepareRecord_v001__PROG_RecordField_02",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "105:237"
+          },
+          {
+            "name": "S001_SH31_Repo_PrepareRecord_v001__DATA_RecordField_01",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "105:234"
+          }
+        ]
+      }
+    },
+    {
+      "index": 32,
+      "nodeId": "95:44",
+      "configuredName": "S001_SH32_Repo_PreparationNotLearning",
+      "name": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 28,
+      "durationFrames": 840,
+      "nativeCount": 30,
+      "nativeNodeIds": [
+        "105:263",
+        "105:264",
+        "105:263::container-solid-background",
+        "105:259",
+        "105:262",
+        "105:261",
+        "105:260",
+        "105:259::container-solid-background",
+        "105:258",
+        "105:257",
+        "105:246",
+        "105:254",
+        "105:256",
+        "105:255",
+        "105:254::container-solid-background",
+        "105:251",
+        "105:253",
+        "105:252",
+        "105:251::container-solid-background",
+        "105:248",
+        "105:250",
+        "105:249",
+        "105:248::container-solid-background",
+        "105:247",
+        "105:246::container-solid-background",
+        "105:245",
+        "105:244",
+        "105:243",
+        "95:45",
+        "95:44::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH32_Repo_PreparationNotLearning_v001",
+        "durationSeconds": 28,
+        "durationFrames": 840,
+        "children": [
+          {
+            "name": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [],
+            "nodeId": "105:263"
+          },
+          {
+            "name": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [],
+            "nodeId": "105:259"
+          },
+          {
+            "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [
+              {
+                "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
+                "durationSeconds": 28,
+                "durationFrames": 840,
+                "children": [],
+                "nodeId": "105:254"
+              },
+              {
+                "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02",
+                "durationSeconds": 28,
+                "durationFrames": 840,
+                "children": [],
+                "nodeId": "105:251"
+              },
+              {
+                "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01",
+                "durationSeconds": 28,
+                "durationFrames": 840,
+                "children": [],
+                "nodeId": "105:248"
+              }
+            ],
+            "nodeId": "105:246"
+          }
+        ]
+      }
+    },
+    {
+      "index": 33,
+      "nodeId": "95:47",
+      "configuredName": "S001_SH33_Lab_FileOverview",
+      "name": "S001_SH33_Lab_FileOverview_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 24,
+      "durationFrames": 720,
+      "nativeCount": 9,
+      "nativeNodeIds": [
+        "109:176",
+        "109:174",
+        "109:175",
+        "109:174::container-solid-background",
+        "109:161",
+        "109:160",
+        "109:159",
+        "95:48",
+        "95:47::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "109:162",
+          "assetHash": "5e1f095f16e78a709c81874801fddfa544e97403f8d6b8028027d96f86250839"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH33_Lab_FileOverview_v001",
+        "durationSeconds": 24,
+        "durationFrames": 720,
+        "children": [
+          {
+            "name": "S001_SH33_Lab_FileOverview_v001__CODE_FifthStatement",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "109:174"
+          }
+        ]
+      }
+    },
+    {
+      "index": 34,
+      "nodeId": "95:50",
+      "configuredName": "S001_SH34_Lab_PredictCat",
+      "name": "S001_SH34_Lab_PredictCat_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 24,
+      "durationFrames": 720,
+      "nativeCount": 20,
+      "nativeNodeIds": [
+        "109:189",
+        "109:190",
+        "109:189::container-solid-background",
+        "109:186",
+        "109:188",
+        "109:187",
+        "109:186::container-solid-background",
+        "109:183",
+        "109:185",
+        "109:184",
+        "109:183::container-solid-background",
+        "109:180",
+        "109:182",
+        "109:181",
+        "109:180::container-solid-background",
+        "109:179",
+        "109:178",
+        "109:177",
+        "95:51",
+        "95:50::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH34_Lab_PredictCat_v001",
+        "durationSeconds": 24,
+        "durationFrames": 720,
+        "children": [
+          {
+            "name": "S001_SH34_Lab_PredictCat_v001__LOSS_ViewerPause",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "109:189"
+          },
+          {
+            "name": "S001_SH34_Lab_PredictCat_v001__DATA_BytePrediction",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "109:186"
+          },
+          {
+            "name": "S001_SH34_Lab_PredictCat_v001__DATA_CodePointPrediction",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "109:183"
+          },
+          {
+            "name": "S001_SH34_Lab_PredictCat_v001__TXT_PredictionSource",
+            "durationSeconds": 24,
+            "durationFrames": 720,
+            "children": [],
+            "nodeId": "109:180"
+          }
+        ]
+      }
+    },
+    {
+      "index": 35,
+      "nodeId": "95:53",
+      "configuredName": "S001_SH35_Lab_RunCommand",
+      "name": "S001_SH35_Lab_RunCommand_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 30,
+      "durationFrames": 900,
+      "nativeCount": 17,
+      "nativeNodeIds": [
+        "109:204",
+        "109:203",
+        "109:202",
+        "109:194",
+        "I109:194;97:39",
+        "I109:194;97:38",
+        "I109:194;97:37",
+        "I109:194;97:36",
+        "I109:194;97:35",
+        "I109:194;97:34",
+        "I109:194;97:33",
+        "109:194::container-solid-background",
+        "109:193",
+        "109:192",
+        "109:191",
+        "95:54",
+        "95:53::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH35_Lab_RunCommand_v001",
+        "durationSeconds": 30,
+        "durationFrames": 900,
+        "children": [
+          {
+            "name": "S001_SH35_Lab_RunCommand_v001__CODE_LabTerminal",
+            "durationSeconds": 30,
+            "durationFrames": 900,
+            "children": [],
+            "nodeId": "109:194"
+          }
+        ]
+      }
+    },
+    {
+      "index": 36,
+      "nodeId": "95:56",
+      "configuredName": "S001_SH36_Lab_CompareCatLists",
+      "name": "S001_SH36_Lab_CompareCatLists_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 26,
+      "durationFrames": 780,
+      "nativeCount": 17,
+      "nativeNodeIds": [
+        "109:216",
+        "109:217",
+        "109:216::container-solid-background",
+        "109:208",
+        "109:215",
+        "109:214",
+        "109:213",
+        "109:212",
+        "109:211",
+        "109:210",
+        "109:209",
+        "109:208::container-solid-background",
+        "109:207",
+        "109:206",
+        "109:205",
+        "95:57",
+        "95:56::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH36_Lab_CompareCatLists_v001",
+        "durationSeconds": 26,
+        "durationFrames": 780,
+        "children": [
+          {
+            "name": "S001_SH36_Lab_CompareCatLists_v001__PROG_Equality",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "109:216"
+          },
+          {
+            "name": "S001_SH36_Lab_CompareCatLists_v001__PROG_EqualLists",
+            "durationSeconds": 26,
+            "durationFrames": 780,
+            "children": [],
+            "nodeId": "109:208"
+          }
+        ]
+      }
+    },
+    {
+      "index": 37,
+      "nodeId": "95:59",
+      "configuredName": "S001_SH37_Lab_EqualityCaveat",
+      "name": "S001_SH37_Lab_EqualityCaveat_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 21,
+      "durationFrames": 630,
+      "nativeCount": 20,
+      "nativeNodeIds": [
+        "109:233",
+        "109:227",
+        "109:232",
+        "109:231",
+        "109:230",
+        "109:229",
+        "109:228",
+        "109:227::container-solid-background",
+        "109:221",
+        "109:226",
+        "109:225",
+        "109:224",
+        "109:223",
+        "109:222",
+        "109:221::container-solid-background",
+        "109:220",
+        "109:219",
+        "109:218",
+        "95:60",
+        "95:59::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH37_Lab_EqualityCaveat_v001",
+        "durationSeconds": 21,
+        "durationFrames": 630,
+        "children": [
+          {
+            "name": "S001_SH37_Lab_EqualityCaveat_v001__LOSS_NonASCIIExample",
+            "durationSeconds": 21,
+            "durationFrames": 630,
+            "children": [],
+            "nodeId": "109:227"
+          },
+          {
+            "name": "S001_SH37_Lab_EqualityCaveat_v001__PROG_ASCIIExample",
+            "durationSeconds": 21,
+            "durationFrames": 630,
+            "children": [],
+            "nodeId": "109:221"
+          }
+        ]
+      }
+    },
+    {
+      "index": 38,
+      "nodeId": "95:62",
+      "configuredName": "S001_SH38_Lab_EditToA",
+      "name": "S001_SH38_Lab_EditToA_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 27,
+      "durationFrames": 810,
+      "nativeCount": 20,
+      "nativeNodeIds": [
+        "109:247",
+        "109:248",
+        "109:247::container-solid-background",
+        "109:242",
+        "109:246",
+        "109:245",
+        "109:244",
+        "109:243",
+        "109:242::container-solid-background",
+        "109:241",
+        "109:237",
+        "109:240",
+        "109:239",
+        "109:238",
+        "109:237::container-solid-background",
+        "109:236",
+        "109:235",
+        "109:234",
+        "95:63",
+        "95:62::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH38_Lab_EditToA_v001",
+        "durationSeconds": 27,
+        "durationFrames": 810,
+        "children": [
+          {
+            "name": "S001_SH38_Lab_EditToA_v001__DATA_StableCode",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "109:247"
+          },
+          {
+            "name": "S001_SH38_Lab_EditToA_v001__PROG_AfterEdit",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "109:242"
+          },
+          {
+            "name": "S001_SH38_Lab_EditToA_v001__LOSS_BeforeEdit",
+            "durationSeconds": 27,
+            "durationFrames": 810,
+            "children": [],
+            "nodeId": "109:237"
+          }
+        ]
+      }
+    },
+    {
+      "index": 39,
+      "nodeId": "95:65",
+      "configuredName": "S001_SH39_Lab_RunAAndRestore",
+      "name": "S001_SH39_Lab_RunAAndRestore_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 28,
+      "durationFrames": 840,
+      "nativeCount": 21,
+      "nativeNodeIds": [
+        "109:263",
+        "109:264",
+        "109:263::container-solid-background",
+        "109:262",
+        "109:260",
+        "109:261",
+        "109:260::container-solid-background",
+        "109:252",
+        "I109:252;97:39",
+        "I109:252;97:38",
+        "I109:252;97:37",
+        "I109:252;97:36",
+        "I109:252;97:35",
+        "I109:252;97:34",
+        "I109:252;97:33",
+        "109:252::container-solid-background",
+        "109:251",
+        "109:250",
+        "109:249",
+        "95:66",
+        "95:65::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH39_Lab_RunAAndRestore_v001",
+        "durationSeconds": 28,
+        "durationFrames": 840,
+        "children": [
+          {
+            "name": "S001_SH39_Lab_RunAAndRestore_v001__PROG_RestoreCat",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [],
+            "nodeId": "109:263"
+          },
+          {
+            "name": "S001_SH39_Lab_RunAAndRestore_v001__DATA_FixedExplanation",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [],
+            "nodeId": "109:260"
+          },
+          {
+            "name": "S001_SH39_Lab_RunAAndRestore_v001__CODE_ATerminal",
+            "durationSeconds": 28,
+            "durationFrames": 840,
+            "children": [],
+            "nodeId": "109:252"
+          }
+        ]
+      }
+    },
+    {
+      "index": 40,
+      "nodeId": "95:68",
+      "configuredName": "S001_SH40_Mistake_65IsMeaning",
+      "name": "S001_SH40_Mistake_65IsMeaning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 13,
+      "nativeNodeIds": [
+        "110:191",
+        "110:192",
+        "110:191::container-solid-background",
+        "110:187",
+        "110:190",
+        "110:189",
+        "110:188",
+        "110:187::container-solid-background",
+        "110:186",
+        "110:185",
+        "110:184",
+        "95:69",
+        "95:68::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH40_Mistake_65IsMeaning_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH40_Mistake_65IsMeaning_v001__PROG_Correction",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "110:191"
+          },
+          {
+            "name": "S001_SH40_Mistake_65IsMeaning_v001__LOSS_IncorrectClaim",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "110:187"
+          }
+        ]
+      }
+    },
+    {
+      "index": 41,
+      "nodeId": "95:71",
+      "configuredName": "S001_SH41_Mistake_AContextWheel",
+      "name": "S001_SH41_Mistake_AContextWheel_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "110:207",
+        "110:206",
+        "110:205",
+        "110:204",
+        "110:203",
+        "110:202",
+        "110:201",
+        "110:200",
+        "110:199",
+        "110:196",
+        "110:198",
+        "110:197",
+        "110:196::container-solid-background",
+        "110:195",
+        "110:194",
+        "110:193",
+        "95:72",
+        "95:71::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH41_Mistake_AContextWheel_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH41_Mistake_AContextWheel_v001__DATA_ContextWheelCenter",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "110:196"
+          }
+        ]
+      }
+    },
+    {
+      "index": 42,
+      "nodeId": "95:74",
+      "configuredName": "S001_SH42_Mistake_MappingSwapTest",
+      "name": "S001_SH42_Mistake_MappingSwapTest_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "110:220",
+        "110:217",
+        "110:219",
+        "110:218",
+        "110:217::container-solid-background",
+        "110:214",
+        "110:216",
+        "110:215",
+        "110:214::container-solid-background",
+        "110:211",
+        "110:213",
+        "110:212",
+        "110:211::container-solid-background",
+        "110:210",
+        "110:209",
+        "110:208",
+        "95:75",
+        "95:74::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH42_Mistake_MappingSwapTest_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH42_Mistake_MappingSwapTest_v001__PROG_MeaningsPersist",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "110:217"
+          },
+          {
+            "name": "S001_SH42_Mistake_MappingSwapTest_v001__LOSS_AlternateMapping",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "110:214"
+          },
+          {
+            "name": "S001_SH42_Mistake_MappingSwapTest_v001__DATA_StandardMapping",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "110:211"
+          }
+        ]
+      }
+    },
+    {
+      "index": 43,
+      "nodeId": "95:77",
+      "configuredName": "S001_SH43_Mistake_EncodingVsLearning",
+      "name": "S001_SH43_Mistake_EncodingVsLearning_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 22,
+      "nativeNodeIds": [
+        "110:237",
+        "110:232",
+        "110:236",
+        "110:235",
+        "110:234",
+        "110:233",
+        "110:232::container-solid-background",
+        "110:229",
+        "110:231",
+        "110:230",
+        "110:229::container-solid-background",
+        "110:224",
+        "110:228",
+        "110:227",
+        "110:226",
+        "110:225",
+        "110:224::container-solid-background",
+        "110:223",
+        "110:222",
+        "110:221",
+        "95:78",
+        "95:77::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH43_Mistake_EncodingVsLearning_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH43_Mistake_EncodingVsLearning_v001__MODEL_LearningLane",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "110:232"
+          },
+          {
+            "name": "S001_SH43_Mistake_EncodingVsLearning_v001__LOSS_MeasuredError",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "110:229"
+          },
+          {
+            "name": "S001_SH43_Mistake_EncodingVsLearning_v001__DATA_EncodingLane",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "110:224"
+          }
+        ]
+      }
+    },
+    {
+      "index": 44,
+      "nodeId": "95:80",
+      "configuredName": "S001_SH44_Recap_Objective",
+      "name": "S001_SH44_Recap_Objective_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 12,
+      "durationFrames": 360,
+      "nativeCount": 7,
+      "nativeNodeIds": [
+        "112:188",
+        "112:187",
+        "112:186",
+        "112:185",
+        "112:184",
+        "95:81",
+        "95:80::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH44_Recap_Objective_v001",
+        "durationSeconds": 12,
+        "durationFrames": 360,
+        "children": []
+      }
+    },
+    {
+      "index": 45,
+      "nodeId": "95:83",
+      "configuredName": "S001_SH45_Recap_FourSteps",
+      "name": "S001_SH45_Recap_FourSteps_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 16,
+      "durationFrames": 480,
+      "nativeCount": 25,
+      "nativeNodeIds": [
+        "112:207",
+        "112:203",
+        "112:206",
+        "112:205",
+        "112:204",
+        "112:203::container-solid-background",
+        "112:199",
+        "112:202",
+        "112:201",
+        "112:200",
+        "112:199::container-solid-background",
+        "112:195",
+        "112:198",
+        "112:197",
+        "112:196",
+        "112:195::container-solid-background",
+        "112:191",
+        "112:194",
+        "112:193",
+        "112:192",
+        "112:191::container-solid-background",
+        "112:190",
+        "112:189",
+        "95:84",
+        "95:83::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH45_Recap_FourSteps_v001",
+        "durationSeconds": 16,
+        "durationFrames": 480,
+        "children": [
+          {
+            "name": "S001_SH45_Recap_FourSteps_v001__MODEL_RecapStep_04",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "112:203"
+          },
+          {
+            "name": "S001_SH45_Recap_FourSteps_v001__TXT_RecapStep_03",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "112:199"
+          },
+          {
+            "name": "S001_SH45_Recap_FourSteps_v001__DATA_RecapStep_02",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "112:195"
+          },
+          {
+            "name": "S001_SH45_Recap_FourSteps_v001__LOSS_RecapStep_01",
+            "durationSeconds": 16,
+            "durationFrames": 480,
+            "children": [],
+            "nodeId": "112:191"
+          }
+        ]
+      }
+    },
+    {
+      "index": 46,
+      "nodeId": "95:86",
+      "configuredName": "S001_SH46_Recap_SelfCheck",
+      "name": "S001_SH46_Recap_SelfCheck_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 14,
+      "durationFrames": 420,
+      "nativeCount": 25,
+      "nativeNodeIds": [
+        "112:225",
+        "112:222",
+        "112:224",
+        "112:223",
+        "112:222::container-solid-background",
+        "112:219",
+        "112:221",
+        "112:220",
+        "112:219::container-solid-background",
+        "112:216",
+        "112:218",
+        "112:217",
+        "112:216::container-solid-background",
+        "112:213",
+        "112:215",
+        "112:214",
+        "112:213::container-solid-background",
+        "112:210",
+        "112:212",
+        "112:211",
+        "112:210::container-solid-background",
+        "112:209",
+        "112:208",
+        "95:87",
+        "95:86::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH46_Recap_SelfCheck_v001",
+        "durationSeconds": 14,
+        "durationFrames": 420,
+        "children": [
+          {
+            "name": "S001_SH46_Recap_SelfCheck_v001__PROG_CheckPrompt_05",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "112:222"
+          },
+          {
+            "name": "S001_SH46_Recap_SelfCheck_v001__PROG_CheckPrompt_04",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "112:219"
+          },
+          {
+            "name": "S001_SH46_Recap_SelfCheck_v001__PROG_CheckPrompt_03",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "112:216"
+          },
+          {
+            "name": "S001_SH46_Recap_SelfCheck_v001__PROG_CheckPrompt_02",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "112:213"
+          },
+          {
+            "name": "S001_SH46_Recap_SelfCheck_v001__PROG_CheckPrompt_01",
+            "durationSeconds": 14,
+            "durationFrames": 420,
+            "children": [],
+            "nodeId": "112:210"
+          }
+        ]
+      }
+    },
+    {
+      "index": 47,
+      "nodeId": "95:89",
+      "configuredName": "S001_SH47_Recap_Exercise",
+      "name": "S001_SH47_Recap_Exercise_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 12,
+      "durationFrames": 360,
+      "nativeCount": 18,
+      "nativeNodeIds": [
+        "112:237",
+        "112:238",
+        "112:237::container-solid-background",
+        "112:234",
+        "112:236",
+        "112:235",
+        "112:234::container-solid-background",
+        "112:229",
+        "112:233",
+        "112:232",
+        "112:231",
+        "112:230",
+        "112:229::container-solid-background",
+        "112:228",
+        "112:227",
+        "112:226",
+        "95:90",
+        "95:89::root-solid-background"
+      ],
+      "rasterCount": 0,
+      "rasterFallbacks": [],
+      "hierarchy": {
+        "name": "S001_SH47_Recap_Exercise_v001",
+        "durationSeconds": 12,
+        "durationFrames": 360,
+        "children": [
+          {
+            "name": "S001_SH47_Recap_Exercise_v001__PROG_Ready",
+            "durationSeconds": 12,
+            "durationFrames": 360,
+            "children": [],
+            "nodeId": "112:237"
+          },
+          {
+            "name": "S001_SH47_Recap_Exercise_v001__PROG_SentenceCompletion",
+            "durationSeconds": 12,
+            "durationFrames": 360,
+            "children": [],
+            "nodeId": "112:234"
+          },
+          {
+            "name": "S001_SH47_Recap_Exercise_v001__DATA_ExerciseLab",
+            "durationSeconds": 12,
+            "durationFrames": 360,
+            "children": [],
+            "nodeId": "112:229"
+          }
+        ]
+      }
+    },
+    {
+      "index": 48,
+      "nodeId": "95:92",
+      "configuredName": "S001_SH48_Recap_NextLesson",
+      "name": "S001_SH48_Recap_NextLesson_v001",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 6,
+      "durationFrames": 180,
+      "nativeCount": 5,
+      "nativeNodeIds": [
+        "112:256",
+        "112:240",
+        "112:239",
+        "95:93",
+        "95:92::root-solid-background"
+      ],
+      "rasterCount": 1,
+      "rasterFallbacks": [
+        {
+          "nodeId": "112:241",
+          "assetHash": "103fc65d4b7628f65c3488c6619571a8185165ca980bb62ad5785b9515ee06e2"
+        }
+      ],
+      "hierarchy": {
+        "name": "S001_SH48_Recap_NextLesson_v001",
+        "durationSeconds": 6,
+        "durationFrames": 180,
+        "children": []
+      }
+    }
+  ],
+  "missingFonts": [
+    "Sora-Bold",
+    "JetBrains Mono-Medium",
+    "Sora-SemiBold"
+  ],
+  "fallbacks": [
+    {
+      "type": "raster-fallback",
+      "nodeId": "99:2",
+      "nodeName": "FX_FocusHalo_Cyan",
+      "property": "fills",
+      "replacement": "png"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "99:3",
+      "nodeName": "FX_FocusHalo_Purple",
+      "property": "fills",
+      "replacement": "png"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "99:11",
+      "nodeName": "LOSS_HumanInterpretationCloud",
+      "property": "children[0].blendMode",
+      "replacement": "png"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "99:30",
+      "nodeName": "DATA_CharacterToNumberRail",
+      "property": "children[3].blendMode",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "100:57",
+      "nodeName": "DATA_MappingArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I100:58;96:14",
+      "nodeName": "DATA_Number",
+      "property": "font",
+      "start": 0,
+      "end": 2,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I100:63;96:55",
+      "nodeName": "CODE_Prompt",
+      "property": "font",
+      "start": 0,
+      "end": 12,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "100:52",
+      "nodeName": "DATA_Character_A",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "100:75",
+      "nodeName": "DATA_CenterMapping",
+      "property": "font",
+      "start": 0,
+      "end": 4,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "100:103",
+      "nodeName": "DATA_CategoryHero",
+      "property": "font",
+      "start": 0,
+      "end": 8,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "100:108",
+      "nodeName": "MODEL_CategoryHero",
+      "property": "font",
+      "start": 0,
+      "end": 10,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:61",
+      "nodeName": "TXT_Character",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "AppleSymbols"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:66",
+      "nodeName": "DATA_IndexRow",
+      "property": "font",
+      "start": 0,
+      "end": 72,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:72",
+      "nodeName": "TXT_Definition",
+      "property": "font",
+      "start": 0,
+      "end": 39,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "102:85",
+      "nodeName": "CODE_OrdFunctionPanel",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:120",
+      "nodeName": "TXT_HandCheck",
+      "property": "font",
+      "start": 0,
+      "end": 41,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "102:102",
+      "nodeName": "DATA_CatCodePointRail",
+      "property": "children[3].blendMode",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:142",
+      "nodeName": "TXT_BitWeights",
+      "property": "font",
+      "start": 0,
+      "end": 62,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:165",
+      "nodeName": "DATA_FlowArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "102:184",
+      "nodeName": "TXT_SeparationArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "102:166",
+      "nodeName": "MODEL_AdjustableParameters",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:116",
+      "nodeName": "TXT_Space_01",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:119",
+      "nodeName": "TXT_Space_02",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:122",
+      "nodeName": "TXT_Space_03",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:148",
+      "nodeName": "PROG_Check",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "104:129",
+      "nodeName": "DATA_HandCheckRail",
+      "property": "children[3].blendMode",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:155",
+      "nodeName": "CODE_Expression",
+      "property": "font",
+      "start": 0,
+      "end": 30,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:156",
+      "nodeName": "TXT_ResultArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:160",
+      "nodeName": "CODE_Expression",
+      "property": "font",
+      "start": 0,
+      "end": 18,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:161",
+      "nodeName": "TXT_ResultArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:165",
+      "nodeName": "CODE_Expression",
+      "property": "font",
+      "start": 0,
+      "end": 29,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:166",
+      "nodeName": "TXT_ResultArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:168",
+      "nodeName": "TXT_OperationCaveat",
+      "property": "font",
+      "start": 0,
+      "end": 49,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I104:188;97:83",
+      "nodeName": "PROG_MarkerLabel_08",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I104:188;97:85",
+      "nodeName": "PROG_MarkerLabel_09",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I104:188;97:87",
+      "nodeName": "PROG_MarkerLabel_10",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:231",
+      "nodeName": "PROG_MarkerLabel_06",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:233",
+      "nodeName": "PROG_MarkerLabel_07",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:235",
+      "nodeName": "PROG_MarkerLabel_08",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:237",
+      "nodeName": "PROG_MarkerLabel_09",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "104:239",
+      "nodeName": "PROG_MarkerLabel_10",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:139",
+      "nodeName": "DATA_PipelineArrow_01",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:144",
+      "nodeName": "DATA_PipelineArrow_02",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:166",
+      "nodeName": "CODE_ReturnLine",
+      "property": "font",
+      "start": 0,
+      "end": 53,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "105:154",
+      "nodeName": "CODE_NormalizeFunction",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:172",
+      "nodeName": "CODE_Source",
+      "property": "font",
+      "start": 0,
+      "end": 40,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:175",
+      "nodeName": "TXT_InputValue",
+      "property": "font",
+      "start": 0,
+      "end": 5,
+      "requested": "Sora-SemiBold",
+      "replacement": "AdobeCleanHanSC-Bold"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:176",
+      "nodeName": "DATA_TransformArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:186",
+      "nodeName": "CODE_SourceValue",
+      "property": "font",
+      "start": 0,
+      "end": 18,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:187",
+      "nodeName": "DATA_TransformArrow_01",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:190",
+      "nodeName": "DATA_NormalizedValue",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:193",
+      "nodeName": "CODE_SourceValue",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:194",
+      "nodeName": "DATA_TransformArrow_02",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:197",
+      "nodeName": "DATA_NormalizedValue",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:200",
+      "nodeName": "CODE_SourceValue",
+      "property": "font",
+      "start": 0,
+      "end": 8,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:201",
+      "nodeName": "DATA_TransformArrow_03",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:204",
+      "nodeName": "DATA_NormalizedValue",
+      "property": "font",
+      "start": 0,
+      "end": 5,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:205",
+      "nodeName": "TXT_Convergence",
+      "property": "font",
+      "start": 0,
+      "end": 51,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:209",
+      "nodeName": "LOSS_OriginalSymbol",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:210",
+      "nodeName": "LOSS_TransformArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "105:212",
+      "nodeName": "LOSS_NFKCWarning",
+      "property": "children[0].blendMode",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:236",
+      "nodeName": "CODE_FieldValue",
+      "property": "font",
+      "start": 0,
+      "end": 10,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:239",
+      "nodeName": "CODE_FieldValue",
+      "property": "font",
+      "start": 0,
+      "end": 15,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:242",
+      "nodeName": "CODE_FieldValue",
+      "property": "font",
+      "start": 0,
+      "end": 9,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "105:222",
+      "nodeName": "CODE_PrepareRecord",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "105:261",
+      "nodeName": "MODEL_Parameters",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:175",
+      "nodeName": "CODE_Statement",
+      "property": "font",
+      "start": 0,
+      "end": 62,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "109:162",
+      "nodeName": "CODE_LabFileOverview",
+      "property": "effects",
+      "replacement": "png"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:194;97:35",
+      "nodeName": "CODE_Command",
+      "property": "font",
+      "start": 0,
+      "end": 38,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:194;97:37",
+      "nodeName": "DATA_Output01",
+      "property": "font",
+      "start": 0,
+      "end": 26,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:194;97:38",
+      "nodeName": "DATA_Output02",
+      "property": "font",
+      "start": 0,
+      "end": 26,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:202",
+      "nodeName": "DATA_HumanOutput",
+      "property": "font",
+      "start": 0,
+      "end": 15,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:203",
+      "nodeName": "MODEL_BoundaryOutput",
+      "property": "font",
+      "start": 0,
+      "end": 53,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:224",
+      "nodeName": "DATA_CodePoint",
+      "property": "font",
+      "start": 0,
+      "end": 16,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:225",
+      "nodeName": "PROG_Bytes",
+      "property": "font",
+      "start": 0,
+      "end": 15,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:230",
+      "nodeName": "DATA_CodePoint",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:231",
+      "nodeName": "LOSS_Bytes",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:239",
+      "nodeName": "CODE_LineNumber",
+      "property": "font",
+      "start": 0,
+      "end": 2,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:241",
+      "nodeName": "DATA_EditArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:245",
+      "nodeName": "CODE_LineNumber",
+      "property": "font",
+      "start": 0,
+      "end": 2,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:252;97:35",
+      "nodeName": "CODE_Command",
+      "property": "font",
+      "start": 0,
+      "end": 38,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:252;97:37",
+      "nodeName": "DATA_Output01",
+      "property": "font",
+      "start": 0,
+      "end": 23,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "I109:252;97:38",
+      "nodeName": "DATA_Output02",
+      "property": "font",
+      "start": 0,
+      "end": 17,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "109:262",
+      "nodeName": "PROG_RestoreArrow",
+      "property": "font",
+      "start": 0,
+      "end": 1,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:198",
+      "nodeName": "DATA_Center65",
+      "property": "font",
+      "start": 0,
+      "end": 4,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:213",
+      "nodeName": "DATA_Mapping",
+      "property": "font",
+      "start": 0,
+      "end": 8,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:216",
+      "nodeName": "LOSS_Mapping",
+      "property": "font",
+      "start": 0,
+      "end": 10,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:226",
+      "nodeName": "DATA_Ord",
+      "property": "font",
+      "start": 0,
+      "end": 15,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:227",
+      "nodeName": "TXT_State",
+      "property": "font",
+      "start": 0,
+      "end": 33,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:231",
+      "nodeName": "LOSS_Value",
+      "property": "font",
+      "start": 0,
+      "end": 4,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:234",
+      "nodeName": "MODEL_Parameter",
+      "property": "font",
+      "start": 0,
+      "end": 2,
+      "requested": "Sora-Bold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:235",
+      "nodeName": "TXT_State",
+      "property": "font",
+      "start": 0,
+      "end": 29,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "110:237",
+      "nodeName": "TXT_Final",
+      "property": "font",
+      "start": 0,
+      "end": 48,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "112:187",
+      "nodeName": "DATA_ObjectiveSupport",
+      "property": "font",
+      "start": 0,
+      "end": 32,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "112:188",
+      "nodeName": "MODEL_ObjectiveSupport",
+      "property": "font",
+      "start": 0,
+      "end": 29,
+      "requested": "Sora-SemiBold",
+      "replacement": "Inter-Regular"
+    },
+    {
+      "type": "font-substitution",
+      "nodeId": "112:232",
+      "nodeName": "DATA_ExerciseOutput",
+      "property": "font",
+      "start": 0,
+      "end": 41,
+      "requested": "JetBrains Mono-Medium",
+      "replacement": "JetBrainsMono-Medium"
+    },
+    {
+      "type": "raster-fallback",
+      "nodeId": "112:241",
+      "nodeName": "PROG_NextLessonEndCard",
+      "property": "effects",
+      "replacement": "png"
+    }
+  ],
+  "warnings": [
+    "Raster fallback on FX_FocusHalo_Cyan: fills",
+    "Raster fallback on FX_FocusHalo_Purple: fills",
+    "Raster fallback on LOSS_HumanInterpretationCloud: children[0].blendMode",
+    "Raster fallback on DATA_CharacterToNumberRail: children[3].blendMode",
+    "Substituted Sora-Bold with Inter-Regular on DATA_MappingArrow",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_Number",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Prompt",
+    "Raster fallback on DATA_Character_A: effects",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_CenterMapping",
+    "Substituted Sora-Bold with Inter-Regular on DATA_CategoryHero",
+    "Substituted Sora-Bold with Inter-Regular on MODEL_CategoryHero",
+    "Substituted Sora-Bold with AppleSymbols on TXT_Character",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_IndexRow",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_Definition",
+    "Raster fallback on CODE_OrdFunctionPanel: effects",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_HandCheck",
+    "Raster fallback on DATA_CatCodePointRail: children[3].blendMode",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_BitWeights",
+    "Substituted Sora-Bold with Inter-Regular on DATA_FlowArrow",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_SeparationArrow",
+    "Raster fallback on MODEL_AdjustableParameters: effects",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_Space_01",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_Space_02",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_Space_03",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_Check",
+    "Raster fallback on DATA_HandCheckRail: children[3].blendMode",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Expression",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_ResultArrow",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Expression",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_ResultArrow",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Expression",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_ResultArrow",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_OperationCaveat",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_08",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_09",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_10",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_06",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_07",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_08",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_09",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_MarkerLabel_10",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_PipelineArrow_01",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_PipelineArrow_02",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_ReturnLine",
+    "Raster fallback on CODE_NormalizeFunction: effects",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Source",
+    "Substituted Sora-SemiBold with AdobeCleanHanSC-Bold on TXT_InputValue",
+    "Substituted Sora-Bold with Inter-Regular on DATA_TransformArrow",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_SourceValue",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_TransformArrow_01",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_NormalizedValue",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_SourceValue",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_TransformArrow_02",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_NormalizedValue",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_SourceValue",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_TransformArrow_03",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_NormalizedValue",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_Convergence",
+    "Substituted Sora-Bold with Inter-Regular on LOSS_OriginalSymbol",
+    "Substituted Sora-Bold with Inter-Regular on LOSS_TransformArrow",
+    "Raster fallback on LOSS_NFKCWarning: children[0].blendMode",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_FieldValue",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_FieldValue",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_FieldValue",
+    "Raster fallback on CODE_PrepareRecord: effects",
+    "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Statement",
+    "Raster fallback on CODE_LabFileOverview: effects",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Command",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_Output01",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_Output02",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_HumanOutput",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on MODEL_BoundaryOutput",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_CodePoint",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on PROG_Bytes",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_CodePoint",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on LOSS_Bytes",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_LineNumber",
+    "Substituted Sora-Bold with Inter-Regular on DATA_EditArrow",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_LineNumber",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on CODE_Command",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_Output01",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_Output02",
+    "Substituted Sora-SemiBold with Inter-Regular on PROG_RestoreArrow",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_Center65",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_Mapping",
+    "Substituted Sora-SemiBold with Inter-Regular on LOSS_Mapping",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_Ord",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_State",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on LOSS_Value",
+    "Substituted Sora-Bold with Inter-Regular on MODEL_Parameter",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on TXT_State",
+    "Substituted Sora-SemiBold with Inter-Regular on TXT_Final",
+    "Substituted Sora-SemiBold with Inter-Regular on DATA_ObjectiveSupport",
+    "Substituted Sora-SemiBold with Inter-Regular on MODEL_ObjectiveSupport",
+    "Substituted JetBrains Mono-Medium with JetBrainsMono-Medium on DATA_ExerciseOutput",
+    "Raster fallback on PROG_NextLessonEndCard: effects"
+  ]
+}

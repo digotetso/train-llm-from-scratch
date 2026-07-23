@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "shotCount": 48,
+  "durationSeconds": 840,
+  "durationFrames": 25200,
+  "nativeCount": 872,
+  "rasterCount": 14,
+  "missingFontCount": 3,
+  "fallbackCount": 97,
+  "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831"
+}

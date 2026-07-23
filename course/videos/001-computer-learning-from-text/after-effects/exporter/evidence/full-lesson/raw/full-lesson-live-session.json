@@ -1,0 +1,64 @@
+{
+  "sessionId": "full-lesson-live-20260723-001",
+  "requestId": "8227d304-2c12-42c7-b774-51efef8ab046",
+  "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+  "status": "COMPLETE",
+  "figma": {
+    "build": {
+      "status": "PACKAGE_READY",
+      "shotCount": 48,
+      "durationSeconds": 840,
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831"
+    },
+    "export": {
+      "sessionId": "full-lesson-live-20260723-001",
+      "requestId": "8227d304-2c12-42c7-b774-51efef8ab046",
+      "method": "POST",
+      "route": "export",
+      "status": 202,
+      "code": "EXPORT_ACCEPTED",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831"
+    },
+    "unchangedResend": {
+      "sessionId": "full-lesson-live-20260723-001",
+      "requestId": "24a12f53-9b9a-4366-bfb0-25dcab1cc31d",
+      "method": "POST",
+      "route": "export",
+      "status": 202,
+      "code": "EXPORT_ACCEPTED",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831"
+    }
+  },
+  "bridge": {
+    "requestId": "8227d304-2c12-42c7-b774-51efef8ab046",
+    "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831"
+  },
+  "afterEffects": {
+    "import": {
+      "status": "IMPORTED",
+      "sessionId": "full-lesson-live-20260723-001",
+      "requestId": "8227d304-2c12-42c7-b774-51efef8ab046",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "createdCompCount": 48,
+      "createdMasterCompName": "VIDEO001_MASTER_v001"
+    },
+    "duplicate": {
+      "status": "DUPLICATE_CONTENT",
+      "sessionId": "full-lesson-live-20260723-001",
+      "requestId": "24a12f53-9b9a-4366-bfb0-25dcab1cc31d",
+      "contentHash": "da8c7f9d1100e3a415034f8c486a128e6f99bbd66c86caecb65101d63130e831",
+      "itemCountBefore": 275,
+      "itemCountAfter": 275,
+      "queueCountBefore": 1,
+      "queueCountAfter": 0,
+      "v002Before": 0,
+      "v002After": 0,
+      "masterV001Count": 1,
+      "shotV001Count": 48
+    },
+    "queueCountAfterImport": 0,
+    "projectPath": "/private/tmp/Video001-Exporter-Full-Lesson.aep",
+    "projectSha256": "3b168de1426b539f43fdcac13a417de17f069fbf1309824d880d2e3f5818f02f"
+  },
+  "operatorNote": "Pairing credentials and authentication secrets were intentionally omitted."
+}

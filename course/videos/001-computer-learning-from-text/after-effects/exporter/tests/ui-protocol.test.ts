@@ -1410,6 +1410,7 @@ function writeSyntheticFullLessonEvidence(root: string) {
     .digest("hex");
   const sessionId = "full-lesson-session-synthetic-001";
   const requestId = "11111111-1111-4111-8111-111111111111";
+  const duplicateRequestId = "22222222-2222-4222-8222-222222222222";
   const packageValue = {
     schemaVersion: "2.0.0",
     exporterVersion: "0.2.0",
@@ -1576,6 +1577,15 @@ function writeSyntheticFullLessonEvidence(root: string) {
         status: 202,
         code: "EXPORT_ACCEPTED",
         contentHash: hash
+      },
+      unchangedResend: {
+        sessionId,
+        requestId: duplicateRequestId,
+        method: "POST",
+        route: "export",
+        status: 202,
+        code: "EXPORT_ACCEPTED",
+        contentHash: hash
       }
     },
     bridge: {
@@ -1591,11 +1601,25 @@ function writeSyntheticFullLessonEvidence(root: string) {
         createdCompCount: 48,
         createdMasterCompName: "VIDEO001_MASTER_v001"
       },
+      duplicate: {
+        status: "DUPLICATE_CONTENT",
+        sessionId,
+        requestId: duplicateRequestId,
+        contentHash: hash,
+        itemCountBefore: 275,
+        itemCountAfter: 275,
+        queueCountBefore: 1,
+        queueCountAfter: 0,
+        v002Before: 0,
+        v002After: 0,
+        masterV001Count: 1,
+        shotV001Count: 48
+      },
       queueCountAfterImport: 0,
       projectPath: "/private/tmp/Video001-Exporter-Full-Lesson.aep"
     }
   }, null, 2) + "\n", "utf8");
-  writeFileSync(paths.bridge, JSON.stringify({
+  const acceptedEvent = {
     timestamp: "2026-07-23T00:00:00.000Z",
     event: "export_accepted",
     requestId,
@@ -1606,8 +1630,25 @@ function writeSyntheticFullLessonEvidence(root: string) {
     remoteFamily: "IPv4",
     authenticated: true,
     contentHash: hash
-  }) + "\n", "utf8");
-  return { timing, packageValue, audit, paths, rasterHash, sessionId, requestId };
+  };
+  writeFileSync(paths.bridge, [
+    acceptedEvent,
+    {
+      ...acceptedEvent,
+      timestamp: "2026-07-23T00:01:00.000Z",
+      requestId: duplicateRequestId
+    }
+  ].map((event) => JSON.stringify(event)).join("\n") + "\n", "utf8");
+  return {
+    timing,
+    packageValue,
+    audit,
+    paths,
+    rasterHash,
+    sessionId,
+    requestId,
+    duplicateRequestId
+  };
 }
 
 function runFullLessonEvidence(root: string, mode: "--write" | "--verify") {
@@ -1662,6 +1703,24 @@ function restampAndRetieSyntheticEvidence(
     "utf8"
   );
   return hash;
+}
+
+function readSyntheticBridgeEvents(filePath: string): Record<string, unknown>[] {
+  return readFileSync(filePath, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+}
+
+function writeSyntheticBridgeEvents(
+  filePath: string,
+  events: Record<string, unknown>[]
+): void {
+  writeFileSync(
+    filePath,
+    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    "utf8"
+  );
 }
 
 test("full-lesson evidence is independently derived and deterministic from synthetic raw proof", () => {
@@ -1827,39 +1886,39 @@ for (const [label, mutate, expected] of [
     writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /session|complete/i],
   ["the wrong export route", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.route = "pair";
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.route = "pair";
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /route|export/i],
   ["the wrong export method", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.method = "GET";
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.method = "GET";
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /method|POST|export/i],
   ["the wrong accepted export status", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.status = 200;
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.status = 200;
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /status|202|accepted/i],
   ["a non-loopback bridge host", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.remoteAddress = "0.0.0.0";
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.remoteAddress = "0.0.0.0";
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /127\.0\.0\.1|loopback|host/i],
   ["a non-IPv4 bridge family", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.remoteFamily = "IPv6";
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.remoteFamily = "IPv6";
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /IPv4|loopback/i],
   ["an unauthenticated bridge export", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.authenticated = false;
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.authenticated = false;
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /authenticated|authentication/i],
   ["a mismatched bridge session identity", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
-    const value = JSON.parse(readFileSync(fixture.paths.bridge, "utf8"));
-    value.requestId = "different-request";
-    writeFileSync(fixture.paths.bridge, JSON.stringify(value) + "\n", "utf8");
+    const values = readSyntheticBridgeEvents(fixture.paths.bridge);
+    values[0]!.requestId = "different-request";
+    writeSyntheticBridgeEvents(fixture.paths.bridge, values);
   }, /request|identity/i],
   ["a failed After Effects import", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
@@ -1876,6 +1935,11 @@ for (const [label, mutate, expected] of [
     value.afterEffects.queueCountAfterImport = 1;
     writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
   }, /queue|drained/i],
+  ["a duplicate resend that creates a new project item", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
+    const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
+    value.afterEffects.duplicate.itemCountAfter += 1;
+    writeFileSync(fixture.paths.session, JSON.stringify(value, null, 2) + "\n", "utf8");
+  }, /duplicate|item count|unchanged/i],
   ["a non-disposable project path", (fixture: ReturnType<typeof writeSyntheticFullLessonEvidence>) => {
     const value = JSON.parse(readFileSync(fixture.paths.session, "utf8"));
     value.afterEffects.projectPath = "/private/tmp/Some-Other-Project.aep";
