@@ -137,7 +137,7 @@ These character numbers are not token IDs or embeddings. We have proved an early
 
 Here is the whole route in ordinary language. Training text is divided into reusable pieces. Each piece receives an identifier that selects a learned number list. Model calculations use those lists to make an answer. The answer is compared with the known target to measure error. A closed update method uses that information to change adjustable parameters, and the process repeats across examples.
 
-The exact path we earned today is: written character -> stable code point -> stored UTF-8 bytes -> prepared numerical data. The later boxes now have a valid input dependency, but their mechanisms remain closed.
+Two fixed-rule paths matter. Source text becomes normalized, prepared text in `prepare.py`; it does not become model-ready numerical input. Separately, characters get Unicode code points that identify them, and UTF-8 represents them as bytes for storage or transmission. Neither path produces token IDs or embeddings. The later boxes remain closed.
 
 Keep the dividing line: Representation changes the form of the data. Learning changes adjustable model parameters using examples and measured error.
 
