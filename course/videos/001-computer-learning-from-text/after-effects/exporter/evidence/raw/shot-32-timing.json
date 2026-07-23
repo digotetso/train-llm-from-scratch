@@ -9,6 +9,7 @@
     "width": 1920,
     "height": 1080,
     "fps": 30,
+    "timeUnit": "seconds",
     "duration": 840
   },
   "palette": {

@@ -1,7 +1,7 @@
 {
-  "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
+  "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
   "createdCompNames": [
-    "S001_SH32_Repo_PreparationNotLearning_v001"
+    "S001_SH32_Repo_PreparationNotLearning_v002"
   ],
   "layerCount": 30,
   "nativeCount": 30,
@@ -24,5 +24,5 @@
   "warnings": [
     "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
   ],
-  "elapsedMs": 3231
+  "elapsedMs": 8052
 }

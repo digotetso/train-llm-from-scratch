@@ -1,1 +1,28 @@
-{"status":"COMPLETE","payload":{"contentHash":"63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb","duplicateStatus":"DUPLICATE_CONTENT","itemCountAfterFirst":10,"itemCountAfterDuplicate":10,"compNames":["S001_SH32_Repo_PreparationNotLearning_v001"],"projectName":"Video001-Exporter-Shot32-Live.aep"}}
+{
+  "status": "COMPLETE",
+  "payload": {
+    "schemaVersion": "2.0.0",
+    "timeUnit": "seconds",
+    "originalContentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
+    "changedContentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
+    "duplicateStatus": "DUPLICATE_CONTENT",
+    "itemCountAfterFirst": 10,
+    "itemCountAfterDuplicate": 10,
+    "compNames": [
+      "S001_SH32_Repo_PreparationNotLearning_v001",
+      "S001_SH32_Repo_PreparationNotLearning_v002"
+    ],
+    "durations": {
+      "v001": {
+        "seconds": 28,
+        "frames": 840
+      },
+      "v002": {
+        "seconds": 28,
+        "frames": 840
+      }
+    },
+    "projectName": "Video001-Exporter-Shot32-Seconds.aep",
+    "projectSha256": "170e98a0b0a7e215e7a93aa8dbe3ec30b290409df22650deb82fa8b926f25b09"
+  }
+}

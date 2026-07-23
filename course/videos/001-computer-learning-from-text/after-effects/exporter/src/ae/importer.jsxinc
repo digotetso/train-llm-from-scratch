@@ -331,8 +331,14 @@ var Video001ExporterImporter = (function (core) {
         var index;
         var shot;
 
-        if (canvas.width !== 1920 || canvas.height !== 1080 || canvas.fps !== 30 || canvas.duration !== 840) {
-            throw new Error("Video 001 timing must remain exactly 1920x1080, 30 fps, and 840 frames");
+        if (
+            canvas.width !== 1920 ||
+            canvas.height !== 1080 ||
+            canvas.fps !== 30 ||
+            canvas.timeUnit !== "seconds" ||
+            canvas.duration !== 840
+        ) {
+            throw new Error("Video 001 timing must remain exactly 1920x1080, 30 fps, and 840 seconds");
         }
         requireString(source.figmaFileKey, "Video 001 Figma file key", false);
         requireString(source.figmaPageNodeId, "Video 001 Figma page ID", false);
@@ -472,12 +478,21 @@ var Video001ExporterImporter = (function (core) {
         var index;
         var childIndex;
 
-        if (packageObject.schemaVersion !== "1.0.0") {
-            throw new Error("Exporter package schema must be exactly 1.0.0");
+        if (packageObject.schemaVersion !== "2.0.0") {
+            throw new Error(
+                "Exporter package schema " +
+                String(packageObject.schemaVersion) +
+                " is unsupported; this exporter requires 2.0.0"
+            );
         }
         requireHash(packageObject.contentHash, "Exporter package contentHash");
-        if (target.width !== 1920 || target.height !== 1080 || target.fps !== 30) {
-            throw new Error("Exporter package target must be exactly 1920x1080 at 30 fps");
+        if (
+            target.width !== 1920 ||
+            target.height !== 1080 ||
+            target.fps !== 30 ||
+            target.timeUnit !== "seconds"
+        ) {
+            throw new Error("Exporter package target must be exactly 1920x1080 at 30 fps with durations in seconds");
         }
         if (
             source.fileKey !== timing.source.figmaFileKey ||
@@ -513,8 +528,13 @@ var Video001ExporterImporter = (function (core) {
             requirePositiveNumber(frame.width, "Exporter package frame width");
             requirePositiveNumber(frame.height, "Exporter package frame height");
             requirePositiveNumber(frame.duration, "Exporter package frame duration");
-            if (Math.floor(frame.duration) !== frame.duration) {
-                throw new Error("Exporter package frame duration must be a whole frame count");
+            if (
+                Math.abs(
+                    frame.duration * target.fps -
+                    Math.round(frame.duration * target.fps)
+                ) > 0.000000001
+            ) {
+                throw new Error("Exporter package frame duration in seconds must align to a whole frame");
             }
             expectedShot = timing.shotsByNodeId[frame.nodeId];
             if (
@@ -949,7 +969,7 @@ var Video001ExporterImporter = (function (core) {
                 context.target.width,
                 context.target.height,
                 1,
-                context.frame.duration / context.target.fps,
+                context.frame.duration,
                 context.target.fps
             )
         );
@@ -1008,7 +1028,7 @@ var Video001ExporterImporter = (function (core) {
                 target.width,
                 target.height,
                 1,
-                frame.duration / target.fps,
+                frame.duration,
                 target.fps
             )
         );

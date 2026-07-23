@@ -416,7 +416,7 @@ function startRuntime(): void {
     render: (view) => {
       selection.replaceChildren(...view.frames.map((frame) => {
         const item = document.createElement("li");
-        item.textContent = `${frame.name} · ${frame.duration} frames`;
+        item.textContent = `${frame.name} · ${frame.duration} seconds`;
         return item;
       }));
       warnings.replaceChildren(...view.warnings.map((warning) => {

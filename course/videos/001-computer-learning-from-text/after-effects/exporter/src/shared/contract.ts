@@ -86,12 +86,12 @@ export interface PackageByteCounts {
 }
 
 export interface ExporterPackage {
-  schemaVersion: "1.0.0";
+  schemaVersion: "2.0.0";
   exporterVersion: string;
   exportedAt: string;
   contentHash: string;
   source: { fileKey: string; pageId: string };
-  target: { width: number; height: number; fps: number };
+  target: { width: number; height: number; fps: number; timeUnit: "seconds" };
   frames: ExportFrame[];
   assets: AssetDescriptor[];
 }
@@ -459,13 +459,24 @@ function validatePackageInternal(
 
   const schemaVersion = stringAt(record.schemaVersion, "$.schemaVersion");
   const schemaMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(schemaVersion);
-  if (schemaMatch?.[1] !== "1") invalid("$.schemaVersion", `unsupported schema major in ${JSON.stringify(schemaVersion)}`);
-  if (schemaVersion !== "1.0.0") invalid("$.schemaVersion", `unsupported schema version ${JSON.stringify(schemaVersion)}`);
+  if (schemaMatch?.[1] !== "2") {
+    invalid(
+      "$.schemaVersion",
+      `unsupported schema major in ${JSON.stringify(schemaVersion)}; exporter requires "2.0.0"`
+    );
+  }
+  if (schemaVersion !== "2.0.0") {
+    invalid(
+      "$.schemaVersion",
+      `unsupported schema version ${JSON.stringify(schemaVersion)}; exporter requires "2.0.0"`
+    );
+  }
 
   const source = recordAt(record.source, "$.source");
   exactKeys(source, ["fileKey", "pageId"], "$.source");
   const target = recordAt(record.target, "$.target");
-  exactKeys(target, ["width", "height", "fps"], "$.target");
+  exactKeys(target, ["width", "height", "fps", "timeUnit"], "$.target");
+  if (target.timeUnit !== "seconds") invalid("$.target.timeUnit", "expected \"seconds\"");
 
   const frameValues = arrayAt(record.frames, "$.frames");
   if (frameValues.length === 0) invalid("$.frames", "expected at least one frame");
@@ -502,7 +513,7 @@ function validatePackageInternal(
   }
 
   const result: ExporterPackage = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     exporterVersion: stringAt(record.exporterVersion, "$.exporterVersion"),
     exportedAt: isoTimestampAt(record.exportedAt, "$.exportedAt"),
     contentHash: hashAt(record.contentHash, "$.contentHash", allowEmptyContentHash),
@@ -513,11 +524,24 @@ function validatePackageInternal(
     target: {
       width: positiveNumberAt(target.width, "$.target.width"),
       height: positiveNumberAt(target.height, "$.target.height"),
-      fps: positiveNumberAt(target.fps, "$.target.fps")
+      fps: positiveNumberAt(target.fps, "$.target.fps"),
+      timeUnit: "seconds"
     },
     frames,
     assets
   };
+
+  for (let index = 0; index < result.frames.length; index += 1) {
+    const frame = result.frames[index]!;
+    const frameCount = frame.duration * result.target.fps;
+    const nearestFrame = Math.round(frameCount);
+    if (!Number.isSafeInteger(nearestFrame) || Math.abs(frameCount - nearestFrame) > 1e-9) {
+      invalid(
+        `$.frames[${index}].duration`,
+        "frame duration in seconds must align to a whole frame at the target fps"
+      );
+    }
+  }
 
   if (verifiedAssets === undefined) {
     const manifestWithoutAssetData: ExporterPackage = {

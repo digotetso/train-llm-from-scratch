@@ -109,12 +109,16 @@ export function validateVideo001Scenes(value) {
   const target = {
     width: positiveNumber(canvas.width, "$timing.canvas.width"),
     height: positiveNumber(canvas.height, "$timing.canvas.height"),
-    fps: positiveNumber(canvas.fps, "$timing.canvas.fps")
+    fps: positiveNumber(canvas.fps, "$timing.canvas.fps"),
+    timeUnit: canvas.timeUnit
   };
+  if (target.timeUnit !== "seconds") {
+    throw new TypeError('$timing.canvas.timeUnit must be exactly "seconds"');
+  }
   if (target.width !== 1920 || target.height !== 1080 || target.fps !== 30) {
     throw new TypeError("Timing source target must be exactly 1920×1080 at 30 fps");
   }
-  if (canvas.duration !== 840) throw new TypeError("Timing source canvas duration must be exactly 840 frames");
+  if (canvas.duration !== 840) throw new TypeError("Timing source canvas duration must be exactly 840 seconds");
   if (!Array.isArray(root.sections) || root.sections.length !== EXPECTED_SECTIONS.length) {
     throw new TypeError(`Timing source must contain exactly ${EXPECTED_SECTIONS.length} approved sections`);
   }
@@ -156,7 +160,11 @@ export function validateVideo001Scenes(value) {
     }
     names.add(name);
     const duration = positiveNumber(shot.duration, `$timing.shots[${position}].duration`);
-    if (!Number.isSafeInteger(duration)) throw new TypeError(`$timing.shots[${position}].duration must be whole frames`);
+    const frameCount = duration * target.fps;
+    const nearestFrame = Math.round(frameCount);
+    if (!Number.isSafeInteger(nearestFrame) || Math.abs(frameCount - nearestFrame) > 1e-9) {
+      throw new TypeError(`$timing.shots[${position}].duration seconds must align to a whole frame at 30 fps`);
+    }
     if (shot.start !== expectedStart) {
       throw new TypeError(`$timing.shots[${position}].start must preserve continuous deterministic timing`);
     }
@@ -172,7 +180,7 @@ export function validateVideo001Scenes(value) {
       sectionName: section.sectionName
     };
   });
-  if (expectedStart !== 840) throw new TypeError("Shot durations must fill the exact 840-frame canvas");
+  if (expectedStart !== 840) throw new TypeError("Shot durations must fill the exact 840-second canvas");
   const shot32 = shots[31];
   if (
     shot32?.nodeId !== "95:44" ||

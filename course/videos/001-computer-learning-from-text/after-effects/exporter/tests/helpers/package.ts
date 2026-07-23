@@ -1,12 +1,12 @@
 import type { ExporterPackage } from "../../src/shared/contract.ts";
 
 const valid: ExporterPackage = {
-  schemaVersion: "1.0.0",
+  schemaVersion: "2.0.0",
   exporterVersion: "0.1.0",
   exportedAt: "2026-07-22T00:00:00.000Z",
   contentHash: "a".repeat(64),
   source: { fileKey: "fFTux3sx2AzVQtoya67f95", pageId: "90:2" },
-  target: { width: 1920, height: 1080, fps: 30 },
+  target: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds" },
   frames: [{
     nodeId: "95:44",
     name: "S001_SH32_Repo_PreparationNotLearning",

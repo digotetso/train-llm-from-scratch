@@ -153,7 +153,8 @@
             width: ownerComp.width,
             height: ownerComp.height,
             fps: ownerComp.frameRate,
-            duration: Math.round(ownerComp.duration * ownerComp.frameRate),
+            durationSeconds: ownerComp.duration,
+            durationFrames: Math.round(ownerComp.duration * ownerComp.frameRate),
             children: []
         };
         var layer;
@@ -219,8 +220,8 @@
             width: comp.width,
             height: comp.height,
             fps: comp.frameRate,
-            duration: Math.round(comp.duration * comp.frameRate),
-            durationSeconds: comp.duration
+            durationSeconds: comp.duration,
+            durationFrames: Math.round(comp.duration * comp.frameRate)
         },
         layers: [],
         precompHierarchy: null,

@@ -49,7 +49,7 @@ export type UiToController =
 
 export interface EmbeddedVideo001Config {
   source: { fileKey: string; pageId: string };
-  target: { width: number; height: number; fps: number };
+  target: { width: number; height: number; fps: number; timeUnit: "seconds" };
   shots: Array<{
     index: number;
     nodeId: string;
@@ -629,7 +629,7 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     }));
     const page = host.getCurrentPage();
     const value: ExporterPackage = {
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       exporterVersion: EXPORTER_VERSION,
       exportedAt: host.now().toISOString(),
       contentHash: "",

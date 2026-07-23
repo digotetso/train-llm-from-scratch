@@ -1,24 +1,25 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "exporterVersion": "0.1.0",
   "source": {
     "fileKey": "fFTux3sx2AzVQtoya67f95",
     "pageId": "90:2"
   },
   "target": {
-    "width": 1920,
+    "fps": 30,
     "height": 1080,
-    "fps": 30
+    "timeUnit": "seconds",
+    "width": 1920
   },
-  "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
-  "packageSha256": "1eeedd4d25b3798099d2d00cf49ef67a4039ba4302c388be4db34704b48d92a0",
-  "timingSha256": "eb9e0786bcc53fb99ae055ac64be2eae73e5941e83f7ab83a28a19841a35d0a6",
+  "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
+  "packageSha256": "9da0f678c7a6c2cff5e6cca1cc9269e89d50cfa14f637e9fb0cd5a71bcd2369f",
+  "timingSha256": "4f649953f632585e531fba318caba75dd5232414f61e25b37cec76a2c1a1eb87",
   "frame": {
     "nodeId": "95:44",
     "name": "S001_SH32_Repo_PreparationNotLearning",
     "width": 1920,
     "height": 1080,
-    "duration": 28,
+    "durationSeconds": 28,
     "rootNodeCount": 10,
     "nativeNodeCount": 30,
     "rasterNodeCount": 0,
@@ -77,22 +78,22 @@
         "opacity": 1,
         "text": "PREPARATION STOPS BEFORE LEARNING",
         "textBox": {
-          "width": 1500,
-          "height": 28
+          "height": 28,
+          "width": 1500
         },
         "paragraph": {
           "align": "LEFT",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#35C7FF",
             "end": 33,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#35C7FF"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -112,22 +113,22 @@
         "opacity": 1,
         "text": "The stored record crosses a separate boundary before model updates.",
         "textBox": {
-          "width": 1660,
-          "height": 152
+          "height": 152,
+          "width": 1660
         },
         "paragraph": {
           "align": "LEFT",
-          "lineHeightPx": 76,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 76
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F5F7FB",
             "end": 67,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 64,
-            "color": "#F5F7FB"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -147,22 +148,22 @@
         "opacity": 1,
         "text": "Python length can differ from the number of visible symbols.",
         "textBox": {
-          "width": 1600,
-          "height": 38
+          "height": 38,
+          "width": 1600
         },
         "paragraph": {
           "align": "LEFT",
-          "lineHeightPx": 38,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 38
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#A8B3CF",
             "end": 60,
             "fontFamily": "Inter",
-            "fontStyle": "Regular",
             "fontSize": 28,
-            "color": "#A8B3CF"
+            "fontStyle": "Regular",
+            "start": 0
           }
         ]
       },
@@ -218,22 +219,22 @@
         "opacity": 1,
         "text": "DATA PREPARATION",
         "textBox": {
-          "width": 964,
-          "height": 28
+          "height": 28,
+          "width": 964
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#35C7FF",
             "end": 16,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#35C7FF"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -292,22 +293,22 @@
         "opacity": 1,
         "text": "SOURCE",
         "textBox": {
-          "width": 230,
-          "height": 28
+          "height": 28,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#35C7FF",
             "end": 6,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#35C7FF"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -329,22 +330,22 @@
         "opacity": 1,
         "text": "text",
         "textBox": {
-          "width": 230,
-          "height": 38
+          "height": 38,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 38,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 38
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F5F7FB",
             "end": 4,
             "fontFamily": "Inter",
-            "fontStyle": "Regular",
             "fontSize": 28,
-            "color": "#F5F7FB"
+            "fontStyle": "Regular",
+            "start": 0
           }
         ]
       },
@@ -403,22 +404,22 @@
         "opacity": 1,
         "text": "NORMALIZE",
         "textBox": {
-          "width": 230,
-          "height": 28
+          "height": 28,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#35C7FF",
             "end": 9,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#35C7FF"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -440,22 +441,22 @@
         "opacity": 1,
         "text": "policy",
         "textBox": {
-          "width": 230,
-          "height": 38
+          "height": 38,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 38,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 38
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F5F7FB",
             "end": 6,
             "fontFamily": "Inter",
-            "fontStyle": "Regular",
             "fontSize": 28,
-            "color": "#F5F7FB"
+            "fontStyle": "Regular",
+            "start": 0
           }
         ]
       },
@@ -514,22 +515,22 @@
         "opacity": 1,
         "text": "RECORD",
         "textBox": {
-          "width": 230,
-          "height": 28
+          "height": 28,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#35C7FF",
             "end": 6,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#35C7FF"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -551,22 +552,22 @@
         "opacity": 1,
         "text": "text + len",
         "textBox": {
-          "width": 230,
-          "height": 38
+          "height": 38,
+          "width": 230
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 38,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 38
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F5F7FB",
             "end": 10,
             "fontFamily": "Inter",
-            "fontStyle": "Regular",
             "fontSize": 28,
-            "color": "#F5F7FB"
+            "fontStyle": "Regular",
+            "start": 0
           }
         ]
       },
@@ -604,22 +605,22 @@
         "opacity": 1,
         "text": "LEARNING\nBOUNDARY",
         "textBox": {
-          "width": 180,
-          "height": 56
+          "height": 56,
+          "width": 180
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F59E0B",
             "end": 17,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#F59E0B"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -675,22 +676,22 @@
         "opacity": 1,
         "text": "MODEL",
         "textBox": {
-          "width": 380,
-          "height": 28
+          "height": 28,
+          "width": 380
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#8B5CF6",
             "end": 5,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#8B5CF6"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       },
@@ -711,22 +712,22 @@
         "opacity": 1,
         "text": "θ",
         "textBox": {
-          "width": 380,
-          "height": 112
+          "height": 112,
+          "width": 380
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 112,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 112
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#8B5CF6",
             "end": 1,
             "fontFamily": "Sora",
-            "fontStyle": "Bold",
             "fontSize": 104,
-            "color": "#8B5CF6"
+            "fontStyle": "Bold",
+            "start": 0
           }
         ]
       },
@@ -747,22 +748,22 @@
         "opacity": 1,
         "text": "not updated\nby preparation",
         "textBox": {
-          "width": 380,
-          "height": 88
+          "height": 88,
+          "width": 380
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 44,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 44
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#A8B3CF",
             "end": 26,
             "fontFamily": "Inter",
-            "fontStyle": "Medium",
             "fontSize": 32,
-            "color": "#A8B3CF"
+            "fontStyle": "Medium",
+            "start": 0
           }
         ]
       },
@@ -818,22 +819,22 @@
         "opacity": 1,
         "text": "PYTHON len() REPORTS STRING LENGTH · NOT ALWAYS VISIBLE-SYMBOL COUNT",
         "textBox": {
-          "width": 1248,
-          "height": 28
+          "height": 28,
+          "width": 1248
         },
         "paragraph": {
           "align": "CENTER",
-          "lineHeightPx": 28,
-          "letterSpacingPx": 0
+          "letterSpacingPx": 0,
+          "lineHeightPx": 28
         },
         "runs": [
           {
-            "start": 0,
+            "color": "#F59E0B",
             "end": 68,
             "fontFamily": "Sora",
-            "fontStyle": "SemiBold",
             "fontSize": 22,
-            "color": "#F59E0B"
+            "fontStyle": "SemiBold",
+            "start": 0
           }
         ]
       }

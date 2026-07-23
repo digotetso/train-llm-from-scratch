@@ -15,11 +15,15 @@ const comparisonPath = path.join(evidenceDir, "shot-32-comparison.json");
 const manifestPath = path.join(rawDir, "shot-32-evidence-manifest.json");
 
 const packagePath = path.join(rawDir, "shot-32-package.video001-ae.json");
+const changedPackagePath = path.join(rawDir, "shot-32-changed-package.video001-ae.json");
 const resultPath = path.join(rawDir, "shot-32-final-result.json");
 const beforePath = path.join(rawDir, "shot-32-v001-before.json");
 const afterPath = path.join(rawDir, "shot-32-v001-after.json");
+const v002Path = path.join(rawDir, "shot-32-v002.json");
 const timingPath = path.join(rawDir, "shot-32-timing.json");
 const metricsPath = path.join(rawDir, "shot-32-image-metrics.json");
+const liveImportReportPath = path.join(rawDir, "shot-32-live-import-report.json");
+const liveV002ImportReportPath = path.join(rawDir, "shot-32-live-v002-import-report.json");
 const figmaPath = path.join(evidenceDir, "shot-32-figma.png");
 const aePath = path.join(evidenceDir, "shot-32-ae.png");
 
@@ -110,29 +114,120 @@ function sourceRectFitsBox(check) {
     rect.top + rect.height <= boxTop + boxHeight + tolerance;
 }
 
+function hierarchyUsesDuration(hierarchy, durationSeconds, durationFrames) {
+  return hierarchy.durationSeconds === durationSeconds &&
+    hierarchy.durationFrames === durationFrames &&
+    hierarchy.duration === undefined &&
+    hierarchy.children.every((child) =>
+      child.warning === "cyclic precomp reference" ||
+      hierarchyUsesDuration(child, durationSeconds, durationFrames)
+    );
+}
+
+function findNode(nodes, nodeId) {
+  for (const node of nodes) {
+    if (node.id === nodeId) return node;
+    const child = findNode(node.children ?? [], nodeId);
+    if (child) return child;
+  }
+  return null;
+}
+
+function contentHashFor(packageValue) {
+  const fingerprintValue = { ...packageValue, exportedAt: "", contentHash: "" };
+  return sha256Bytes(Buffer.from(canonicalJson(fingerprintValue), "utf8"));
+}
+
 function derive() {
   const packageValue = readJson(packagePath);
+  const changedPackage = readJson(changedPackagePath);
   const result = readJson(resultPath);
   const before = readJson(beforePath);
   const after = readJson(afterPath);
+  const v002 = readJson(v002Path);
   const timing = readJson(timingPath);
   const metrics = readJson(metricsPath);
+  const liveImportReport = readJson(liveImportReportPath);
+  const liveV002ImportReport = readJson(liveV002ImportReportPath);
   const payload = result.payload;
   const frame = packageValue.frames[0];
   const timingShot = timing.shots.find((shot) => shot.figmaNodeId === frame.nodeId);
   const nodes = flattenNodes(frame.children);
   const nativeCount = nodes.filter((node) => node.kind !== "raster").length;
   const rasterCount = nodes.filter((node) => node.kind === "raster").length;
-  const fingerprintValue = { ...packageValue, exportedAt: "", contentHash: "" };
-  const contentHash = sha256Bytes(Buffer.from(canonicalJson(fingerprintValue), "utf8"));
+  const contentHash = contentHashFor(packageValue);
   if (contentHash !== packageValue.contentHash) throw new Error("raw package contentHash is not canonical");
+  const changedContentHash = contentHashFor(changedPackage);
+  if (changedContentHash !== changedPackage.contentHash) {
+    throw new Error("raw changed package contentHash is not canonical");
+  }
+  if (packageValue.schemaVersion !== "2.0.0") {
+    throw new Error("raw package must use exporter schema 2.0.0");
+  }
+  if (changedPackage.schemaVersion !== packageValue.schemaVersion) {
+    throw new Error("raw changed package schema does not match the original package");
+  }
   if (result.status !== "COMPLETE") throw new Error("raw final wrapper result is not COMPLETE");
   if (readFileSync(resultPath, "utf8").includes("/Users/")) throw new Error("raw result contains a mutable user path");
   if (timing.source.figmaFileKey !== packageValue.source.fileKey || timing.source.figmaPageNodeId !== packageValue.source.pageId) {
     throw new Error("raw timing source does not match the package source");
   }
+  if (timing.canvas.timeUnit !== "seconds" || packageValue.target.timeUnit !== "seconds") {
+    throw new Error('raw timing and package target must declare timeUnit "seconds"');
+  }
   if (!timingShot || timingShot.name !== frame.name || timingShot.duration !== frame.duration) {
     throw new Error("raw timing does not approve the exported frame");
+  }
+  const expectedDurationFrames = frame.duration * packageValue.target.fps;
+  if (
+    before.comp.durationSeconds !== frame.duration ||
+    before.comp.durationFrames !== expectedDurationFrames ||
+    before.comp.duration !== undefined ||
+    !hierarchyUsesDuration(before.precompHierarchy, frame.duration, expectedDurationFrames)
+  ) {
+    throw new Error("raw v001-before audit does not preserve explicit second/frame durations");
+  }
+  if (
+    after.comp.durationSeconds !== frame.duration ||
+    after.comp.durationFrames !== expectedDurationFrames ||
+    after.comp.duration !== undefined ||
+    !hierarchyUsesDuration(after.precompHierarchy, frame.duration, expectedDurationFrames)
+  ) {
+    throw new Error("raw After Effects audit does not preserve explicit second/frame durations");
+  }
+  if (
+    v002.comp.name !== "S001_SH32_Repo_PreparationNotLearning_v002" ||
+    v002.comp.durationSeconds !== frame.duration ||
+    v002.comp.durationFrames !== expectedDurationFrames ||
+    v002.comp.duration !== undefined ||
+    v002.contentHash !== changedContentHash ||
+    !hierarchyUsesDuration(v002.precompHierarchy, frame.duration, expectedDurationFrames)
+  ) {
+    throw new Error("raw v002 audit does not preserve the changed hash and explicit durations");
+  }
+
+  const expectedChangedPackage = JSON.parse(JSON.stringify(packageValue));
+  const expectedChangedBackground = findNode(expectedChangedPackage.frames[0].children, "95:45");
+  if (
+    !expectedChangedBackground ||
+    expectedChangedBackground.name !== "BG_Base" ||
+    expectedChangedBackground.kind !== "rect" ||
+    expectedChangedBackground.opacity !== 1
+  ) {
+    throw new Error("raw original package lacks the expected BG_Base opacity source");
+  }
+  expectedChangedBackground.opacity = 0.999999;
+  expectedChangedPackage.contentHash = contentHashFor(expectedChangedPackage);
+  if (canonicalJson(expectedChangedPackage) !== canonicalJson(changedPackage)) {
+    throw new Error("raw changed package contains a delta other than BG_Base opacity and contentHash");
+  }
+  if (
+    liveImportReport.contentHash !== contentHash ||
+    liveImportReport.createdCompNames?.[0] !== "S001_SH32_Repo_PreparationNotLearning_v001" ||
+    liveV002ImportReport.contentHash !== changedContentHash ||
+    liveV002ImportReport.createdCompNames?.[0] !== "S001_SH32_Repo_PreparationNotLearning_v002"
+  ) {
+    throw new Error("raw live AE import reports do not match v001 and v002");
   }
 
   const expected = {
@@ -163,7 +258,7 @@ function derive() {
       name: frame.name,
       width: frame.width,
       height: frame.height,
-      duration: frame.duration,
+      durationSeconds: frame.duration,
       rootNodeCount: frame.children.length,
       nativeNodeCount: nativeCount,
       rasterNodeCount: rasterCount,
@@ -197,6 +292,23 @@ function derive() {
     ordinaryInterNotFauxBold: deckCheck.fauxBold === false,
     nativeCount,
     rasterCount,
+    compDurationSeconds: after.comp.durationSeconds === frame.duration,
+    compDurationFrames: after.comp.durationFrames === expectedDurationFrames,
+    recursiveDurationsExact: hierarchyUsesDuration(
+      after.precompHierarchy,
+      frame.duration,
+      expectedDurationFrames
+    ),
+    v002DurationSeconds: v002.comp.durationSeconds === frame.duration,
+    v002DurationFrames: v002.comp.durationFrames === expectedDurationFrames,
+    v002RecursiveDurationsExact: hierarchyUsesDuration(
+      v002.precompHierarchy,
+      frame.duration,
+      expectedDurationFrames
+    ),
+    changedPackageCanonical: changedPackage.contentHash === changedContentHash,
+    changedPackageExactDelta: canonicalJson(expectedChangedPackage) === canonicalJson(changedPackage),
+    v002ContentHashExact: v002.contentHash === changedContentHash,
     duplicateNoOp: payload.duplicate.status === "DUPLICATE_CONTENT" &&
       payload.duplicate.itemCountBefore === payload.duplicate.itemCountAfter,
     v001Immutable
@@ -224,7 +336,7 @@ function derive() {
   const { projectPath: _discardedProjectPath, ...redactedAfter } = after;
   const audit = {
     ...redactedAfter,
-    evidenceSchemaVersion: 2,
+    evidenceSchemaVersion: 4,
     environment: {
       afterEffectsVersion: payload.aeVersion,
       freshProjectBeforeImport: payload.freshProjectBeforeImport,
@@ -236,8 +348,36 @@ function derive() {
     fonts: payload.fonts,
     textChecks: payload.textChecks,
     original: payload.original,
-    duplicate: payload.duplicate,
+    duplicate: {
+      status: payload.duplicate.status,
+      itemCountBefore: payload.duplicate.itemCountBefore,
+      itemCountAfter: payload.duplicate.itemCountAfter
+    },
+    duplicateDetails: {
+      v001Count: payload.duplicate.v001Count,
+      v002CountBeforeChangedImport: payload.duplicate.v002Count,
+      queueCountAfter: payload.duplicate.queueCountAfter
+    },
     changed: payload.changed,
+    changedPackage: {
+      contentHash: changedContentHash,
+      sha256: sha256File(changedPackagePath),
+      delta: {
+        nodeId: "95:45",
+        nodeName: "BG_Base",
+        property: "opacity",
+        before: 1,
+        after: 0.999999
+      }
+    },
+    v002: {
+      comp: v002.comp,
+      contentHash: v002.contentHash,
+      layerCount: v002.layers.length,
+      missingFonts: v002.missingFonts,
+      rasterFallbacks: v002.rasterFallbacks,
+      warnings: v002.warnings
+    },
     v001Immutable,
     v001StableHashes: { before: beforeStableHash, after: afterStableHash },
     mutatedPreexistingItems: payload.mutatedPreexistingItems,
@@ -260,15 +400,18 @@ function derive() {
 function artifactManifest() {
   const relativePaths = [
     "evidence/raw/shot-32-package.video001-ae.json",
+    "evidence/raw/shot-32-changed-package.video001-ae.json",
     "evidence/raw/shot-32-final-result.json",
     "evidence/raw/shot-32-v001-before.json",
     "evidence/raw/shot-32-v001-after.json",
+    "evidence/raw/shot-32-v002.json",
     "evidence/raw/shot-32-timing.json",
     "evidence/raw/shot-32-image-metrics.json",
     "evidence/raw/shot-32-live-session.json",
     "evidence/raw/shot-32-live-package.video001-ae.json",
     "evidence/raw/shot-32-live-bridge-log.jsonl",
     "evidence/raw/shot-32-live-import-report.json",
+    "evidence/raw/shot-32-live-v002-import-report.json",
     "evidence/raw/shot-32-live-ae-result.json",
     "evidence/shot-32-figma.png",
     "evidence/shot-32-ae.png",

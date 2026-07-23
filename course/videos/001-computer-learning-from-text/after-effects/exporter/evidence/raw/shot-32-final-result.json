@@ -315,7 +315,7 @@
       }
     },
     "original": {
-      "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+      "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
       "createdCompNames": [
         "S001_SH32_Repo_PreparationNotLearning_v001"
       ],
@@ -340,15 +340,18 @@
       "warnings": [
         "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
       ],
-      "elapsedMs": 547
+      "elapsedMs": 3231
     },
     "duplicate": {
       "status": "DUPLICATE_CONTENT",
       "itemCountBefore": 10,
-      "itemCountAfter": 10
+      "itemCountAfter": 10,
+      "v001Count": 1,
+      "v002Count": 0,
+      "queueCountAfter": 0
     },
     "changed": {
-      "contentHash": "0c988f87775ee843c1096273e226b47ea95ecf8476d2d76ad79b213365bea445",
+      "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
       "createdCompNames": [
         "S001_SH32_Repo_PreparationNotLearning_v002"
       ],
@@ -373,38 +376,46 @@
       "warnings": [
         "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
       ],
-      "elapsedMs": 661
+      "elapsedMs": 8052
+    },
+    "v002Audit": {
+      "comp": {
+        "name": "S001_SH32_Repo_PreparationNotLearning_v002",
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "durationSeconds": 28,
+        "durationFrames": 840
+      },
+      "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
+      "layerCount": 30
     },
     "v001Immutable": true,
-    "v001AuditBefore": "shot-32-v001-before.json",
-    "v001AuditAfter": "shot-32-v001-after.json",
-    "projectFile": "Video001-Exporter-Shot32.aep",
-    "renderFile": "shot-32-ae.png",
+    "v001AuditBefore": "Video001-Exporter-Shot32-Seconds-v001-before.json",
+    "v001AuditAfter": "Video001-Exporter-Shot32-Seconds-v001-after.json",
+    "v002AuditFile": "Video001-Exporter-Shot32-Seconds-v002.json",
+    "projectFile": "Video001-Exporter-Shot32-Seconds.aep",
+    "renderFile": "Video001-Exporter-Shot32-Seconds.png",
     "mutatedPreexistingItems": [],
     "comp": {
       "name": "S001_SH32_Repo_PreparationNotLearning_v001",
       "width": 1920,
       "height": 1080,
       "fps": 30,
-      "duration": 28,
+      "durationSeconds": 28,
+      "durationFrames": 840,
       "rootLayerCount": 10
     },
     "hardChecks": {
-      "thetaExact": true,
-      "middleDotExact": true,
-      "titleExact": true,
-      "titleLineCount": 2,
-      "titleFullRangeExact": true,
-      "thetaFullRangeExact": true,
-      "interThetaCoverage": true,
-      "soraBoldThetaCoverage": false,
-      "thetaResolvedFont": "Inter-Regular",
-      "thetaFauxBold": true,
-      "ordinaryInterNotFauxBold": true,
       "nativeCount": 30,
       "rasterCount": 0,
       "duplicateNoOp": true,
-      "v001Immutable": true
+      "v001Immutable": true,
+      "v001DurationSeconds": 28,
+      "v001DurationFrames": 840,
+      "v002DurationSeconds": 28,
+      "v002DurationFrames": 840,
+      "recursiveDurationsExact": true
     }
   }
 }

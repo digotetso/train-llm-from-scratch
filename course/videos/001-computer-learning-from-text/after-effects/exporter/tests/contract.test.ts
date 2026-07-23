@@ -69,8 +69,38 @@ test("returns a deeply isolated clone", () => {
 
 test("rejects an unknown schema major version", () => {
   assert.throws(
-    () => validatePackage({ ...makeValidPackage(), schemaVersion: "2.0.0" }),
+    () => validatePackage({ ...makeValidPackage(), schemaVersion: "3.0.0" }),
     /schema major/i
+  );
+});
+
+test("rejects legacy 1.x packages with the required 2.0.0 version", () => {
+  assert.throws(
+    () => validatePackage({ ...makeValidPackage(), schemaVersion: "1.0.0" }),
+    /unsupported schema.*1\.0\.0.*requires.*2\.0\.0/i
+  );
+});
+
+test("requires an explicit seconds time unit on the package target", () => {
+  const missing = makeValidPackage() as unknown as {
+    target: { width: number; height: number; fps: number; timeUnit?: string };
+  };
+  delete missing.target.timeUnit;
+  assert.throws(() => validatePackage(missing), /\$\.target\.timeUnit.*missing required field/i);
+
+  const wrong = makeValidPackage() as unknown as {
+    target: { width: number; height: number; fps: number; timeUnit: string };
+  };
+  wrong.target.timeUnit = "frames";
+  assert.throws(() => validatePackage(wrong), /\$\.target\.timeUnit.*seconds/i);
+});
+
+test("requires second durations to align to whole target frames", () => {
+  const value = makeValidPackage();
+  value.frames[0]!.duration = 1 / 60;
+  assert.throws(
+    () => validatePackage(value),
+    /frame duration.*seconds.*whole frame/i
   );
 });
 

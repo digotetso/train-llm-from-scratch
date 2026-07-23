@@ -23,7 +23,27 @@ class FolderItemMock {
   }
 }
 
-class CompItemMock extends FolderItemMock {}
+class CompItemMock extends FolderItemMock {
+  width = 0;
+  height = 0;
+  duration = 0;
+  frameRate = 0;
+
+  constructor(
+    name: string,
+    removalLog: string[] = [],
+    width = 0,
+    height = 0,
+    duration = 0,
+    frameRate = 0
+  ) {
+    super(name, removalLog);
+    this.width = width;
+    this.height = height;
+    this.duration = duration;
+    this.frameRate = frameRate;
+  }
+}
 class FootageItemMock extends FolderItemMock {}
 
 function canonicalJson(value: unknown): string {
@@ -187,8 +207,15 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
         projectItems.push(item);
         return item;
       },
-      addComp(name: string): CompItemMock {
-        const item = new CompItemMock(name, removalLog);
+      addComp(
+        name: string,
+        width: number,
+        height: number,
+        _pixelAspect: number,
+        duration: number,
+        frameRate: number
+      ): CompItemMock {
+        const item = new CompItemMock(name, removalLog, width, height, duration, frameRate);
         projectItems.push(item);
         return item;
       }
@@ -284,7 +311,7 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
   }
 
   const timingFile = put("/timing/figma-scenes.json", {
-    canvas: { width: 1920, height: 1080, fps: 30, duration: 840 },
+    canvas: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds", duration: 840 },
     source: { figmaFileKey: "file-key", figmaPageNodeId: "page-id" },
     shots: [{ figmaNodeId: "1:1", name: "Shot", duration: 30 }]
   });
@@ -294,12 +321,12 @@ function makeImporterHarness(forcedSystemHash?: string, duplicateHash = false) {
 
   function validPackage() {
     return {
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       exporterVersion: "0.1.0",
       exportedAt: "2026-07-22T00:00:00.000Z",
       contentHash: "a".repeat(64),
       source: { fileKey: "file-key", pageId: "page-id" },
-      target: { width: 1920, height: 1080, fps: 30 },
+      target: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds" },
       frames: [{
         nodeId: "1:1",
         name: "Shot",
@@ -722,6 +749,120 @@ test("public file importer automatically rolls back only its new items in revers
     harness.projectItems.filter((item) => !item.removed).map((item) => item.name),
     ["preexisting"]
   );
+});
+
+test("top-level and recursive group comps use frame duration as seconds", () => {
+  const harness = makeImporterHarness();
+  const value = harness.validPackage() as unknown as {
+    exportedAt: string;
+    contentHash: string;
+    frames: Array<{ children: unknown[] }>;
+    [key: string]: unknown;
+  };
+  value.frames[0]!.children = [{
+    id: "group",
+    name: "Group",
+    kind: "group",
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    rotation: 0,
+    opacity: 1,
+    children: [{
+      id: "shape",
+      name: "Shape",
+      kind: "rect",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      rotation: 0,
+      opacity: 1,
+      fill: "#000000",
+      stroke: null,
+      strokeWidth: 0,
+      radius: 0
+    }]
+  }];
+  const packageFile = harness.put(
+    "/manual/seconds.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /layers|addShape/
+  );
+
+  const createdComps = harness.projectItems.filter((item): item is CompItemMock => item instanceof CompItemMock);
+  assert.equal(createdComps.length, 2);
+  for (const comp of createdComps) {
+    assert.equal(comp.duration, 30);
+    assert.equal(comp.frameRate, 30);
+    assert.equal(comp.duration * comp.frameRate, 900);
+  }
+});
+
+test("After Effects rejects an ambiguous package time unit before project mutation", () => {
+  const harness = makeImporterHarness();
+  const value = harness.validPackage();
+  (value.target as { timeUnit: string }).timeUnit = "frames";
+  const packageFile = harness.put(
+    "/manual/ambiguous-time-unit.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /durations in seconds/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+});
+
+test("After Effects rejects legacy 1.x packages with an actionable 2.0.0 error before mutation", () => {
+  const harness = makeImporterHarness();
+  const value = harness.validPackage();
+  (value as { schemaVersion: string }).schemaVersion = "1.0.0";
+  const packageFile = harness.put(
+    "/manual/legacy-schema.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+
+  assert.throws(
+    () => harness.importer.importPackageFile(packageFile, harness.options(false)),
+    /schema 1\.0\.0 is unsupported.*requires 2\.0\.0/i
+  );
+  assert.equal(harness.beginUndoCount, 0);
+});
+
+test("After Effects accepts a fractional-second duration on an exact frame boundary", () => {
+  const harness = makeImporterHarness();
+  const value = harness.validPackage();
+  value.frames[0]!.duration = 1 / 30;
+  harness.put("/timing/figma-scenes.json", {
+    canvas: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds", duration: 840 },
+    source: { figmaFileKey: "file-key", figmaPageNodeId: "page-id" },
+    shots: [{ figmaNodeId: "1:1", name: "Shot", duration: 1 / 30 }]
+  });
+  const packageFile = harness.put(
+    "/manual/fractional-seconds.video001-ae.json",
+    stampCanonicalContentHash(value)
+  );
+  let error: unknown;
+  try {
+    harness.importer.importPackageFile(packageFile, harness.options(false));
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.equal(typeof (error as { message?: unknown } | undefined)?.message, "string");
+  assert.doesNotMatch((error as { message: string }).message, /whole frame|duration/i);
+  assert.equal(harness.beginUndoCount, 1);
+  const createdComp = harness.projectItems.find((item): item is CompItemMock => item instanceof CompItemMock);
+  assert.ok(createdComp);
+  assert.equal(createdComp.duration, 1 / 30);
+  assert.equal(createdComp.duration * createdComp.frameRate, 1);
 });
 
 test("mixed text runs use Advanced index units and exact index bounds", () => {
@@ -1387,10 +1528,24 @@ test("read-only audit deeply preserves project, comp, layer, and property state 
   vm.runInNewContext(source, context, { filename: sourceUrl.pathname });
   assert.deepEqual(snapshot(), before);
   const audit = JSON.parse(output) as {
+    comp: { durationSeconds: number; durationFrames: number; duration?: number };
+    precompHierarchy: { durationSeconds: number; durationFrames: number; duration?: number };
     missingFonts: string[];
     rasterFallbacks: Array<{ type: string; property: string }>;
     layers: Array<{ name: string; text: string; font: string; boxDimensions: number[] }>;
   };
+  assert.equal(Object.prototype.hasOwnProperty.call(audit.comp, "duration"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(audit.precompHierarchy, "duration"), false);
+  assert.deepEqual(audit.comp, {
+    name: "Shot_v001",
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    durationSeconds: 1,
+    durationFrames: 30
+  });
+  assert.equal(audit.precompHierarchy.durationSeconds, 1);
+  assert.equal(audit.precompHierarchy.durationFrames, 30);
   assert.deepEqual(audit.missingFonts, ["Missing-Regular"]);
   assert.deepEqual(audit.rasterFallbacks, [{ type: "raster-fallback", property: "gradient", replacement: "PNG" }]);
   assert.deepEqual(audit.layers, [{

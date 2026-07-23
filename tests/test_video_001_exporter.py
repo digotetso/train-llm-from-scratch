@@ -105,7 +105,9 @@ def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
     assert audit["comp"]["width"] == 1920
     assert audit["comp"]["height"] == 1080
     assert audit["comp"]["fps"] == 30
-    assert audit["comp"]["duration"] == 28
+    assert audit["comp"]["durationSeconds"] == 28
+    assert audit["comp"]["durationFrames"] == 840
+    assert "duration" not in audit["comp"]
     texts = {layer["name"]: layer["text"] for layer in audit["layers"] if layer["type"] == "text"}
     assert texts["MODEL_Parameters"] == "θ"
     assert "·" in texts["TXT_Caveat"]
@@ -115,6 +117,9 @@ def test_shot_32_evidence_preserves_unicode_wrapping_and_versioning():
     assert audit["textChecks"]["TXT_Deck"]["fauxBold"] is False
     assert audit["hardChecks"]["nativeCount"] == 30
     assert audit["hardChecks"]["rasterCount"] == 0
+    assert audit["hardChecks"]["compDurationSeconds"] is True
+    assert audit["hardChecks"]["compDurationFrames"] is True
+    assert audit["hardChecks"]["recursiveDurationsExact"] is True
     assert audit["duplicate"] == {
         "status": "DUPLICATE_CONTENT",
         "itemCountBefore": 10,
@@ -139,17 +144,21 @@ def test_shot_32_summaries_are_deterministically_derived_from_raw_evidence():
     assert verification.returncode == 0, verification.stdout + verification.stderr
 
     package_path = SHOT_32_RAW_DIR / "shot-32-package.video001-ae.json"
+    changed_package_path = SHOT_32_RAW_DIR / "shot-32-changed-package.video001-ae.json"
     result_path = SHOT_32_RAW_DIR / "shot-32-final-result.json"
     before_path = SHOT_32_RAW_DIR / "shot-32-v001-before.json"
     after_path = SHOT_32_RAW_DIR / "shot-32-v001-after.json"
+    v002_path = SHOT_32_RAW_DIR / "shot-32-v002.json"
     timing_path = SHOT_32_RAW_DIR / "shot-32-timing.json"
     metrics_path = SHOT_32_RAW_DIR / "shot-32-image-metrics.json"
     manifest_path = SHOT_32_RAW_DIR / "shot-32-evidence-manifest.json"
     for path in [
         package_path,
+        changed_package_path,
         result_path,
         before_path,
         after_path,
+        v002_path,
         timing_path,
         metrics_path,
         manifest_path,
@@ -157,9 +166,11 @@ def test_shot_32_summaries_are_deterministically_derived_from_raw_evidence():
         assert path.is_file(), f"missing raw evidence: {path.name}"
 
     package = load_json(package_path)
+    changed_package = load_json(changed_package_path)
     result = load_json(result_path)
     before = load_json(before_path)
     after = load_json(after_path)
+    v002 = load_json(v002_path)
     timing = load_json(timing_path)
     metrics = load_json(metrics_path)
     manifest = load_json(manifest_path)
@@ -175,16 +186,66 @@ def test_shot_32_summaries_are_deterministically_derived_from_raw_evidence():
         canonical_json(fingerprint_value).encode("utf-8")
     ).hexdigest()
     assert package["contentHash"] == computed_content_hash
+    assert package["schemaVersion"] == "2.0.0"
     assert reference["contentHash"] == computed_content_hash
     assert reference["packageSha256"] == sha256_path(package_path)
     assert reference["timingSha256"] == sha256_path(timing_path)
+
+    expected_changed_package = json.loads(json.dumps(package))
+    changed_background = next(
+        node
+        for node in expected_changed_package["frames"][0]["children"]
+        if node["id"] == "95:45"
+    )
+    assert changed_background["name"] == "BG_Base"
+    assert changed_background["opacity"] == 1
+    changed_background["opacity"] = 0.999999
+    changed_fingerprint = {
+        **expected_changed_package,
+        "exportedAt": "",
+        "contentHash": "",
+    }
+    changed_content_hash = hashlib.sha256(
+        canonical_json(changed_fingerprint).encode("utf-8")
+    ).hexdigest()
+    expected_changed_package["contentHash"] = changed_content_hash
+    assert changed_package == expected_changed_package
+    assert v002["contentHash"] == changed_content_hash
+    assert v002["comp"] == {
+        "name": "S001_SH32_Repo_PreparationNotLearning_v002",
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "durationSeconds": 28,
+        "durationFrames": 840,
+    }
+    assert audit["changedPackage"] == {
+        "contentHash": changed_content_hash,
+        "sha256": sha256_path(changed_package_path),
+        "delta": {
+            "nodeId": "95:45",
+            "nodeName": "BG_Base",
+            "property": "opacity",
+            "before": 1,
+            "after": 0.999999,
+        },
+    }
+    assert audit["v002"]["contentHash"] == changed_content_hash
+    assert audit["hardChecks"]["changedPackageCanonical"] is True
+    assert audit["hardChecks"]["changedPackageExactDelta"] is True
+    assert audit["hardChecks"]["v002ContentHashExact"] is True
+    assert audit["hardChecks"]["v002DurationSeconds"] is True
+    assert audit["hardChecks"]["v002DurationFrames"] is True
+    assert audit["hardChecks"]["v002RecursiveDurationsExact"] is True
 
     frame = package["frames"][0]
     flattened_nodes = flatten_package_nodes(frame["children"])
     assert reference["frame"]["nodes"] == flattened_nodes
     assert reference["frame"]["nodeId"] == frame["nodeId"] == "95:44"
     assert reference["frame"]["name"] == frame["name"]
-    assert reference["frame"]["duration"] == frame["duration"] == 28
+    assert package["target"]["timeUnit"] == "seconds"
+    assert timing["canvas"]["timeUnit"] == "seconds"
+    assert reference["frame"]["durationSeconds"] == frame["duration"] == 28
     timing_shot = next(shot for shot in timing["shots"] if shot["figmaNodeId"] == frame["nodeId"])
     assert timing["source"]["figmaFileKey"] == package["source"]["fileKey"]
     assert timing["source"]["figmaPageNodeId"] == package["source"]["pageId"]
@@ -210,7 +271,16 @@ def test_shot_32_summaries_are_deterministically_derived_from_raw_evidence():
     payload = result["payload"]
     assert result["status"] == "COMPLETE"
     assert audit["original"] == payload["original"]
-    assert audit["duplicate"] == payload["duplicate"]
+    assert audit["duplicate"] == {
+        "status": payload["duplicate"]["status"],
+        "itemCountBefore": payload["duplicate"]["itemCountBefore"],
+        "itemCountAfter": payload["duplicate"]["itemCountAfter"],
+    }
+    assert audit["duplicateDetails"] == {
+        "v001Count": payload["duplicate"]["v001Count"],
+        "v002CountBeforeChangedImport": payload["duplicate"]["v002Count"],
+        "queueCountAfter": payload["duplicate"]["queueCountAfter"],
+    }
     assert audit["changed"] == payload["changed"]
     assert audit["textChecks"] == payload["textChecks"]
     assert audit["duplicate"]["status"] == "DUPLICATE_CONTENT"
@@ -281,17 +351,27 @@ def test_shot_32_verifier_rejects_summary_falsification_and_raw_byte_drift(tmp_p
     assert verify().returncode != 0
 
 
-def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
+def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted(tmp_path: Path):
     live_session_path = SHOT_32_RAW_DIR / "shot-32-live-session.json"
     live_package_path = SHOT_32_RAW_DIR / "shot-32-live-package.video001-ae.json"
     live_bridge_log_path = SHOT_32_RAW_DIR / "shot-32-live-bridge-log.jsonl"
     live_import_report_path = SHOT_32_RAW_DIR / "shot-32-live-import-report.json"
+    live_v002_import_report_path = (
+        SHOT_32_RAW_DIR / "shot-32-live-v002-import-report.json"
+    )
+    changed_package_path = (
+        SHOT_32_RAW_DIR / "shot-32-changed-package.video001-ae.json"
+    )
+    v002_audit_path = SHOT_32_RAW_DIR / "shot-32-v002.json"
     live_ae_result_path = SHOT_32_RAW_DIR / "shot-32-live-ae-result.json"
     for path in [
         live_session_path,
         live_package_path,
         live_bridge_log_path,
         live_import_report_path,
+        live_v002_import_report_path,
+        changed_package_path,
+        v002_audit_path,
         live_ae_result_path,
     ]:
         assert path.is_file(), f"missing live-path evidence: {path.name}"
@@ -303,6 +383,9 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
             live_package_path,
             live_bridge_log_path,
             live_import_report_path,
+            live_v002_import_report_path,
+            changed_package_path,
+            v002_audit_path,
             live_ae_result_path,
         ]
     )
@@ -315,6 +398,9 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
     package = load_json(live_package_path)
     session = load_json(live_session_path)
     import_report = load_json(live_import_report_path)
+    v002_import_report = load_json(live_v002_import_report_path)
+    changed_package = load_json(changed_package_path)
+    v002_audit = load_json(v002_audit_path)
     ae_result = load_json(live_ae_result_path)
     bridge_events = [
         json.loads(line)
@@ -325,8 +411,15 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
     computed_content_hash = hashlib.sha256(
         canonical_json(fingerprint_value).encode("utf-8")
     ).hexdigest()
+    plugin_id_file = tmp_path / ".figma-plugin-id"
+    plugin_id_file.write_text("987654321012345678\n", encoding="utf-8")
     build = subprocess.run(
-        ["node", str(EXPORTER_DIR / "scripts/build.mjs")],
+        [
+            "node",
+            str(EXPORTER_DIR / "scripts/build.mjs"),
+            "--plugin-id-file",
+            str(plugin_id_file),
+        ],
         cwd=EXPORTER_DIR,
         text=True,
         capture_output=True,
@@ -341,12 +434,17 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
         "bridgeSha256": sha256_path(
             EXPORTER_DIR / "dist/bridge/video001-bridge.mjs"
         ),
+        "figmaCodeSha256": sha256_path(EXPORTER_DIR / "dist/figma/code.js"),
+        "figmaUiSha256": sha256_path(EXPORTER_DIR / "dist/figma/ui.html"),
     }
 
     assert package["contentHash"] == computed_content_hash
+    assert package["schemaVersion"] == "2.0.0"
     assert package["source"] == {"fileKey": "fFTux3sx2AzVQtoya67f95", "pageId": "90:2"}
+    assert package["target"]["timeUnit"] == "seconds"
     assert package["frames"][0]["nodeId"] == "95:44"
     assert package["frames"][0]["name"] == "S001_SH32_Repo_PreparationNotLearning"
+    assert package["frames"][0]["duration"] == 28
     assert session["figma"]["selection"] == {
         "count": 1,
         "nodeId": "95:44",
@@ -354,16 +452,26 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
     }
     assert session["figma"]["build"] == {
         "status": "PACKAGE_READY",
+        "schemaVersion": "2.0.0",
+        "timeUnit": "seconds",
+        "durationSeconds": 28,
         "contentHash": computed_content_hash,
         "nativeCount": 30,
         "rasterCount": 0,
     }
     assert session["figma"]["pair"] == {"httpStatus": 200, "code": "PAIRED"}
-    assert session["figma"]["send"] == {
-        "httpStatus": 202,
-        "code": "EXPORT_ACCEPTED",
-        "contentHash": computed_content_hash,
-    }
+    assert session["figma"]["sends"] == [
+        {
+            "httpStatus": 202,
+            "code": "EXPORT_ACCEPTED",
+            "contentHash": computed_content_hash,
+        },
+        {
+            "httpStatus": 202,
+            "code": "EXPORT_ACCEPTED",
+            "contentHash": computed_content_hash,
+        },
+    ]
     assert any(event["route"] == "pair" and event["status"] == 200 for event in bridge_events)
     assert sum(
         event["route"] == "export" and event["status"] == 202
@@ -373,13 +481,37 @@ def test_shot_32_live_plugin_bridge_ae_evidence_is_raw_and_redacted():
     assert import_report["createdCompNames"] == [
         "S001_SH32_Repo_PreparationNotLearning_v001"
     ]
+    changed_fingerprint = {
+        **changed_package,
+        "exportedAt": "",
+        "contentHash": "",
+    }
+    changed_content_hash = hashlib.sha256(
+        canonical_json(changed_fingerprint).encode("utf-8")
+    ).hexdigest()
+    assert changed_package["contentHash"] == changed_content_hash
+    assert v002_import_report["contentHash"] == changed_content_hash
+    assert v002_import_report["createdCompNames"] == [
+        "S001_SH32_Repo_PreparationNotLearning_v002"
+    ]
+    assert v002_audit["contentHash"] == changed_content_hash
+    assert v002_audit["comp"]["durationSeconds"] == 28
+    assert v002_audit["comp"]["durationFrames"] == 840
     assert ae_result["status"] == "COMPLETE"
-    assert ae_result["payload"]["contentHash"] == computed_content_hash
+    assert ae_result["payload"]["schemaVersion"] == "2.0.0"
+    assert ae_result["payload"]["timeUnit"] == "seconds"
+    assert ae_result["payload"]["originalContentHash"] == computed_content_hash
+    assert ae_result["payload"]["changedContentHash"] == changed_content_hash
     assert ae_result["payload"]["duplicateStatus"] == "DUPLICATE_CONTENT"
     assert ae_result["payload"]["itemCountAfterFirst"] == ae_result["payload"]["itemCountAfterDuplicate"]
     assert ae_result["payload"]["compNames"] == [
-        "S001_SH32_Repo_PreparationNotLearning_v001"
+        "S001_SH32_Repo_PreparationNotLearning_v001",
+        "S001_SH32_Repo_PreparationNotLearning_v002",
     ]
+    assert ae_result["payload"]["durations"] == {
+        "v001": {"seconds": 28, "frames": 840},
+        "v002": {"seconds": 28, "frames": 840},
+    }
 
 
 def test_after_effects_sources_forbid_destructive_project_and_process_calls():

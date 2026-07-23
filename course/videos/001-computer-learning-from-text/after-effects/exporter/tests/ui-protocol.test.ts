@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext, runInNewContext } from "node:vm";
@@ -45,16 +45,7 @@ const APPROVED_SECTIONS = [
 ] as const;
 
 function approvedTimingSource(): string {
-  const projectRoot = fileURLToPath(PROJECT_ROOT);
-  const commonGitDirectory = execFileSync(
-    "git",
-    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { cwd: projectRoot, encoding: "utf8" }
-  ).trim();
-  return join(
-    dirname(commonGitDirectory),
-    "course/videos/001-computer-learning-from-text/after-effects/figma-scenes.json"
-  );
+  return join(fileURLToPath(PROJECT_ROOT), "config", "video001-figma-scenes.json");
 }
 
 const config: EmbeddedVideo001Config = {
@@ -62,7 +53,7 @@ const config: EmbeddedVideo001Config = {
     fileKey: "fFTux3sx2AzVQtoya67f95",
     pageId: "90:2"
   },
-  target: { width: 1920, height: 1080, fps: 30 },
+  target: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds" },
   shots: [
     {
       index: 1,
@@ -289,7 +280,7 @@ test("selection accepts only exact approved section ancestry by identifier", asy
   });
 });
 
-test("Shot 32 maps node 95:44 to the exact frame name and 28-frame duration", async () => {
+test("Shot 32 maps node 95:44 to the exact frame name and 28-second duration", async () => {
   const harness = hostHarness();
   harness.setSelection([sceneNode()]);
   const controller = createController(harness.host, config);
@@ -1078,39 +1069,59 @@ test("After Effects build packages the exact validated timing beside the panel",
   const projectRoot = fileURLToPath(PROJECT_ROOT);
   const script = new URL("../scripts/build.mjs", import.meta.url);
   const timingSource = approvedTimingSource();
-  const result = spawnSync(process.execPath, [script.pathname], {
-    cwd: projectRoot,
-    encoding: "utf8",
-    env: { ...process.env, VIDEO001_FIGMA_SCENES: timingSource }
-  });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const fixture = mkdtempSync(join(tmpdir(), "video001-ae-build-"));
+  try {
+    const pluginIdFile = join(fixture, ".figma-plugin-id");
+    writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
+    const result = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile
+    ], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: { ...process.env, VIDEO001_FIGMA_SCENES: timingSource }
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
-  const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
-  const builtPanel = readFileSync(join(projectRoot, "dist/ae/Video001-Figma-AE-Exporter.jsx"), "utf8");
-  assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(timingSource, "utf8"));
-  assert.match(builtPanel, /scriptDirectory\.fsName \+ "\/figma-scenes\.json"/);
-  assert.doesNotMatch(builtPanel, /timingDirectory = timingDirectory\.parent/);
-  assert.match(builtPanel, /\$\.global\.Video001ExporterPanel\s*=/);
-  assert.match(builtPanel, /app\.scheduleTask\("\$\.global\.Video001ExporterPanel\.poll\(\)"/);
-  assert.doesNotMatch(builtPanel, /app\.scheduleTask\("Video001ExporterPanel\.poll\(\)"/);
+    const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
+    const builtPanel = readFileSync(join(projectRoot, "dist/ae/Video001-Figma-AE-Exporter.jsx"), "utf8");
+    assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(timingSource, "utf8"));
+    assert.match(builtPanel, /scriptDirectory\.fsName \+ "\/figma-scenes\.json"/);
+    assert.doesNotMatch(builtPanel, /timingDirectory = timingDirectory\.parent/);
+    assert.match(builtPanel, /\$\.global\.Video001ExporterPanel\s*=/);
+    assert.match(builtPanel, /app\.scheduleTask\("\$\.global\.Video001ExporterPanel\.poll\(\)"/);
+    assert.doesNotMatch(builtPanel, /app\.scheduleTask\("Video001ExporterPanel\.poll\(\)"/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("plain build uses the committed canonical Video 001 timing", () => {
   const projectRoot = fileURLToPath(PROJECT_ROOT);
   const script = new URL("../scripts/build.mjs", import.meta.url);
-  const environment = { ...process.env };
-  delete environment.VIDEO001_FIGMA_SCENES;
-  const result = spawnSync(process.execPath, [script.pathname], {
-    cwd: projectRoot,
-    encoding: "utf8",
-    env: environment
-  });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const fixture = mkdtempSync(join(tmpdir(), "video001-plain-build-"));
+  try {
+    const pluginIdFile = join(fixture, ".figma-plugin-id");
+    writeFileSync(pluginIdFile, "987654321012345678\n", "utf8");
+    const environment = { ...process.env };
+    delete environment.VIDEO001_FIGMA_SCENES;
+    const result = spawnSync(process.execPath, [
+      script.pathname,
+      "--plugin-id-file", pluginIdFile
+    ], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env: environment
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
-  const canonicalTiming = join(projectRoot, "config/video001-figma-scenes.json");
-  const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
-  assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(canonicalTiming, "utf8"));
-  assert.equal(readFileSync(canonicalTiming, "utf8"), readFileSync(approvedTimingSource(), "utf8"));
+    const canonicalTiming = join(projectRoot, "config/video001-figma-scenes.json");
+    const builtTiming = join(projectRoot, "dist/ae/figma-scenes.json");
+    assert.equal(readFileSync(builtTiming, "utf8"), readFileSync(canonicalTiming, "utf8"));
+    assert.equal(readFileSync(canonicalTiming, "utf8"), readFileSync(approvedTimingSource(), "utf8"));
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("built UI accepts routed messages and hashes packages without crypto", async () => {
@@ -1214,7 +1225,7 @@ test("built UI accepts routed messages and hashes packages without crypto", asyn
     assert.equal(elements.get("status")?.textContent, "1 frame selected.");
     assert.deepEqual(
       elements.get("selection-list")?.children.map((child) => (child as { textContent: string }).textContent),
-      ["S001_SH32_Repo_PreparationNotLearning · 28 frames"]
+      ["S001_SH32_Repo_PreparationNotLearning · 28 seconds"]
     );
 
     sandbox.messageJson = JSON.stringify({

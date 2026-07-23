@@ -1,4 +1,5 @@
 {
+  "projectPath": "Video001-Exporter-Shot32-Seconds.aep",
   "itemCountBefore": 10,
   "itemCountAfter": 10,
   "comp": {
@@ -6,8 +7,8 @@
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "duration": 28,
-    "durationSeconds": 0.93333333333333
+    "durationSeconds": 28,
+    "durationFrames": 840
   },
   "layers": [
     {
@@ -439,14 +440,16 @@
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "duration": 28,
+    "durationSeconds": 28,
+    "durationFrames": 840,
     "children": [
       {
         "name": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": []
       },
       {
@@ -454,7 +457,8 @@
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": []
       },
       {
@@ -462,14 +466,16 @@
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": [
           {
             "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           },
           {
@@ -477,7 +483,8 @@
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           },
           {
@@ -485,14 +492,15 @@
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           }
         ]
       }
     ]
   },
-  "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+  "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
   "missingFonts": [
     "Sora-Bold"
   ],

@@ -7,7 +7,10 @@
     },
     "build": {
       "status": "PACKAGE_READY",
-      "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+      "schemaVersion": "2.0.0",
+      "timeUnit": "seconds",
+      "durationSeconds": 28,
+      "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
       "nativeCount": 30,
       "rasterCount": 0
     },
@@ -15,30 +18,51 @@
       "httpStatus": 200,
       "code": "PAIRED"
     },
-    "send": {
-      "httpStatus": 202,
-      "code": "EXPORT_ACCEPTED",
-      "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb"
-    }
+    "sends": [
+      {
+        "httpStatus": 202,
+        "code": "EXPORT_ACCEPTED",
+        "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0"
+      },
+      {
+        "httpStatus": 202,
+        "code": "EXPORT_ACCEPTED",
+        "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0"
+      }
+    ]
   },
   "afterEffects": {
+    "version": "25.2.2x2",
     "firstImport": {
       "status": "IMPORTED",
       "createdCompName": "S001_SH32_Repo_PreparationNotLearning_v001",
-      "itemCount": 10
+      "itemCount": 10,
+      "durationSeconds": 28,
+      "durationFrames": 840
     },
     "unchangedResend": {
       "sendHttpStatus": 202,
       "importStatus": "DUPLICATE_CONTENT",
       "queueCountAfterImport": 0,
-      "itemCount": 10
+      "itemCountBefore": 10,
+      "itemCountAfter": 10
     },
-    "projectName": "Video001-Exporter-Shot32-Live.aep"
+    "changedImport": {
+      "status": "IMPORTED",
+      "createdCompName": "S001_SH32_Repo_PreparationNotLearning_v002",
+      "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
+      "durationSeconds": 28,
+      "durationFrames": 840
+    },
+    "projectName": "Video001-Exporter-Shot32-Seconds.aep",
+    "projectSha256": "170e98a0b0a7e215e7a93aa8dbe3ec30b290409df22650deb82fa8b926f25b09"
   },
   "buildArtifacts": {
-    "panelSha256": "b7e7797ec024b98732502bdfead5f3082c930ee349443377074498f2f5c63ea4",
-    "timingSha256": "eb9e0786bcc53fb99ae055ac64be2eae73e5941e83f7ab83a28a19841a35d0a6",
-    "bridgeSha256": "5e05f46a9db21ef1c85d2b97a7b53bf6dc6743a0141fdb729babce46e41be417"
+    "panelSha256": "798153d8137803e0b20a1dace0613598ffa4e0bdac7f817916d542d32999265b",
+    "timingSha256": "4f649953f632585e531fba318caba75dd5232414f61e25b37cec76a2c1a1eb87",
+    "bridgeSha256": "0f27fb5406607fa69d925e7184c150a5843b6b1f30e664f53e4222cd3dc78c10",
+    "figmaCodeSha256": "b40165d475cf70206b8a3c8f8f8a4a1e6875f8be3207ffa9b52d3b96eb77f4f2",
+    "figmaUiSha256": "3dcc621d8e5f400801ef782f5d1bfa71565cbd1f3286cff95bbdb48d5b871c51"
   },
-  "operatorNote": "A redundant retry of the already-used one-time code returned PAIRING_FAILED as designed. A fresh authorized pairing was then used for the unchanged resend; no credential value was retained."
+  "operatorNote": "Pairing credentials and authentication secrets were intentionally omitted from evidence."
 }

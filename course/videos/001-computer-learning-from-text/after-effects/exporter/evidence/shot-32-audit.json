@@ -6,8 +6,8 @@
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "duration": 28,
-    "durationSeconds": 0.93333333333333
+    "durationSeconds": 28,
+    "durationFrames": 840
   },
   "layers": [
     {
@@ -439,14 +439,16 @@
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "duration": 28,
+    "durationSeconds": 28,
+    "durationFrames": 840,
     "children": [
       {
         "name": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": []
       },
       {
@@ -454,7 +456,8 @@
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": []
       },
       {
@@ -462,14 +465,16 @@
         "width": 1920,
         "height": 1080,
         "fps": 30,
-        "duration": 28,
+        "durationSeconds": 28,
+        "durationFrames": 840,
         "children": [
           {
             "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           },
           {
@@ -477,7 +482,8 @@
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           },
           {
@@ -485,14 +491,15 @@
             "width": 1920,
             "height": 1080,
             "fps": 30,
-            "duration": 28,
+            "durationSeconds": 28,
+            "durationFrames": 840,
             "children": []
           }
         ]
       }
     ]
   },
-  "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+  "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
   "missingFonts": [
     "Sora-Bold"
   ],
@@ -500,7 +507,7 @@
   "warnings": [
     "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
   ],
-  "evidenceSchemaVersion": 2,
+  "evidenceSchemaVersion": 4,
   "environment": {
     "afterEffectsVersion": "25.2.2x2",
     "freshProjectBeforeImport": true,
@@ -835,7 +842,7 @@
     }
   },
   "original": {
-    "contentHash": "63c23469c804a720b08b8b9b02a4d3f7c7e74d062fde94249abab1a3886a4cfb",
+    "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
     "createdCompNames": [
       "S001_SH32_Repo_PreparationNotLearning_v001"
     ],
@@ -860,15 +867,20 @@
     "warnings": [
       "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
     ],
-    "elapsedMs": 547
+    "elapsedMs": 3231
   },
   "duplicate": {
     "status": "DUPLICATE_CONTENT",
     "itemCountBefore": 10,
     "itemCountAfter": 10
   },
+  "duplicateDetails": {
+    "v001Count": 1,
+    "v002CountBeforeChangedImport": 0,
+    "queueCountAfter": 0
+  },
   "changed": {
-    "contentHash": "0c988f87775ee843c1096273e226b47ea95ecf8476d2d76ad79b213365bea445",
+    "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
     "createdCompNames": [
       "S001_SH32_Repo_PreparationNotLearning_v002"
     ],
@@ -893,12 +905,42 @@
     "warnings": [
       "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
     ],
-    "elapsedMs": 661
+    "elapsedMs": 8052
+  },
+  "changedPackage": {
+    "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
+    "sha256": "876c81507ed4d472bbd984bc102d364e0486bbb7c55e9bfe3794ab7f19875f67",
+    "delta": {
+      "nodeId": "95:45",
+      "nodeName": "BG_Base",
+      "property": "opacity",
+      "before": 1,
+      "after": 0.999999
+    }
+  },
+  "v002": {
+    "comp": {
+      "name": "S001_SH32_Repo_PreparationNotLearning_v002",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationSeconds": 28,
+      "durationFrames": 840
+    },
+    "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
+    "layerCount": 30,
+    "missingFonts": [
+      "Sora-Bold"
+    ],
+    "rasterFallbacks": [],
+    "warnings": [
+      "Substituted Sora-Bold with Inter-Regular on MODEL_Parameters"
+    ]
   },
   "v001Immutable": true,
   "v001StableHashes": {
-    "before": "4db468d3f706dacd5a2414463196ae3ea4b13070568d4ce9bd97d525ea4a16f2",
-    "after": "4db468d3f706dacd5a2414463196ae3ea4b13070568d4ce9bd97d525ea4a16f2"
+    "before": "4655cfd55c7901a448f265ed4b0575b2cb93772e159951835e544850dec8af18",
+    "after": "4655cfd55c7901a448f265ed4b0575b2cb93772e159951835e544850dec8af18"
   },
   "mutatedPreexistingItems": [],
   "hardChecks": {
@@ -916,6 +958,15 @@
     "ordinaryInterNotFauxBold": true,
     "nativeCount": 30,
     "rasterCount": 0,
+    "compDurationSeconds": true,
+    "compDurationFrames": true,
+    "recursiveDurationsExact": true,
+    "v002DurationSeconds": true,
+    "v002DurationFrames": true,
+    "v002RecursiveDurationsExact": true,
+    "changedPackageCanonical": true,
+    "changedPackageExactDelta": true,
+    "v002ContentHashExact": true,
     "duplicateNoOp": true,
     "v001Immutable": true
   },

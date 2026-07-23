@@ -3,7 +3,7 @@
   "itemCountBefore": 18,
   "itemCountAfter": 18,
   "comp": {
-    "name": "S001_SH32_Repo_PreparationNotLearning_v001",
+    "name": "S001_SH32_Repo_PreparationNotLearning_v002",
     "width": 1920,
     "height": 1080,
     "fps": 30,
@@ -12,7 +12,7 @@
   },
   "layers": [
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "LOSS_LengthCaveat",
       "type": "precomp",
       "comment": "Figma group precomp 105:263",
@@ -21,10 +21,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__LOSS_LengthCaveat"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__LOSS_LengthCaveat",
       "name": "TXT_Caveat",
       "type": "text",
       "comment": "Figma native text 105:264",
@@ -39,7 +39,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__LOSS_LengthCaveat",
       "name": "LOSS_LengthCaveat__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:263::container-solid-background rect",
@@ -53,7 +53,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "MODEL_LearningZone",
       "type": "precomp",
       "comment": "Figma group precomp 105:259",
@@ -62,10 +62,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone",
       "name": "TXT_ParameterState",
       "type": "text",
       "comment": "Figma native text 105:262",
@@ -80,7 +80,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone",
       "name": "MODEL_Parameters",
       "type": "text",
       "comment": "Figma native text 105:261",
@@ -95,7 +95,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone",
       "name": "TXT_ZoneLabel",
       "type": "text",
       "comment": "Figma native text 105:260",
@@ -110,7 +110,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone",
       "name": "MODEL_LearningZone__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:259::container-solid-background rect",
@@ -124,7 +124,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "TXT_BoundaryLabel",
       "type": "text",
       "comment": "Figma native text 105:258",
@@ -139,7 +139,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "DATA_LearningBoundary",
       "type": "shape",
       "comment": "Figma native vector 105:257 rect",
@@ -153,7 +153,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "DATA_PreparationZone",
       "type": "precomp",
       "comment": "Figma group precomp 105:246",
@@ -162,10 +162,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
       "name": "DATA_Node_03",
       "type": "precomp",
       "comment": "Figma group precomp 105:254",
@@ -174,10 +174,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_03"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_03",
       "name": "TXT_NodeDetail",
       "type": "text",
       "comment": "Figma native text 105:256",
@@ -192,7 +192,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_03",
       "name": "TXT_NodeTitle",
       "type": "text",
       "comment": "Figma native text 105:255",
@@ -207,7 +207,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_03",
       "name": "DATA_Node_03__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:254::container-solid-background rect",
@@ -221,7 +221,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
       "name": "DATA_Node_02",
       "type": "precomp",
       "comment": "Figma group precomp 105:251",
@@ -230,10 +230,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_02"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_02",
       "name": "TXT_NodeDetail",
       "type": "text",
       "comment": "Figma native text 105:253",
@@ -248,7 +248,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_02",
       "name": "TXT_NodeTitle",
       "type": "text",
       "comment": "Figma native text 105:252",
@@ -263,7 +263,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_02",
       "name": "DATA_Node_02__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:251::container-solid-background rect",
@@ -277,7 +277,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
       "name": "DATA_Node_01",
       "type": "precomp",
       "comment": "Figma group precomp 105:248",
@@ -286,10 +286,10 @@
       "fontSize": null,
       "boxDimensions": null,
       "shapeMatchNames": [],
-      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01"
+      "sourceComp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_01"
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_01",
       "name": "TXT_NodeDetail",
       "type": "text",
       "comment": "Figma native text 105:250",
@@ -304,7 +304,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_01",
       "name": "TXT_NodeTitle",
       "type": "text",
       "comment": "Figma native text 105:249",
@@ -319,7 +319,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_01",
       "name": "DATA_Node_01__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:248::container-solid-background rect",
@@ -333,7 +333,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
       "name": "TXT_ZoneLabel",
       "type": "text",
       "comment": "Figma native text 105:247",
@@ -348,7 +348,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
       "name": "DATA_PreparationZone__CONTAINER_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 105:246::container-solid-background rect",
@@ -362,7 +362,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "TXT_Deck",
       "type": "text",
       "comment": "Figma native text 105:245",
@@ -377,7 +377,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "TXT_Title",
       "type": "text",
       "comment": "Figma native text 105:244",
@@ -392,7 +392,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "TXT_Eyebrow",
       "type": "text",
       "comment": "Figma native text 105:243",
@@ -407,7 +407,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "BG_Base",
       "type": "shape",
       "comment": "Figma native vector 95:45 rect",
@@ -421,7 +421,7 @@
       "sourceComp": null
     },
     {
-      "comp": "S001_SH32_Repo_PreparationNotLearning_v001",
+      "comp": "S001_SH32_Repo_PreparationNotLearning_v002",
       "name": "S001_SH32_Repo_PreparationNotLearning__ROOT_SOLID_BACKGROUND",
       "type": "shape",
       "comment": "Figma native vector 95:44::root-solid-background rect",
@@ -436,7 +436,7 @@
     }
   ],
   "precompHierarchy": {
-    "name": "S001_SH32_Repo_PreparationNotLearning_v001",
+    "name": "S001_SH32_Repo_PreparationNotLearning_v002",
     "width": 1920,
     "height": 1080,
     "fps": 30,
@@ -444,7 +444,7 @@
     "durationFrames": 840,
     "children": [
       {
-        "name": "S001_SH32_Repo_PreparationNotLearning_v001__LOSS_LengthCaveat",
+        "name": "S001_SH32_Repo_PreparationNotLearning_v002__LOSS_LengthCaveat",
         "width": 1920,
         "height": 1080,
         "fps": 30,
@@ -453,7 +453,7 @@
         "children": []
       },
       {
-        "name": "S001_SH32_Repo_PreparationNotLearning_v001__MODEL_LearningZone",
+        "name": "S001_SH32_Repo_PreparationNotLearning_v002__MODEL_LearningZone",
         "width": 1920,
         "height": 1080,
         "fps": 30,
@@ -462,7 +462,7 @@
         "children": []
       },
       {
-        "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_PreparationZone",
+        "name": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_PreparationZone",
         "width": 1920,
         "height": 1080,
         "fps": 30,
@@ -470,7 +470,7 @@
         "durationFrames": 840,
         "children": [
           {
-            "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_03",
+            "name": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_03",
             "width": 1920,
             "height": 1080,
             "fps": 30,
@@ -479,7 +479,7 @@
             "children": []
           },
           {
-            "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_02",
+            "name": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_02",
             "width": 1920,
             "height": 1080,
             "fps": 30,
@@ -488,7 +488,7 @@
             "children": []
           },
           {
-            "name": "S001_SH32_Repo_PreparationNotLearning_v001__DATA_Node_01",
+            "name": "S001_SH32_Repo_PreparationNotLearning_v002__DATA_Node_01",
             "width": 1920,
             "height": 1080,
             "fps": 30,
@@ -500,7 +500,7 @@
       }
     ]
   },
-  "contentHash": "2cbb0412d0cb500c347ca5c9a54596bf43299206f25084046b9d10e289d525e0",
+  "contentHash": "a6ff2c07d771884c72cf297fdc6d3067c0660600e98ea84b7144f1c9c58243fb",
   "missingFonts": [
     "Sora-Bold"
   ],
