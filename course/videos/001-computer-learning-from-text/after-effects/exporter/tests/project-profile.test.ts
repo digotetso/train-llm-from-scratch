@@ -63,6 +63,44 @@ test("rejects unsafe project identifiers and unsafe profile strings", () => {
   }
 });
 
+test("rejects prohibited declarative bypass values with field-addressable errors", () => {
+  const cases: Array<[string, string, (value: Record<string, unknown>) => void]> = [
+    ["path", "$.naming.importFolder", (value) => { (value.naming as Record<string, unknown>).importFolder = "relative/path"; }],
+    ["URL including mailto", "$.source.pageName", (value) => { (value.source as Record<string, unknown>).pageName = "mailto:someone@example.test"; }],
+    ["script source", "$.source.pageName", (value) => { (value.source as Record<string, unknown>).pageName = "const profile = 1;"; }],
+    ["command", "$.project.displayName", (value) => { (value.project as Record<string, unknown>).displayName = "curl attacker.example"; }],
+    ["port", "$.timeline.shots[0].nodeId", (value) => { fixtureTimeline(value).shots[0]!.nodeId = "host:3000"; }],
+    ["credentials", "$.source.fileKey", (value) => { (value.source as Record<string, unknown>).fileKey = "user:secret"; }],
+    ["permission change", "$.naming.importFolder", (value) => { (value.naming as Record<string, unknown>).importFolder = "chmod 777"; }]
+  ];
+  for (const [label, path, mutate] of cases) {
+    const value = makeFixtureProfile();
+    mutate(value);
+    assert.throws(() => validateProjectProfile(value), new RegExp(`${path.replace(/[.$[\]]/g, "\\$&")}: unsafe value`), label);
+  }
+});
+
+test("accepts current profile values through each field-specific grammar", () => {
+  const value = makeFixtureProfile();
+  const timeline = fixtureTimeline(value);
+  (value.project as Record<string, unknown>).displayName = "Video 001 - What AI Models Actually Do";
+  (value.source as Record<string, unknown>).fileKey = "fFTux3sx2AzVQtoya67f95";
+  (value.source as Record<string, unknown>).pageId = "90:2";
+  (value.source as Record<string, unknown>).pageName = "02 Video 001 - AE Assets";
+  (value.naming as Record<string, unknown>).shotPrefix = "S001";
+  (value.naming as Record<string, unknown>).masterCompBase = "VIDEO001_MASTER";
+  (value.naming as Record<string, unknown>).importFolder = "Video 001";
+  timeline.sections[0]!.id = "repository-walkthrough";
+  timeline.sections[0]!.name = "Repository Walkthrough";
+  for (const shot of timeline.shots) shot.sectionId = "repository-walkthrough";
+  timeline.shots[0]!.nodeId = "95:44";
+  timeline.shots[0]!.compName = "S001_SH32_Repo_PreparationNotLearning";
+  timeline.shots[0]!.sectionParentNodeId = "700:1";
+  ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.family = "JetBrains_Mono";
+  ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.style = "SemiBold";
+  assert.doesNotThrow(() => validateProjectProfile(value));
+});
+
 test("rejects revisions outside positive safe integer bounds", () => {
   for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const value = makeFixtureProfile();

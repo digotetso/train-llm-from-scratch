@@ -74,8 +74,14 @@ export interface ProfileProjection {
 type UnknownRecord = Record<string, unknown>;
 
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
-const CONTROL_OR_PATH_PATTERN = /[\u0000-\u001f\u007f/\\]/;
-const EXECUTABLE_OR_URL_PATTERN = /(?:https?|wss?|javascript|data):|<\s*script\b|\/\/|\bfunction\s*\w*\s*\(|=>|#!/i;
+const SECTION_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const HUMAN_NAME_PATTERN = /^[A-Z0-9][A-Za-z0-9]*(?:(?: | - |-)(?:[A-Z0-9][A-Za-z0-9]*|and))*$/;
+const FIGMA_FILE_KEY_PATTERN = /^(?:[A-Za-z0-9]{16,128}|[a-z][a-z0-9]*(?:-[a-z0-9]+)*)$/;
+const FIGMA_NODE_ID_PATTERN = /^\d+:\d+$/;
+const PREFIX_PATTERN = /^[A-Z][A-Z0-9]*$/;
+const MASTER_COMP_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
+const COMP_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
+const FONT_TOKEN_PATTERN = /^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
 
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid project profile at ${path}: ${message}`);
@@ -117,15 +123,50 @@ function characterCount(value: string): number {
   return Array.from(value).length;
 }
 
-function safeStringAt(value: unknown, path: string): string {
+function boundedStringAt(value: unknown, path: string): string {
   if (typeof value !== "string" || value.length === 0) invalid(path, "expected a non-empty string");
   if (characterCount(value) > PROFILE_LIMITS.maxNameCharacters) {
     invalid(path, `exceeds the ${PROFILE_LIMITS.maxNameCharacters}-character limit`);
   }
-  if (CONTROL_OR_PATH_PATTERN.test(value) || EXECUTABLE_OR_URL_PATTERN.test(value) || value === "." || value === "..") {
-    invalid(path, "unsafe value");
-  }
   return value;
+}
+
+function matchingStringAt(value: unknown, path: string, pattern: RegExp): string {
+  const result = boundedStringAt(value, path);
+  if (!pattern.test(result)) invalid(path, "unsafe value");
+  return result;
+}
+
+function humanNameAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, HUMAN_NAME_PATTERN);
+}
+
+function figmaFileKeyAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, FIGMA_FILE_KEY_PATTERN);
+}
+
+function figmaNodeIdAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, FIGMA_NODE_ID_PATTERN);
+}
+
+function sectionIdAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, SECTION_ID_PATTERN);
+}
+
+function prefixAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, PREFIX_PATTERN);
+}
+
+function masterCompBaseAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, MASTER_COMP_PATTERN);
+}
+
+function compNameAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, COMP_NAME_PATTERN);
+}
+
+function fontTokenAt(value: unknown, path: string): string {
+  return matchingStringAt(value, path, FONT_TOKEN_PATTERN);
 }
 
 function projectIdAt(value: unknown, path: string): string {
@@ -145,7 +186,7 @@ function exactFrameCount(value: number, fps: number, path: string): number {
 function fontIdentityAt(value: unknown, path: string): FontIdentity {
   const record = recordAt(value, path);
   exactKeys(record, ["family", "style"], path);
-  return { family: safeStringAt(record.family, `${path}.family`), style: safeStringAt(record.style, `${path}.style`) };
+  return { family: fontTokenAt(record.family, `${path}.family`), style: fontTokenAt(record.style, `${path}.style`) };
 }
 
 function fontKey(font: FontIdentity): string {
@@ -159,8 +200,8 @@ function sectionAt(value: unknown, path: string): ProfileSection {
   const lastShot = positiveSafeIntegerAt(record.lastShot, `${path}.lastShot`);
   if (lastShot < firstShot) invalid(`${path}.lastShot`, "must not precede firstShot");
   return {
-    id: safeStringAt(record.id, `${path}.id`),
-    name: safeStringAt(record.name, `${path}.name`),
+    id: sectionIdAt(record.id, `${path}.id`),
+    name: humanNameAt(record.name, `${path}.name`),
     firstShot,
     lastShot
   };
@@ -181,14 +222,14 @@ function shotAt(value: unknown, path: string): ProfileShot {
   if (duration <= 0) invalid(`${path}.duration`, "expected a positive number");
   const shot: ProfileShot = {
     index: positiveSafeIntegerAt(record.index, `${path}.index`),
-    nodeId: safeStringAt(record.nodeId, `${path}.nodeId`),
-    compName: safeStringAt(record.compName, `${path}.compName`),
+    nodeId: figmaNodeIdAt(record.nodeId, `${path}.nodeId`),
+    compName: compNameAt(record.compName, `${path}.compName`),
     start,
     duration
   };
-  if (Object.prototype.hasOwnProperty.call(record, "sectionId")) shot.sectionId = safeStringAt(record.sectionId, `${path}.sectionId`);
+  if (Object.prototype.hasOwnProperty.call(record, "sectionId")) shot.sectionId = sectionIdAt(record.sectionId, `${path}.sectionId`);
   if (Object.prototype.hasOwnProperty.call(record, "sectionParentNodeId")) {
-    shot.sectionParentNodeId = safeStringAt(record.sectionParentNodeId, `${path}.sectionParentNodeId`);
+    shot.sectionParentNodeId = figmaNodeIdAt(record.sectionParentNodeId, `${path}.sectionParentNodeId`);
   }
   return shot;
 }
@@ -296,19 +337,19 @@ export function validateProjectProfile(value: unknown): ProjectProfile {
     schemaVersion: "1.0.0",
     project: {
       id: projectIdAt(project.id, "$.project.id"),
-      displayName: safeStringAt(project.displayName, "$.project.displayName"),
+      displayName: humanNameAt(project.displayName, "$.project.displayName"),
       revision: positiveSafeIntegerAt(project.revision, "$.project.revision")
     },
     source: {
-      fileKey: safeStringAt(source.fileKey, "$.source.fileKey"),
-      pageId: safeStringAt(source.pageId, "$.source.pageId"),
-      pageName: safeStringAt(source.pageName, "$.source.pageName")
+      fileKey: figmaFileKeyAt(source.fileKey, "$.source.fileKey"),
+      pageId: figmaNodeIdAt(source.pageId, "$.source.pageId"),
+      pageName: humanNameAt(source.pageName, "$.source.pageName")
     },
     target: { width, height, fps, timeUnit: "seconds" },
     naming: {
-      shotPrefix: safeStringAt(naming.shotPrefix, "$.naming.shotPrefix"),
-      masterCompBase: safeStringAt(naming.masterCompBase, "$.naming.masterCompBase"),
-      importFolder: safeStringAt(naming.importFolder, "$.naming.importFolder")
+      shotPrefix: prefixAt(naming.shotPrefix, "$.naming.shotPrefix"),
+      masterCompBase: masterCompBaseAt(naming.masterCompBase, "$.naming.masterCompBase"),
+      importFolder: humanNameAt(naming.importFolder, "$.naming.importFolder")
     },
     timeline: { sections, shots },
     fontPolicy: { required, fallbacks },
