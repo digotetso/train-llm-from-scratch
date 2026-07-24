@@ -88,6 +88,29 @@ By the end, the learner should be able to:
 6. predict the result for one changed source; and
 7. distinguish character identification from text preparation.
 
+Before asking the lesson question, the opening must state that the course goal
+is to train an LLM from scratch. At this point, `LLM` is only the name of the
+system being built; its technical meaning is deferred until the relevant
+mechanism has been taught. The opening must then identify itself as a
+big-picture map of the complete course and describe the route in ordinary
+language:
+
+```text
+collect writing
+-> make it consistent
+-> split it into smaller pieces
+-> give the pieces numbers
+-> create learning exercises
+-> build an adjustable mathematical system
+-> improve it through practice
+-> test the result
+```
+
+The opening must tell learners that these stages have proper technical names
+and that each name will be introduced later, when the course reaches and
+explains the behavior it describes. Video 1 then narrows to the first handoff:
+turning collected writing into reliable starting material.
+
 ## Content Scope
 
 ### Keep And Integrate

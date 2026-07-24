@@ -136,8 +136,8 @@ Use exactly these headings:
 
 ```markdown
 ## 00:00 The Text Looks Simple
-## 01:25 Reveal What Is Really There
-## 03:09 Similar-Looking Marks Can Still Differ
+## 01:29 Reveal What Is Really There
+## 03:13 Similar-Looking Marks Can Still Differ
 ## 04:30 Where Do the Agreed Numbers Come From?
 ## 06:05 Which Differences Should We Preserve?
 ## 07:30 Apply One Chosen Rule Consistently
@@ -158,9 +158,31 @@ Begin with this inspectable source:
   second line
 ```
 
-Connect it to the familiar experience of entering text into an AI tool, but do
-not define LLMs, tokenizers, or training internals. Establish this exact central
-question:
+Connect it to the familiar experience of entering text into an AI tool, then
+state that the course goal is to train an LLM from scratch, starting before
+those abilities exist. Treat `LLM` only as the name of the system being built
+and promise to explain its technical meaning later.
+
+Identify the following as a big-picture map of the whole course, not a full
+explanation of its stages:
+
+```text
+collect writing
+-> make it consistent
+-> split it into smaller pieces
+-> give the pieces numbers
+-> create learning exercises
+-> build an adjustable mathematical system
+-> improve it through practice
+-> test the result
+```
+
+Tell learners that the stages have proper technical names and that each name
+will be introduced later, only after its behavior makes sense. Do not define
+LLMs, tokenizers, or training internals here.
+
+Narrow the map to Video 1's focus: the first handoff from collected writing to
+reliable starting material. Then establish this exact central question:
 
 > **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
@@ -528,8 +550,8 @@ script = path.read_text(encoding="utf-8")
 
 expected_headings = [
     "## 00:00 The Text Looks Simple",
-    "## 01:25 Reveal What Is Really There",
-    "## 03:09 Similar-Looking Marks Can Still Differ",
+    "## 01:29 Reveal What Is Really There",
+    "## 03:13 Similar-Looking Marks Can Still Differ",
     "## 04:30 Where Do the Agreed Numbers Come From?",
     "## 06:05 Which Differences Should We Preserve?",
     "## 07:30 Apply One Chosen Rule Consistently",
