@@ -12,7 +12,7 @@
 
 - Modify only `final_final copy` during implementation.
 - Preserve `final_final`, established course scripts, tests, media, animation, rendering, and production files.
-- Target 1,650-1,850 spoken words and approximately 15 minutes.
+- Target 1,800-1,950 spoken words and approximately 15 minutes.
 - Keep every spoken sentence at 40 words or fewer.
 - Use nine connected timestamped sections.
 - Explain behavior before naming code point, `repr`, normalization, NFKC, `splitlines`, `strip`, or `join`.
@@ -94,7 +94,7 @@ for raw_line in script.splitlines():
 
 spoken = " ".join(spoken_lines)
 word_count = len(spoken.split())
-assert 1650 <= word_count <= 1850, word_count
+assert 1800 <= word_count <= 1950, word_count
 
 for term in (
     "large language model",
@@ -116,7 +116,7 @@ PY
 
 Expected: FAIL on the heading-count assertion because the current draft has
 far more than nine timestamped sections. Its spoken-word count also exceeds
-1,850 and will fail after the section structure is corrected.
+1,950 and will fail after the section structure is corrected.
 
 ---
 
@@ -136,8 +136,8 @@ Use exactly these headings:
 
 ```markdown
 ## 00:00 The Text Looks Simple
-## 01:29 Reveal What Is Really There
-## 03:13 Similar-Looking Marks Can Still Differ
+## 01:54 Reveal What Is Really There
+## 03:38 Similar-Looking Marks Can Still Differ
 ## 04:30 Where Do the Agreed Numbers Come From?
 ## 06:05 Which Differences Should We Preserve?
 ## 07:30 Apply One Chosen Rule Consistently
@@ -550,8 +550,8 @@ script = path.read_text(encoding="utf-8")
 
 expected_headings = [
     "## 00:00 The Text Looks Simple",
-    "## 01:29 Reveal What Is Really There",
-    "## 03:13 Similar-Looking Marks Can Still Differ",
+    "## 01:54 Reveal What Is Really There",
+    "## 03:38 Similar-Looking Marks Can Still Differ",
     "## 04:30 Where Do the Agreed Numbers Come From?",
     "## 06:05 Which Differences Should We Preserve?",
     "## 07:30 Apply One Chosen Rule Consistently",
@@ -593,7 +593,7 @@ flush()
 
 spoken = "\n".join(spoken_blocks)
 word_count = len(re.sub(r"[*_`]", "", spoken).split())
-assert 1650 <= word_count <= 1850, word_count
+assert 1800 <= word_count <= 1950, word_count
 
 sentences = [
     sentence.strip()

@@ -12,23 +12,23 @@
   second line
 ```
 
-You may have seen an AI improve an email, rewrite a paragraph, or suggest code. Our course goal is to train an LLM from scratch, starting before those abilities exist. For now, LLM names the system we are building; we will explain its technical meaning later.
+You may have pasted text into an AI tool to improve an email, reshape a paragraph, or suggest code. To us, the text can look simple: a few words, a blank line, perhaps an unusual symbol. Yet the software receives every mark that was entered, including marks our eyes may skip over.
 
-Before examining this sample, let’s zoom out. This is the whole-course map, not a full explanation.
+This sample gives us a useful mystery. We can see spaces around the words, an empty line, a circled number, a wide letter, and a joined-looking symbol. There is also a mark before the second line that creates a gap but is difficult to see. Some marks even look interchangeable although software can tell them apart.
 
-We will collect writing, make it consistent, split it into pieces, give the pieces numbers, create learning exercises, build an adjustable mathematical system, improve it through practice, and test the result.
+Now let’s place that mystery inside the larger goal. We are training an LLM from scratch, beginning before those familiar abilities exist. For now, LLM names the system we are building; we will explain its technical meaning later.
+
+This is the whole-course map, not a full explanation. We will collect writing, make it consistent, split it into pieces, give the pieces numbers, create learning exercises, build an adjustable mathematical system, improve it through practice, and test the result.
 
 Each stage has a proper technical name. We will introduce each one later, only after its behavior makes sense.
 
-This video focuses on the first handoff: collected writing must become reliable starting material. Why? Software receives every saved mark, including marks our eyes may miss or confuse.
-
-Our sample contains spaces, an empty line, a hidden gap, and symbols that appear interchangeable. Before changing any of it, we need to discover what is actually there.
+This video focuses on the first handoff: turning collected writing into reliable starting material. Before changing the sample, we must discover what is actually there.
 
 So here is our question: **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
 By the end, you will reveal hidden marks, explain similar-looking differences, trace each chosen change, and predict a changed result.
 
-## 01:29 Reveal What Is Really There
+## 01:54 Reveal What Is Really There
 
 First, we need the exact text before any changes. We call it the **source text**, or simply the **source**.
 
@@ -62,7 +62,7 @@ Spaces, tabs, and marks that end lines create gaps rather than visible letters. 
 
 Hidden whitespace is now visible. But can two marks that are already visible also hide a difference?
 
-## 03:13 Similar-Looking Marks Can Still Differ
+## 03:38 Similar-Looking Marks Can Still Differ
 
 Look at these two marks before reading any result.
 

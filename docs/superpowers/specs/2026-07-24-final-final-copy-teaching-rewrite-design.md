@@ -202,7 +202,7 @@ metaphors in spoken narration.
 
 Target:
 
-- 1,650-1,850 spoken words;
+- 1,800-1,950 spoken words;
 - approximately 15 minutes including prediction and code-reading pauses;
 - no spoken sentence longer than 40 words; and
 - section pacing that does not require dense technical narration above roughly
