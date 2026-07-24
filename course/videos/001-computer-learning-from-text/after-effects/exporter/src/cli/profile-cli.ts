@@ -1,4 +1,4 @@
-import { open, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { stdin, stdout, stderr } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { ProfileRegistry } from "../bridge/profile-registry.ts";
 import { exporterPaths } from "../bridge/paths.ts";
 import { hashProjectProfile, validateProjectProfile, type ProjectProfile, type ProfileSummary } from "../shared/project-profile.ts";
+import { writeNewProfileJson } from "./profile-cli-runtime-internal.ts";
+import { PROFILE_LIMITS } from "../shared/limits.ts";
 
 export interface ProfileCliIo {
   readLine(prompt: string): Promise<string>;
@@ -50,7 +52,7 @@ function profileFileCommand(kind: "validate" | "inspect" | "install", argv: read
 export function parseProfileCli(argv: readonly string[]): ProfileCommand {
   const [kind, ...rest] = argv;
   if (kind === "init") {
-    if (rest.length !== 2 || rest[0] !== "--output" || rest[1] === undefined || rest[1].length === 0) return invalidCommand();
+    if (rest.length !== 2 || rest[0] !== "--output" || rest[1] === undefined || rest[1].length === 0 || rest[1].startsWith("--")) return invalidCommand();
     return { kind, output: rest[1] };
   }
   if (kind === "validate" || kind === "inspect" || kind === "install") return profileFileCommand(kind, rest);
@@ -91,14 +93,30 @@ function emit(io: ProfileCliIo, json: boolean, result: CliResult): void {
   destination(`status=${result.status} code=${result.code}${project} message=${result.message}\n`);
 }
 
-function errorCode(error: unknown, fallback: string): string {
+const SAFE_REGISTRY_CODES = new Set([
+  "PROFILE_REGISTRY_CAPACITY",
+  "PROFILE_REGISTRY_CORRUPT",
+  "PROFILE_REGISTRY_LOCKED",
+  "PROFILE_REGISTRY_UNSAFE_PATH",
+  "PROFILE_NOT_FOUND",
+  "PROFILE_REVISION_CONFLICT"
+]);
+
+function stableErrorCode(error: unknown): string | undefined {
   if (error instanceof ProfileCliError) return error.code;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") {
     if (error.code === "EEXIST") return "PROFILE_OUTPUT_EXISTS";
-    if (fallback === "PROFILE_INVALID" && (error.code === "EACCES" || error.code === "ENOENT" || error.code === "EPERM")) {
-      return "PROFILE_READ_FAILED";
-    }
-    if (error.code.startsWith("PROFILE_")) return error.code;
+    if (SAFE_REGISTRY_CODES.has(error.code)) return error.code;
+  }
+  if (error instanceof Error && SAFE_REGISTRY_CODES.has(error.message)) return error.message;
+  return undefined;
+}
+
+function errorCode(error: unknown, fallback: string, fileCommand: boolean): string {
+  const stable = stableErrorCode(error);
+  if (stable !== undefined) return stable;
+  if (fileCommand && error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") {
+    if (error.code === "EACCES" || error.code === "ENOENT" || error.code === "EPERM") return "PROFILE_READ_FAILED";
   }
   return fallback;
 }
@@ -109,7 +127,7 @@ function errorMessage(code: string): string {
   if (code === "PROFILE_INIT_TTY_REQUIRED") return "Profile initialization requires an interactive terminal";
   if (code === "PROFILE_INVALID") return "Profile is invalid";
   if (code === "PROFILE_READ_FAILED") return "Profile could not be read";
-  if (code.startsWith("PROFILE_REGISTRY_") || code === "PROFILE_REVISION_CONFLICT" || code === "PROFILE_NOT_FOUND") {
+  if (SAFE_REGISTRY_CODES.has(code)) {
     return "Profile registry operation failed";
   }
   return "Profile command failed";
@@ -177,7 +195,7 @@ async function wizardProfile(io: ProfileCliIo): Promise<ProjectProfile> {
   const masterCompBase = await required(io, "Master composition base: ");
   const importFolder = await required(io, "Import folder: ");
   const requiredFontCount = Number(await required(io, "Required font count: "));
-  if (!Number.isSafeInteger(requiredFontCount) || requiredFontCount < 0) {
+  if (!Number.isSafeInteger(requiredFontCount) || requiredFontCount < 0 || requiredFontCount > PROFILE_LIMITS.maxRequiredFonts) {
     throw new ProfileCliError("PROFILE_INVALID", "Profile is invalid");
   }
   const fonts: Array<{ family: string; style: string }> = [];
@@ -188,7 +206,7 @@ async function wizardProfile(io: ProfileCliIo): Promise<ProjectProfile> {
     });
   }
   const shotCount = Number(await required(io, "Shot count: "));
-  if (!Number.isSafeInteger(shotCount) || shotCount <= 0) {
+  if (!Number.isSafeInteger(shotCount) || shotCount <= 0 || shotCount > PROFILE_LIMITS.maxFrames) {
     throw new ProfileCliError("PROFILE_INVALID", "Profile is invalid");
   }
   const shots: ProjectProfile["timeline"]["shots"] = [];
@@ -222,7 +240,11 @@ async function wizardProfile(io: ProfileCliIo): Promise<ProjectProfile> {
 }
 
 function localProfile(value: unknown): ReturnType<typeof hashProjectProfile> {
-  return hashProjectProfile(validateProjectProfile(value));
+  try {
+    return hashProjectProfile(validateProjectProfile(value));
+  } catch {
+    throw new ProfileCliError("PROFILE_INVALID", "Profile is invalid");
+  }
 }
 
 export async function runProfileCli(
@@ -264,12 +286,10 @@ export async function runProfileCli(
     }
     return 0;
   } catch (error) {
-    const fallback = command.kind === "validate" || command.kind === "inspect" || command.kind === "install"
-      ? "PROFILE_INVALID"
-      : command.kind === "init" && isCancelled(error)
+    const fallback = command.kind === "init" && isCancelled(error)
         ? "PROFILE_INIT_CANCELLED"
         : "PROFILE_COMMAND_FAILED";
-    const code = errorCode(error, fallback);
+    const code = errorCode(error, fallback, command.kind !== "init" && command.kind !== "list");
     emit(io, json, { status: "error", code, message: errorMessage(code) });
     return 1;
   }
@@ -297,15 +317,7 @@ function runtimeIo(): ProfileCliIo & { close(): void } {
     stdout(value: string): void { stdout.write(value); },
     stderr(value: string): void { stderr.write(value); },
     async readJson(path: string): Promise<unknown> { return JSON.parse(await readFile(path, "utf8")); },
-    async writeNewJson(path: string, value: unknown): Promise<void> {
-      const handle = await open(path, "wx", 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-    },
+    writeNewJson: writeNewProfileJson,
     close(): void { lineReader?.close(); }
   };
 }
