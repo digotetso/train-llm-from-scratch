@@ -111,10 +111,65 @@ and that each name will be introduced later, when the course reaches and
 explains the behavior it describes. Video 1 then narrows to the first handoff:
 turning collected writing into reliable starting material.
 
+## Approved Training-Data Intuition
+
+The approved approach is a focused causal bridge, not a full preview of future
+lessons. Keep the existing familiar-experience hook and small-text mystery,
+then ask the course-level question in ordinary language:
+
+> How do we take writing like this and eventually use it to train an LLM?
+
+Build the answer in this order:
+
+1. Training requires many organized text examples. Explain that behavior, then
+   name the organized collection a **training dataset**.
+2. The system being built performs mathematical operations, and those
+   operations work with numbers. Therefore, later stages must represent the
+   text using numbers.
+3. “Turn text into numbers” is not one unexplained jump. Before the course
+   splits text into pieces and gives those pieces numbers, the collected text
+   must become reliable and consistent.
+4. Video 1 focuses on that preceding step: reveal what the collected text
+   actually contains, decide which differences matter, and apply the chosen
+   rules consistently.
+
+Keep this boundary explicit:
+
+> Unicode code points identify characters. They are inspection evidence in
+> this lesson, not the later numerical representation used to train the LLM.
+
+Explain why the step exists using plausible inconsistencies in large collected
+text sources:
+
+- extra or inconsistent spaces;
+- tabs, repeated blank lines, and differing line-ending marks;
+- hidden marks;
+- `①` versus `1`;
+- `Ａ` versus `A`;
+- `ﬀ` versus `ff`; and
+- quote or dash styles whose preservation depends on the purpose.
+
+Do not describe every difference as an error. The learner should understand
+that humans may infer the same intended role from two forms while software
+still receives different characters. That observed difference creates a
+choice; it does not by itself decide what should be changed.
+
+In the character section, show `①`/`1`, `Ａ`/`A`, and `ﬀ`/`ff` as a compact
+comparison. Ask whether similar appearance or use requires identical stored
+characters. Explain the shared numbering agreement before naming Unicode,
+then introduce code point and `ord`. Use the observed numbers to justify the
+need for a deliberate consistency rule.
+
 ## Content Scope
 
 ### Keep And Integrate
 
+- the course-level question of how collected writing can eventually be used
+  to train an LLM;
+- an ordinary-language explanation of an organized training dataset;
+- the reason later stages require numerical representations;
+- the explicit distinction between code-point identifiers and later LLM
+  training numbers;
 - the messy source example containing surrounding whitespace, an empty line,
   `①`, `Ａ`, and `ﬀ`;
 - inspection with `repr`;
@@ -130,7 +185,7 @@ turning collected writing into reliable starting material.
 ### Defer
 
 - formal definitions of LLMs and neural networks;
-- the complete training-data route;
+- detailed mechanisms after text preparation;
 - tokens, token IDs, vocabularies, embeddings, and numerical vectors;
 - tokenizer-level normalization;
 - compatibility decomposition and canonical composition;
@@ -144,12 +199,15 @@ building block for the next lesson. It must not preview untaught mechanisms.
 
 Use nine connected sections with provisional timestamps targeting 15 minutes:
 
-1. **Hook and central question** — begin with the visibly messy source text and
-   ask what software actually receives.
+1. **Hook, course intuition, and central question** — keep the familiar AI
+   experience and visibly messy source, connect them to the training-dataset
+   and eventual-number requirement, close later mechanisms, then ask what
+   software actually receives.
 2. **Inspect before changing** — use `repr` to expose spaces, tabs, and line
    endings before naming cleanup rules.
-3. **Similar-looking forms** — compare `①` with `1` and ask whether software
-   must treat them as identical.
+3. **Similar-looking forms** — compare `①`/`1`, `Ａ`/`A`, and `ﬀ`/`ff`, then
+   ask whether similar use or appearance requires identical stored
+   characters.
 4. **Character identification** — explain the fixed identification mechanism,
    then name Unicode code points and `ord`.
 5. **Choose what to preserve** — make the dataset goal explicit and show why
