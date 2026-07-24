@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { join, relative } from "node:path";
 import { ProfileRegistry } from "../src/bridge/profile-registry.ts";
@@ -13,6 +13,16 @@ import { makeFixtureProfile, makeVideo001Profile } from "./helpers/profile.ts";
 async function registryFixture(): Promise<{ root: string; registry: ProfileRegistry }> {
   const root = await mkdtemp("/private/tmp/video001-profile-registry-");
   return { root, registry: new ProfileRegistry(exporterPaths(root)) };
+}
+
+async function typescriptFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) files.push(...await typescriptFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(path);
+  }
+  return files;
 }
 
 function revisionPath(root: string, projectId: string, revision: number): string {
@@ -93,6 +103,7 @@ test("rejects corrupt or symlinked registry entries", async () => {
   const path = join(revisionPath(root, "fixture-two", 2), `${installed.profileSha256}.figma-ae-project.json`);
   await writeFile(path, "{}", { mode: 0o600 });
   await assert.rejects(registry.resolve(profileReference(installed)), /PROFILE_REGISTRY_CORRUPT/);
+  await assert.rejects(registry.list(), /PROFILE_REGISTRY_CORRUPT/);
 
   const second = await registryFixture();
   const safe = await second.registry.installValue(makeFixtureProfile());
@@ -103,6 +114,8 @@ test("rejects corrupt or symlinked registry entries", async () => {
   await rename(safePath, `${safePath}.real`);
   await symlink(outside, safePath);
   await assert.rejects(second.registry.resolve(profileReference(safe)), /PROFILE_REGISTRY_UNSAFE_PATH/);
+  await unlink(`${safePath}.real`);
+  await assert.rejects(second.registry.list(), /PROFILE_REGISTRY_UNSAFE_PATH/);
 });
 
 test("rejects a symlink in every registry-root ancestor", async () => {
@@ -148,6 +161,14 @@ test("exposes only generic own path keys and an explicit legacy queue adapter", 
   assert.deepEqual(new QueueStore(root).paths, legacy);
 });
 
+test("keeps the internal registry core package-private by import convention", async () => {
+  const importers: string[] = [];
+  for (const path of [...await typescriptFiles("src"), ...await typescriptFiles("tests")]) {
+    if ((await readFile(path, "utf8")).includes("profile-registry-internal.ts")) importers.push(path);
+  }
+  assert.deepEqual(importers.sort(), ["src/bridge/profile-registry.ts", "tests/profile-registry.test.ts"]);
+});
+
 test("recovers failed publication by removing its temporary file and created empty directories", async () => {
   const { root } = await registryFixture();
   let failOnce = true;
@@ -162,6 +183,75 @@ test("recovers failed publication by removing its temporary file and created emp
   await assert.rejects(lstat(revisionPath(root, "fixture-two", 2)), { code: "ENOENT" });
   await assert.rejects(lstat(join(root, "profiles", "fixture-two")), { code: "ENOENT" });
   assert.equal((await registry.installValue(makeFixtureProfile())).profile.project.id, "fixture-two");
+});
+
+test("recovers a directory created before its parent fsync fails", async () => {
+  const { root } = await registryFixture();
+  const project = join(root, "profiles", "fixture-two");
+  let failProjectParentSync = true;
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      if (failProjectParentSync && String(args[0]) === project) {
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "sync") return async () => {
+              failProjectParentSync = false;
+              throw new Error("INJECTED_PROJECT_PARENT_FSYNC_FAILURE");
+            };
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+      return handle;
+    }
+  });
+
+  await assert.rejects(registry.installValue(makeFixtureProfile()), /INJECTED_PROJECT_PARENT_FSYNC_FAILURE/);
+  assert.deepEqual(await registry.list(), []);
+  assert.equal((await registry.installValue(makeFixtureProfile())).profile.project.id, "fixture-two");
+});
+
+test("list releases its snapshot lock before validating immutable profile content", async () => {
+  const { root, registry } = await registryFixture();
+  const installed = await registry.installValue(makeFixtureProfile());
+  const profilePath = join(revisionPath(root, "fixture-two", 2), `${installed.profileSha256}.figma-ae-project.json`);
+  const reading = deferred();
+  const releaseRead = deferred();
+  let pauseRead = true;
+  const reader = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      if (pauseRead && String(args[0]) === profilePath) {
+        pauseRead = false;
+        reading.resolve();
+        await releaseRead.promise;
+      }
+      return realProfileRegistryFilesystem.open(...args);
+    }
+  });
+  const next = makeFixtureProfile();
+  (next.project as Record<string, unknown>).revision = 3;
+  let listingSettled = false;
+  const listing = reader.list().then((result) => { listingSettled = true; return result; });
+  await reading.promise;
+  let writerFinished = false;
+  const writer = coreRegistry(root).installValue(next).then(() => { writerFinished = true; });
+
+  try {
+    await Promise.race([
+      writer,
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("writer blocked by list content read")), 250))
+    ]);
+    assert.equal(writerFinished, true);
+    assert.equal(listingSettled, false);
+  } finally {
+    releaseRead.resolve();
+  }
+  await writer;
+  assert.deepEqual((await listing).map((summary) => `${summary.projectId}:${summary.revision}`), ["fixture-two:2"]);
 });
 
 test("cleans an acquired lock after a later lock fsync failure", async () => {

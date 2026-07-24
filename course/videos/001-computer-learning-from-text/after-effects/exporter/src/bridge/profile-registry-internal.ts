@@ -17,7 +17,10 @@ import {
 } from "../shared/project-profile.ts";
 import type { GenericExporterPaths } from "./paths.ts";
 
-/** Non-public filesystem boundary for deterministic registry tests. */
+/**
+ * Package-private-by-convention registry core and deterministic test boundary.
+ * Only the public facade and its dedicated registry tests may import this file.
+ */
 export interface ProfileRegistryFilesystem {
   link: typeof nodeFs.link;
   lstat: (path: string) => Promise<Stats>;
@@ -76,6 +79,12 @@ interface CreatedDirectory {
   identity: FileIdentity;
   parentPath: string;
   parentIdentity: FileIdentity;
+}
+
+interface RegistryEntry {
+  path: string;
+  reference: ProfileReference;
+  identity: FileIdentity;
 }
 
 function registryError(code: string): Error {
@@ -183,8 +192,8 @@ async function ensurePrivateDirectory(
         if (!isAlreadyExists(mkdirError)) throw mkdirError;
       }
       const identity = await lstatDirectory(filesystem, current, true);
-      await syncDirectory(filesystem, parent, parentIdentity, false);
       if (created) onCreated?.({ path: current, identity, parentPath: parent, parentIdentity });
+      await syncDirectory(filesystem, parent, parentIdentity, false);
     }
   }
   return lstatDirectory(filesystem, resolved);
@@ -215,30 +224,44 @@ async function syncDirectory(filesystem: Readonly<ProfileRegistryFilesystem>, pa
   await assertSafeExistingDirectoryAncestors(filesystem, path, requirePrivate);
 }
 
-async function readRegularFile(filesystem: Readonly<ProfileRegistryFilesystem>, path: string, requirePrivate = true): Promise<Buffer> {
+async function readRegularFile(
+  filesystem: Readonly<ProfileRegistryFilesystem>,
+  path: string,
+  requirePrivate = true,
+  expectedIdentity?: FileIdentity
+): Promise<Buffer> {
   await assertSafeExistingDirectoryAncestors(filesystem, dirname(path), requirePrivate);
-  const before = await lstatFile(filesystem, path, requirePrivate);
+  const before = expectedIdentity ?? await lstatFile(filesystem, path, requirePrivate);
   const handle = await filesystem.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || !sameIdentity(before, asFileIdentity(opened)) || opened.size > PROFILE_LIMITS.maxProfileBytes) {
       throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
     }
+    if (requirePrivate) assertPrivateMode(opened.mode, 0o600);
     const bytes = await handle.readFile();
     const after = await handle.stat();
     if (!sameIdentity(before, asFileIdentity(after)) || after.size !== bytes.byteLength) {
       throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
     }
+    if (requirePrivate) assertPrivateMode(after.mode, 0o600);
     return bytes;
   } finally {
     await handle.close();
   }
 }
 
-async function readInstalled(filesystem: Readonly<ProfileRegistryFilesystem>, path: string, expected: ProfileReference): Promise<InstalledProfile> {
+async function readInstalled(
+  filesystem: Readonly<ProfileRegistryFilesystem>,
+  path: string,
+  expected: ProfileReference,
+  expectedIdentity?: FileIdentity
+): Promise<InstalledProfile> {
+  let bytes: Buffer;
   let parsed: unknown;
   try {
-    parsed = JSON.parse((await readRegularFile(filesystem, path)).toString("utf8")) as unknown;
+    bytes = await readRegularFile(filesystem, path, true, expectedIdentity);
+    parsed = JSON.parse(bytes.toString("utf8")) as unknown;
   } catch (error) {
     if (isNotFound(error)) throw error;
     if ((error as Error).message.startsWith("PROFILE_REGISTRY_")) throw error;
@@ -256,8 +279,7 @@ async function readInstalled(filesystem: Readonly<ProfileRegistryFilesystem>, pa
     installed.profileSha256 !== expected.profileSha256
   ) throw registryError("PROFILE_REGISTRY_CORRUPT");
   const canonical = Buffer.from(canonicalProfileJson(installed.profile), "utf8");
-  const persisted = await readRegularFile(filesystem, path);
-  if (!persisted.equals(canonical)) throw registryError("PROFILE_REGISTRY_CORRUPT");
+  if (!bytes.equals(canonical)) throw registryError("PROFILE_REGISTRY_CORRUPT");
   return installed;
 }
 
@@ -294,12 +316,17 @@ export class ProfileRegistryCore {
   }
 
   async list(): Promise<ProfileSummary[]> {
-    return this.withEvent("list", undefined, () => this.withInstallLock(async () => {
-      const entries = await this.entries();
+    return this.withEvent("list", undefined, async () => {
+      // Entries are immutable and the registry never deletes them. Capture
+      // identity-checked paths under the lock, then validate their content
+      // outside it so a slow filesystem read cannot block an installer.
+      const entries = await this.withInstallLock(() => this.entries());
       const summaries: ProfileSummary[] = [];
-      for (const entry of entries) summaries.push(profileSummary(await readInstalled(this.filesystem, entry.path, entry.reference)));
+      for (const entry of entries) {
+        summaries.push(profileSummary(await readInstalled(this.filesystem, entry.path, entry.reference, entry.identity)));
+      }
       return summaries;
-    }));
+    });
   }
 
   async resolve(reference: ProfileReference): Promise<InstalledProfile> {
@@ -505,7 +532,7 @@ export class ProfileRegistryCore {
     return path;
   }
 
-  private async entries(): Promise<Array<{ path: string; reference: ProfileReference }>> {
+  private async entries(): Promise<RegistryEntry[]> {
     let projectNames: string[];
     try {
       await assertSafeExistingDirectoryAncestors(this.filesystem, this.paths.root);
@@ -515,7 +542,7 @@ export class ProfileRegistryCore {
       if (isNotFound(error)) return [];
       throw error;
     }
-    const entries: Array<{ path: string; reference: ProfileReference }> = [];
+    const entries: RegistryEntry[] = [];
     for (const projectId of projectNames.sort()) {
       if (projectId === INSTALL_LOCK_FILENAME) {
         await lstatFile(this.filesystem, join(this.paths.profiles, projectId));
@@ -540,8 +567,8 @@ export class ProfileRegistryCore {
         const profileSha256 = match[1]!;
         const path = join(revisionPath, file);
         assertContained(revisionPath, path);
-        await lstatFile(this.filesystem, path);
-        entries.push({ path, reference: { projectId, profileRevision: revision, profileSha256 } });
+        const identity = await lstatFile(this.filesystem, path);
+        entries.push({ path, reference: { projectId, profileRevision: revision, profileSha256 }, identity });
       }
     }
     return entries.sort((left, right) =>
