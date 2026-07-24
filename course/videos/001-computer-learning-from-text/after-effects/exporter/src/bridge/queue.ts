@@ -26,6 +26,9 @@ import {
 } from "../shared/contract.ts";
 import {
   isLegacyVideo001Package,
+  legacyVideo001PackageSuffix,
+  type LegacyVideo001ExternalPackage,
+  type LegacyVideo001Package,
   validateLegacyVideo001Package,
   validateLegacyVideo001PackageWithVerifiedAssets
 } from "../shared/legacy-video001.ts";
@@ -37,11 +40,10 @@ import {
   type BridgeOwner
 } from "./ownership.ts";
 import { legacyExporterPaths, type ExporterPaths } from "./paths.ts";
-import type { StreamedAssetFile } from "./streaming-package.ts";
+import { fingerprintStreamingPackage, type StreamedAssetFile } from "./streaming-package.ts";
 import { checkpointBridgeWork, type BridgeWorkContext } from "./work-control.ts";
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
-const PACKAGE_SUFFIX = ".video001-ae.json";
 const ERROR_SUFFIX = ".error.json";
 
 interface DirectoryIdentity {
@@ -55,9 +57,18 @@ export interface QueuedAsset extends Omit<AssetDescriptor, "dataBase64"> {
   path: string;
 }
 
-export interface QueuedPackage extends Omit<ExporterPackage, "assets"> {
+export interface GenericQueuedPackage extends Omit<ExporterPackage, "assets"> {
   assets: QueuedAsset[];
 }
+
+export interface LegacyQueuedPackage extends Omit<LegacyVideo001Package, "assets"> {
+  assets: QueuedAsset[];
+}
+
+export type QueuedPackage = GenericQueuedPackage | LegacyQueuedPackage;
+
+export type QueuePackageInput = ExporterPackage | LegacyVideo001Package;
+export type VerifiedQueuePackageInput = ExternalExporterPackage | LegacyVideo001ExternalPackage;
 
 export interface EnqueueResult {
   filename: string;
@@ -179,9 +190,13 @@ export class QueueStore {
     }
   }
 
+  async enqueue(value: QueuePackageInput): Promise<EnqueueResult>;
+  async enqueue(value: unknown): Promise<EnqueueResult>;
   async enqueue(value: unknown): Promise<EnqueueResult> {
     this.assertDirectoryIdentities();
-    const validated = (isLegacyVideo001Package(value) ? validateLegacyVideo001Package(value) : validatePackage(value)) as ExporterPackage;
+    const validated: QueuePackageInput = isLegacyVideo001Package(value)
+      ? validateLegacyVideo001Package(value)
+      : validatePackage(value);
     return this.enqueueValidated(validated, async (_index, asset) => {
       if (!("dataBase64" in asset)) throw new Error("In-memory asset data is missing");
       const bytes = Buffer.from(asset.dataBase64, "base64");
@@ -190,7 +205,7 @@ export class QueueStore {
   }
 
   async enqueueVerified(
-    value: ExternalExporterPackage,
+    value: VerifiedQueuePackageInput,
     sources: readonly StreamedAssetFile[],
     options: VerifiedEnqueueOptions = {}
   ): Promise<EnqueueResult> {
@@ -207,9 +222,19 @@ export class QueueStore {
     }));
     const evidence = sources.map((source) => ({ byteLength: source.size, hash: source.hash }));
     const byteCounts = { bodyBytes: normalizedManifestBytes, manifestBytes: normalizedManifestBytes };
-    const validated = (isLegacyVideo001Package(value)
-      ? validateLegacyVideo001PackageWithVerifiedAssets(validationValue, evidence, byteCounts)
-      : validatePackageWithVerifiedAssets(validationValue, evidence, byteCounts)) as ExternalExporterPackage;
+    const validated: VerifiedQueuePackageInput = isLegacyVideo001Package(value)
+      ? validateLegacyVideo001PackageWithVerifiedAssets(
+        validationValue,
+        evidence,
+        byteCounts,
+        await fingerprintStreamingPackage(
+          value,
+          sources,
+          this,
+          options.work === undefined ? {} : { work: options.work }
+        )
+      )
+      : validatePackageWithVerifiedAssets(validationValue, evidence, byteCounts);
     return this.enqueueValidated(validated, (index, asset) => {
       const source = sources[index];
       if (source === undefined) throw new Error("Verified asset source is missing");
@@ -218,12 +243,12 @@ export class QueueStore {
   }
 
   private async enqueueValidated(
-    validated: ExporterPackage | ExternalExporterPackage,
+    validated: QueuePackageInput | VerifiedQueuePackageInput,
     materializeAsset: (index: number, asset: AssetDescriptor | ExternalAssetDescriptor) => Promise<string>,
     work?: BridgeWorkContext
   ): Promise<EnqueueResult> {
     assertHash(validated.contentHash);
-    const filename = `${validated.contentHash}${PACKAGE_SUFFIX}`;
+    const filename = `${validated.contentHash}${legacyVideo001PackageSuffix}`;
     const destination = join(this.paths.incoming, filename);
     const lockPath = join(this.paths.tmp, `.${validated.contentHash}.enqueue.lock`);
     let lock: Awaited<ReturnType<typeof open>> | undefined;
@@ -503,7 +528,7 @@ export class QueueStore {
     this.assertDirectoryIdentities();
     assertHash(contentHash);
     void error;
-    const filename = `${contentHash}${PACKAGE_SUFFIX}`;
+    const filename = `${contentHash}${legacyVideo001PackageSuffix}`;
     const reportFilename = `${contentHash}${ERROR_SUFFIX}`;
     const source = join(this.paths.incoming, filename);
     const destination = join(this.paths.quarantine, filename);

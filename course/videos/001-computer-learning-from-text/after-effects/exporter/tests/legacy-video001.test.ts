@@ -40,6 +40,12 @@ test("keeps schema-2 and Video 001 media literals out of the generic contract an
   assert.match(adapterSource, /application\/vnd\.video001/);
 });
 
+test("keeps the queue's Video 001 filename suffix in the legacy adapter", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("../src/bridge/queue.ts", import.meta.url)), "utf8");
+  assert.match(queueSource, /legacyVideo001PackageSuffix/);
+  assert.doesNotMatch(queueSource, /const PACKAGE_SUFFIX\s*=/);
+});
+
 test("rejects legacy data when the installed profile is not the exact bundled Video 001 profile", () => {
   assert.throws(
     () => adaptLegacyVideo001Package(legacyVideo001Package(), hashProjectProfile(makeFixtureProfile())),

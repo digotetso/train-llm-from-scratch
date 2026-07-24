@@ -8,7 +8,12 @@ import {
   type ExternalExporterPackage,
   type VerifiedAssetEvidence
 } from "../shared/contract.ts";
-import { isLegacyVideo001Package, validateLegacyVideo001PackageWithVerifiedAssets } from "../shared/legacy-video001.ts";
+import {
+  isLegacyVideo001Package,
+  validateLegacyVideo001PackageWithVerifiedAssets,
+  validateLegacyVideo001StreamingEnvelope,
+  type LegacyVideo001ExternalPackage
+} from "../shared/legacy-video001.ts";
 import { LIMITS } from "../shared/limits.ts";
 import {
   ownedHttpTemporaryFilename,
@@ -56,7 +61,7 @@ export interface StreamingPackageResult {
   assets: StreamedAssetFile[];
   bodyBytes: number;
   manifestBytes: number;
-  package: ExternalExporterPackage;
+  package: ExternalExporterPackage | LegacyVideo001ExternalPackage;
 }
 
 export interface StreamingReadOptions {
@@ -701,7 +706,10 @@ export async function readStreamingPackage(
       throw new Error("HTTP body spool changed during streaming parse");
     }
     const packageValue = isLegacyVideo001Package(value)
-      ? validateLegacyVideo001PackageWithVerifiedAssets(value, parser.verifiedEvidence, { bodyBytes: spool.size, manifestBytes: reader.manifestBytes })
+      ? await validateLegacyStreamingPackage(value, parser, queue, {
+        bodyBytes: spool.size,
+        manifestBytes: reader.manifestBytes
+      }, options.work)
       : validatePackageWithVerifiedAssets(value, parser.verifiedEvidence, { bodyBytes: spool.size, manifestBytes: reader.manifestBytes });
     return {
       assets: [...parser.assets],
@@ -715,6 +723,30 @@ export async function readStreamingPackage(
   } finally {
     await handle.close();
   }
+}
+
+async function validateLegacyStreamingPackage(
+  value: unknown,
+  parser: StreamingJsonParser,
+  queue: QueueStore,
+  byteCounts: { bodyBytes: number; manifestBytes: number },
+  work?: BridgeWorkContext
+): Promise<LegacyVideo001ExternalPackage> {
+  // This must happen before inspecting verified asset evidence: the legacy
+  // schema has its own frame cap and canonical schema-2 fingerprint.
+  validateLegacyVideo001StreamingEnvelope(value);
+  const canonicalContentHash = await fingerprintStreamingPackage(
+    value,
+    parser.assets,
+    queue,
+    work === undefined ? {} : { work }
+  );
+  return validateLegacyVideo001PackageWithVerifiedAssets(
+    value,
+    parser.verifiedEvidence,
+    byteCounts,
+    canonicalContentHash
+  );
 }
 
 class ExternalCanonicalBase64 {
@@ -808,11 +840,12 @@ async function updateBase64Hash(
 }
 
 export async function fingerprintStreamingPackage(
-  value: ExternalExporterPackage,
+  value: unknown,
   assets: readonly StreamedAssetFile[],
   queue: QueueStore,
   options: { chunkBytes?: number; work?: BridgeWorkContext } = {}
 ): Promise<string> {
+  if (!hasPackageAssets(value)) throw new Error("Streamed package does not contain an asset array");
   if (value.assets.length !== assets.length) throw new Error("Streamed asset count does not match the package");
   const chunkBytes = positiveInteger("chunkBytes", options.chunkBytes ?? DEFAULT_FILE_CHUNK_BYTES);
   const canonicalValue = {
@@ -828,4 +861,12 @@ export async function fingerprintStreamingPackage(
   await checkpointBridgeWork(options.work, "fingerprint", 0);
   await updateCanonicalHash(hash, canonicalValue, queue, chunkBytes, options.work);
   return hash.digest("hex");
+}
+
+function hasPackageAssets(value: unknown): value is Record<string, unknown> & { assets: Record<string, unknown>[] } {
+  return isRecord(value) && Array.isArray(value.assets) && value.assets.every(isRecord);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

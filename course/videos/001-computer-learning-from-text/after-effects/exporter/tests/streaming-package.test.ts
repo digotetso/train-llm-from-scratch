@@ -25,6 +25,7 @@ import {
   validatePackage
 } from "../src/shared/contract.ts";
 import { LIMITS } from "../src/shared/limits.ts";
+import { canonicalJson } from "../src/shared/contract.ts";
 import { finalizeLegacyVideo001Package, legacyVideo001ExportMediaType } from "../src/shared/legacy-video001.ts";
 import { makeValidPackage } from "./helpers/package.ts";
 
@@ -532,4 +533,94 @@ test("legacy controller wire payload keeps its schema-2 content hash and media s
   const persisted = JSON.parse(await readFile(queued.path, "utf8"));
   assert.deepEqual(persisted, legacy);
   assert.equal(queued.filename, `${legacy.contentHash}.video001-ae.json`);
+});
+
+test("legacy streaming rejects a canonically hashed 49-frame package before it queues anything", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-legacy-49-streaming-"));
+  const queue = new QueueStore(root, OWNER);
+  const generic = makeValidPackage();
+  const { project: _project, ...legacyInput } = generic;
+  const legacy = finalizeLegacyVideo001Package({ ...legacyInput, schemaVersion: "2.0.0", contentHash: "" });
+  const frame = legacy.frames[0]!;
+  const oversized = {
+    ...legacy,
+    frames: Array.from({ length: 49 }, (_, index) => {
+      const next = structuredClone(frame);
+      next.nodeId = `legacy-stream-${index}`;
+      next.children[0]!.id = `legacy-stream-node-${index}`;
+      return next;
+    })
+  };
+  oversized.contentHash = createHash("sha256").update(canonicalJson({ ...oversized, exportedAt: "", contentHash: "" })).digest("hex");
+  const body = JSON.stringify(oversized);
+
+  await assert.rejects(
+    readStreamingPackage(await spool(queue, body), queue, OWNER, { chunkBytes: 3, limits: limits(body, generic) }),
+    /48-frame limit/i
+  );
+  assert.deepEqual(await readdir(queue.paths.incoming), []);
+});
+
+test("legacy verified streaming rejects changed identities, tampered bytes, and declared SHA-256 mismatches", async () => {
+  const createLegacyAssetPackage = () => {
+    const generic = makeValidPackage();
+    addAsset(generic, Buffer.from("legacy verified asset"), "legacy-asset");
+    const { project: _project, ...legacyInput } = generic;
+    return finalizeLegacyVideo001Package({ ...legacyInput, schemaVersion: "2.0.0", contentHash: "" });
+  };
+  const legacy = createLegacyAssetPackage();
+  const body = JSON.stringify(legacy);
+  const legacyLimits = (candidateBody: string, assets = legacy.assets) =>
+    limits(candidateBody, { ...makeValidPackage(), assets });
+
+  const tamperRoot = await mkdtemp(join(tmpdir(), "video001-legacy-tamper-"));
+  const tamperQueue = new QueueStore(tamperRoot, OWNER);
+  const tampered = await readStreamingPackage(await spool(tamperQueue, body), tamperQueue, OWNER, {
+    chunkBytes: 3,
+    limits: legacyLimits(body)
+  });
+  await writeFile(tampered.assets[0]!.path, "tampered", { mode: 0o600 });
+  await assert.rejects(
+    tamperQueue.enqueueVerified(tampered.package, tampered.assets),
+    /changed|hash|identity/i
+  );
+  assert.deepEqual(await readdir(tamperQueue.paths.incoming), []);
+
+  const identityRoot = await mkdtemp(join(tmpdir(), "video001-legacy-identity-"));
+  const identityQueue = new QueueStore(identityRoot, OWNER);
+  const identity = await readStreamingPackage(await spool(identityQueue, body), identityQueue, OWNER, {
+    chunkBytes: 3,
+    limits: legacyLimits(body)
+  });
+  const movedPath = join(identityQueue.paths.tmp, ".untrusted-legacy-asset.tmp");
+  await rename(identity.assets[0]!.path, movedPath);
+  await assert.rejects(
+    identityQueue.enqueueVerified(identity.package, [{ ...identity.assets[0]!, path: movedPath }]),
+    /owner-stamped|owner|temporary/i
+  );
+  assert.deepEqual(await readdir(identityQueue.paths.incoming), []);
+  await rename(movedPath, identity.assets[0]!.path);
+  await cleanupStreamedAssets(identity.assets, identityQueue);
+
+  const hashRoot = await mkdtemp(join(tmpdir(), "video001-legacy-sha-"));
+  const hashQueue = new QueueStore(hashRoot, OWNER);
+  const wrongHash = structuredClone(legacy);
+  wrongHash.assets[0]!.hash = "f".repeat(64);
+  const wrongHashRaster = wrongHash.frames[0]!.children.find((node) => node.kind === "raster");
+  if (wrongHashRaster?.kind !== "raster") throw new Error("expected the legacy fixture to include a raster node");
+  wrongHashRaster.assetHash = wrongHash.assets[0]!.hash;
+  wrongHash.contentHash = createHash("sha256")
+    .update(canonicalJson({ ...wrongHash, exportedAt: "", contentHash: "" }))
+    .digest("hex");
+  const wrongHashBody = JSON.stringify(wrongHash);
+  const hashMismatch = await readStreamingPackage(await spool(hashQueue, wrongHashBody), hashQueue, OWNER, {
+    chunkBytes: 3,
+    limits: legacyLimits(wrongHashBody, wrongHash.assets)
+  });
+  await assert.rejects(
+    hashQueue.enqueueVerified(hashMismatch.package, hashMismatch.assets),
+    /hash|verified/i
+  );
+  assert.deepEqual(await readdir(hashQueue.paths.incoming), []);
+  await cleanupStreamedAssets(hashMismatch.assets, hashQueue);
 });

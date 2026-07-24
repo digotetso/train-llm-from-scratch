@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   EXTERNAL_ASSET_DATA,
+  EXPORT_PACKAGE_MEDIA_TYPE,
+  EXPORT_PACKAGE_SUFFIX,
   canonicalJson,
   contentFingerprintInput,
   type ExporterPackage,
@@ -48,6 +50,11 @@ function addAsset(
 ): void {
   value.assets.push({ hash, mimeType: "image/png", byteLength, dataBase64 });
 }
+
+test("publishes the generic package media type and suffix", () => {
+  assert.equal(EXPORT_PACKAGE_MEDIA_TYPE, "application/vnd.figma-ae+json");
+  assert.equal(EXPORT_PACKAGE_SUFFIX, ".figma-ae.json");
+});
 
 test("accepts UTF-8 text without changing paragraph geometry", () => {
   const result = validatePackage(makeValidPackage());
