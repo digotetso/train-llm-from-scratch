@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status note (2026-07-24): Historical execution plan.** The final verification section in this document is superseded by `docs/superpowers/plans/2026-07-24-training-data-intuition-bridge.md`. Preserve this document as historical execution documentation. Do not run its timestamp-specific final validators against the current artifact.
+
 **Goal:** Rewrite `final_final copy` into a focused, fact-checked, approximately 15-minute beginner lesson that teaches learners to inspect and prepare source text before later AI work.
 
 **Architecture:** Keep one self-contained Markdown narration artifact. Build one causal chain from messy source text through inspection, code-point identification, chosen normalization, and a complete preparation function; close all later AI mechanisms. Verify the narration contract with temporary read-only scripts and execute every complete Python example shown in the lesson.

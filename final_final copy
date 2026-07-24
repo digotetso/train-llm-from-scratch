@@ -4,7 +4,7 @@
 
 ## 00:00 The Text Looks Simple
 
-[On screen: a text sample whose first line has two leading and two trailing spaces.]
+[On screen: the fenced sample below is a visual rendering, not the exact stored value. Production: reveal the surrounding spaces and the tab with visible markers. The exact stored value appears in the Python example below.]
 
 ```text
   Lesson ①: Ａ cat ﬀ
@@ -18,13 +18,13 @@ This sample gives us a useful mystery. We can see spaces around the words, an em
 
 Large collections used for training may combine writing from web pages, books, code, and other sources. Alongside what we see here, they can contain extra spaces, tabs, repeated blank lines, different ways of ending lines, hidden marks, or several symbols used for the same intended role.
 
-Now let’s place that mystery inside the larger goal. How do we take writing like this and eventually use it to train an LLM?
+Now let’s place that mystery inside the larger goal. This course will show how to train an LLM from scratch. How do we take writing like this and eventually use it to train an LLM?
 
 For now, LLM names the system we are building; we will explain its technical meaning later.
 
 Training needs many text examples arranged so the system can learn from them. Once those examples are organized, we call the collection a **training dataset**.
 
-Here is the whole-course map, not a full explanation. We collect writing, organize the training dataset, inspect and prepare the text, split it into pieces, give the pieces numbers, create learning exercises, and then train and test the system. Each later stage has a proper technical name. We will introduce each name only after its behavior makes sense.
+Here is the whole-course map, not a full explanation. We collect writing, organize the training dataset, make the text consistent, split it into smaller pieces, give the pieces numbers, create learning exercises, build an adjustable mathematical system, improve it through practice, and test the result. Each later stage has a proper technical name. We will introduce each name only after its behavior makes sense.
 
 Why must the text eventually become numbers? The system we are building performs mathematical operations, and those operations work with numbers. Therefore, a later stage must represent the writing using numbers.
 
@@ -35,7 +35,7 @@ Not every difference is an error. A quote style, dash, space, or symbol may be m
 So here is our question: **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
 
-## 03:00 Reveal What Is Really There
+## 03:10 Reveal What Is Really There
 
 We need the exact text before changes: the **source text**, or **source**.
 
@@ -103,7 +103,7 @@ Python’s `ord` asks Unicode for one character’s number, called a **code poin
 
 Keep one boundary clear. A code point number identifies a character. It is useful here because it proves that two similar-looking forms can be different stored characters. It is not yet the kind of number used to train the LLM. A later lesson will explain how prepared text becomes those training numbers.
 
-Some visible symbols use several code points. Each example today uses one, so we can follow one number at a time.
+`ord` receives one character at a time and returns that character’s code point here. In the comparison below, `ff` deliberately contains two characters and therefore two code points.
 
 `①` has code point `9312`; `1` has `49`. The same check exposes two more differences.
 
@@ -217,7 +217,7 @@ print("Prepared text:", repr(prepare_text(source)))
 
 We can now trace the program without a hidden jump: source handed in as `text`, NFKC changes, three-item list, whitespace removed, empty string rejected, two-item list, and one returned string.
 
-The source used `\r\n` to end each line, but the result uses `\n`. Normalization did not cause this change. `splitlines` separated the original endings, and `join` rebuilt the two remaining lines with the mark written before it.
+The source uses `\r\n` at its two line boundaries; the final line has no ending mark. Normalization did not cause the result’s `\n`. `splitlines` separates those boundaries before `join` inserts one `\n` between the surviving lines.
 
 ## 12:10 Predict, Run, and Change the Starting Text
 
