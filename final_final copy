@@ -1,8 +1,8 @@
-# Video 1 — Inspecting and Preparing Source Text
+# Video 1 — What Is Really Inside Text, and How Can We Prepare It?
 
 ---
 
-## 00:00 The Messy Text in Front of Us
+## 00:00 The Text Looks Simple
 
 [On screen: a text sample whose first line has two leading and two trailing spaces.]
 
@@ -12,25 +12,27 @@
   second line
 ```
 
-You may have pasted text into an AI tool to improve an email, reshape a paragraph, or suggest code. That experience starts with text that looks ordinary to us. But before later AI work can use source text consistently, software has to deal with the marks that are actually there, including marks we may not notice at a glance.
+You may have pasted text into an AI tool to improve an email, reshape a paragraph, or suggest code. To us, the text can look simple: a few words, a blank line, perhaps an unusual symbol. Yet the software receives every mark that was entered, including marks our eyes may skip over.
 
-This small sample gives us a useful mystery. It has spaces around the words, an empty line, a tab before the second line, a circled number, a wide letter, and a joined-looking symbol. Some of those details are visible. Some are easy to miss. Some look interchangeable even though software may identify them differently.
+This sample gives us a useful mystery. We can see spaces around the words, an empty line, a circled number, a wide letter, and a joined-looking symbol. There is also a mark before the second line that creates a gap but is difficult to see. Some marks even look interchangeable although software can tell them apart.
 
-Our central question is: **How can we inspect and prepare source text consistently before later AI work?**
+So here is our question: **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
-By the end, you will be able to inspect hidden marks, distinguish character identity from preparation, trace every transformation in one small function, and predict what happens when we change the input. We will not try to fix the text by instinct. We will first find out what the source contains.
+By the end, you will be able to reveal marks that normal printing hides, explain why similar-looking characters may still differ, follow every change from the starting text to the result, and predict what happens when the starting text changes. We will not change anything by instinct. We will first find out what is actually there.
 
-## 01:25 Inspect Before You Change Anything
+## 01:25 Reveal What Is Really There
 
-Here is the exact Python string behind the sample. The escape marks make its line endings and tab part of the source, even though normal printing can make those details hard to notice.
+First, we need the exact text before any changes. We call that starting text the **source text**, or simply the **source**.
+
+Python stores text between quotation marks and calls the stored text a **string**. Here is our source string.
 
 ```python
 source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
 ```
 
-If we print `source` normally, what might our eyes hide? We can see the words and the unusual symbols, but it is easy to overlook how many spaces surround a line, where a tab sits, or whether one blank-looking gap contains an empty line.
+The backslash combinations stand for marks that are hard to show on this line. What might normal printing hide? We may overlook the surrounding spaces, the mark before the second line, or the empty line.
 
-Python can show a string in a form that exposes those otherwise quiet marks. It uses a representation named `repr`.
+We need a view that keeps those marks visible instead of turning them into spacing. Python calls this tool `repr`.
 
 ```python
 print(repr(source))
@@ -40,11 +42,13 @@ print(repr(source))
 '  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
 ```
 
-Now the source gives us evidence instead of an impression. `\t` is a tab. `\r\n` is one line ending. `\r\n\r\n` is two consecutive line endings, with an empty line between them. The quotation marks also let us see where the whole string begins and ends, so the surrounding spaces have somewhere definite to belong.
+Now we have evidence. `\t` is the tab mark that created the larger gap. `\r\n` ends one line. Two together, `\r\n\r\n`, end the first line and then an empty line. The quotation marks show the string’s boundaries, making its surrounding spaces countable.
 
-That is why inspection comes first. `repr` does not change the source; it only gives us a clearer view of it. Once hidden whitespace is visible, a second question follows naturally: perhaps visible forms can hide differences too.
+Spaces, tabs, and marks that end lines create gaps rather than visible letters. Together, Python calls them **whitespace**. Using `repr` to reveal the source is **inspection**. Inspection changes nothing; it only gives us a clearer view.
 
-## 03:05 Similar-Looking Text Can Still Differ
+Hidden whitespace is now visible. But can two marks that are already visible also hide a difference?
+
+## 03:05 Similar-Looking Marks Can Still Differ
 
 Look at these two characters before reading any result.
 
@@ -52,9 +56,9 @@ Look at these two characters before reading any result.
 ①    1
 ```
 
-They can both communicate the idea of one in an ordinary sentence. Does that similar appearance mean software must give them the same fixed identifier? Pause for a prediction. If you think the answer is yes, what would make the circled form distinguishable? If you think the answer is no, how could we check without trusting our eyes?
+They can both communicate the idea of one in an ordinary sentence. Does that similar meaning force software to treat them as the same character? Pause for a prediction. If you think yes, how would software preserve the circle? If you think no, what fixed difference could we check without trusting our eyes?
 
-Python gives us a tiny experiment. Run these two calls and compare the numbers.
+Python can ask for the agreed number used to identify each character. It calls this tool `ord`. Run these two lines and compare the results.
 
 ```python
 print(ord("①"))
@@ -66,15 +70,17 @@ print(ord("1"))
 49
 ```
 
-The numbers differ, so these are not the same character in this example. The result does not say that one form is better, nor does it tell us what we should change. It only reveals an identity difference that ordinary printing did not explain. To understand what those numbers mean, we need the shared system that assigns them.
+The numbers differ, so these are not the same character in this example. The result does not say that one is better or that either should change. It only reveals that the two characters have different agreed numbers. Now we can ask where that agreement comes from and what Python calls each number.
 
 ## 04:30 How Can Software Identify a Character?
 
-Unicode is a shared system for identifying characters with fixed numbers. In today’s examples, Python’s `ord` asks for that number for one character. The number is called a code point.
+Software needs a shared agreement so the same character can be identified consistently on different systems. The widely used agreement in our example is called **Unicode**.
 
-> A code point is the fixed number Unicode uses to identify a character in today’s examples.
+Python’s `ord` tool asks Unicode for the number assigned to one character. That number has a technical name: a **code point**.
 
-That sentence is deliberately narrow. Some visible symbols contain several code points. Today’s examples each use one, so we can trace them one at a time.
+> In today’s examples, a code point is the fixed number Unicode uses to identify one character.
+
+That explanation is deliberately narrow. Some visible symbols are built from several code points. Each symbol we inspect today uses one, so we can follow the numbers one at a time.
 
 The earlier result now has a concrete meaning: `①` has code point `9312`, while `1` has code point `49`. The same check exposes two more differences that may be easy to miss when we read quickly.
 
@@ -107,9 +113,11 @@ For this example, we choose to treat each displayed pair as a consistent ordinar
 
 We can make that choice because inspection exposed the source and code points exposed the identities. The next question is how to apply this one chosen consistency rule reliably instead of changing characters one by one.
 
-## 07:30 One Chosen Rule: Unicode Normalization
+## 07:30 Apply One Chosen Rule Consistently
 
-Mapping selected alternate Unicode forms to a chosen consistent representation is called normalization. Unicode provides several normalization forms. The one we will use is called NFKC, and it produces the three chosen changes we just observed: `①` becomes `1`, `Ａ` becomes `A`, and `ﬀ` becomes `ff`.
+We want the same selected changes every time: `①` should become `1`, `Ａ` should become `A`, and `ﬀ` should become `ff`. Applying a defined Unicode rule to produce chosen consistent forms is called **normalization**.
+
+Unicode offers several normalization rules because different situations preserve different distinctions. The particular rule used in this lesson is named **NFKC**. For our three examples, NFKC produces exactly the changes we chose.
 
 Notice that normalization can change more than appearance. In the first case, the string keeps the same length.
 
@@ -127,11 +135,15 @@ length 1 -> 2
 
 That length change is why this is a rule we choose, not a visual polish we can assume is harmless. NFKC can remove distinctions that matter, so it is a chosen rule for this example—not a universal definition of clean text.
 
-Normalization settles only the character forms we selected. Our inspected source still has line endings, an empty line, a tab, and surrounding spaces. A complete preparation step must account for those marks too, with each change visible in the trace.
+Normalization settles only the character forms we selected. Our source still has marks that end lines, an empty line, a tab, and surrounding spaces. We also want repeatable rules for those marks. Combining all these chosen changes into one repeatable process is what we will call **text preparation**.
 
-## 09:05 Trace the Complete Preparation Function
+## 09:05 Put the Chosen Steps Into One Recipe
 
-Here is the whole program. Read it once from top to bottom before running it. It keeps the source, applies our chosen Unicode rule, handles the lines, and finally prints both versions so we can compare them.
+Before looking at the code, let’s state the recipe. Apply NFKC to the source. Separate its lines. Remove spacing from both ends of each line. Drop empty lines. Rebuild what remains with one chosen mark between the lines.
+
+Python gives three operations short names. Separating text where lines end is `splitlines`. Removing whitespace from both ends is `strip`. Rebuilding pieces with one chosen mark between them is `join`.
+
+Python calls a reusable group of instructions a **function**. We will name ours `prepare_text`. The first line makes Python’s Unicode tools available. When the work is finished, the result must go back to the line that requested it; Python marks that final step with `return`.
 
 ```python
 import unicodedata
@@ -150,17 +162,19 @@ print("Source text:", repr(source))
 print("Prepared text:", repr(prepare_text(source)))
 ```
 
-Follow the function in the order the statements run. First, `unicodedata.normalize("NFKC", text)` applies the selected rule, changing `①`, `Ａ`, and `ﬀ`. The text is still one string at that point; its whitespace has not yet been removed.
+Follow the instructions in order. First, `unicodedata.normalize("NFKC", text)` changes `①`, `Ａ`, and `ﬀ`. The text is still one string, and all its whitespace remains.
 
-Next, the program separates the string wherever a line ending occurs. Python calls that operation `splitlines`. Our source becomes three lines: the first text line, an empty line, and the second text line. For each of those lines, `strip` removes whitespace from its beginning and end. That takes away the spaces around the first line and the tab plus spaces around the second line.
+Next, `splitlines` creates three lines: the first text line, an empty line, and the second text line. Then `strip` removes the spaces around the first line and the tab plus spaces around the second.
 
-The next list keeps only lines that contain text, so the empty line drops out. Finally, `"\n".join(non_empty_lines)` places one newline between the remaining lines. Python calls that rebuilding operation `join`. The complete sequence is therefore source string, NFKC changes, split lines, trimmed lines, empty line removed, two lines joined, prepared string. Nothing in the output needs a hidden jump.
+The square-bracket line keeps only lines containing text, so the empty line drops out. Finally, `"\n".join(non_empty_lines)` rebuilds the two remaining lines. Here, `\n` ends the first prepared line.
 
-One detail is worth holding onto as we test it. The original source used `\r\n` line endings, but the prepared result uses `\n` between its remaining lines. That change does not come from normalization. It comes from first separating lines and then deliberately rebuilding them with the one separator written in the return statement.
+We can now trace the whole process without a hidden jump: source string, NFKC changes, three separated lines, whitespace removed from their ends, empty line removed, two lines rebuilt, prepared string.
 
-## 11:15 Predict, Run, and Change One Input
+The source used `\r\n` to end each line, but the result uses `\n`. Normalization did not cause this. The program separated the lines, then rebuilt them using the mark written before `join`.
 
-Save this exact program in a working folder you control as `inspect_and_prepare_text.py`. Before you run it, make a complete prediction. Which Unicode forms will change? Which whitespace will disappear? Will the empty line remain? Which line separator will remain between the two surviving lines? Use the function, not a guess from how the source looks on screen.
+## 11:15 Predict, Run, and Change the Starting Text
+
+Save this exact program in a folder you control as `inspect_and_prepare_text.py`. Before you run it, make a complete prediction. Which characters will NFKC change? Which whitespace will `strip` remove? Will the empty line remain? Which mark will `join` place between the surviving lines? Use the recipe we traced, not a guess from how the source looks.
 
 Then run it from that same working folder.
 
@@ -173,7 +187,7 @@ Source text: '  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
 Prepared text: 'Lesson 1: A cat ff\nsecond line'
 ```
 
-Compare the two printed representations carefully. NFKC changed `①` to `1`, `Ａ` to `A`, and `ﬀ` to `ff`. `splitlines` separated the original line endings. `strip` removed the leading and trailing spaces and the tab beside the text. The next list removed the now-empty middle line. `join` supplied the one `\n` that remains between the two prepared lines.
+Compare the two lines shown by `repr`. NFKC changed `①` to `1`, `Ａ` to `A`, and `ﬀ` to `ff`. `splitlines` created three lines. `strip` removed spaces and the tab from their ends. The square-bracket line left out the empty line. `join` placed one `\n` between the lines that remained.
 
 Now change only the source string. Keep the function exactly as it is.
 
@@ -181,22 +195,22 @@ Now change only the source string. Keep the function exactly as it is.
 source = "  Chapter ②: Ｂig oﬀice  \n\n  final line  "
 ```
 
-Predict the complete prepared representation before looking at the answer. Which characters follow the same chosen rule? Which whitespace operations behave exactly as before? The changed words are not the point; the causal chain should still do the explaining.
+Predict the exact prepared line that `repr` will show. Which characters follow the same NFKC rule? Which preparation steps behave exactly as before? The changed words are not the point. The recipe should still explain the result.
 
 ```text
 'Chapter 2: Big office\nfinal line'
 ```
 
-Here, `②` becomes `2`, `Ｂ` becomes `B`, and `ﬀ` within `oﬀice` becomes `ff`. The outer whitespace disappears, the empty line disappears, and one newline joins the two text lines. Because only the input changed, this second result tests whether your explanation transfers rather than whether you remembered the first output.
+Here, `②` becomes `2`, `Ｂ` becomes `B`, and `ﬀ` within `oﬀice` becomes `ff`. The outer whitespace disappears, the empty line disappears, and one newline joins the two text lines. Because only the starting text changed, this second result tests whether your explanation transfers rather than whether you remembered the first output.
 
 Do not treat the changed output as a new rule to memorize. It is evidence that the same function can be traced again. If your prediction differed, return to the first operation that would produce that difference. That habit is more useful than guessing what a preparation function ought to do.
 
 ## 13:30 Carry the Explanation Forward
 
-We can now answer the central question without treating preparation as a mystery. A code point identifies a character in today’s examples. Inspection reveals what the source actually contains. Normalization applies one chosen Unicode consistency rule. Text preparation combines that rule with other chosen transformations, such as handling lines and whitespace.
+We can now answer the central question without treating the changes as a mystery. The unchanged starting text is the source. Inspection reveals what that source actually contains. A code point identifies one character in today’s examples. Normalization applies a chosen Unicode rule. Text preparation combines normalization with the other chosen changes to lines and whitespace.
 
-The important distinction is simple: character identity tells us what is present, while preparation decides what to change for a stated purpose. We inspected before changing anything, chose NFKC with its boundary in view, and traced every step from the source string to the prepared result.
+The important distinction is simple: identification tells us what is present, while preparation applies decisions about what to change for a stated purpose. We inspected before changing anything, chose NFKC with its limit in view, and traced every step from the source string to the prepared result.
 
 That order protects us from a common mistake: seeing a difference and assuming it should disappear. A difference can be real, while the decision to preserve or change it still depends on the purpose we stated. Inspection gives us facts. Preparation applies our chosen rules to those facts.
 
-When you meet a new text sample, start the same way. Look for the actual marks, identify the differences you need to reason about, choose rules that fit the purpose, and test the result with a changed input. Prepared text is now a dependable building block for the next lesson.
+When you meet a new text sample, start the same way. Look for the actual marks, identify the differences you need to reason about, choose rules that fit the purpose, and test the result with changed starting text. Prepared text is now a dependable building block for the next lesson.

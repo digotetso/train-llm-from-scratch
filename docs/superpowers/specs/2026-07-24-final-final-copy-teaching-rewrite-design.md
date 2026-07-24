@@ -72,8 +72,8 @@ The learner is not assumed to understand:
 
 The lesson asks one central question:
 
-> **How can we inspect and prepare source text consistently before later AI
-> work?**
+> **How can we find out exactly what a piece of text contains and change it
+> consistently before later AI work?**
 
 By the end, the learner should be able to:
 

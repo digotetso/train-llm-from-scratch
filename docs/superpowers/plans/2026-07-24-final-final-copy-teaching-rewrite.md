@@ -108,7 +108,7 @@ for term in (
     assert term.casefold() not in spoken.casefold(), term
 
 assert (
-    "How can we inspect and prepare source text consistently before later AI work?"
+    "How can we find out exactly what a piece of text contains and change it consistently before later AI work?"
     in script
 )
 PY
@@ -135,14 +135,14 @@ far more than nine timestamped sections. Its spoken-word count also exceeds
 Use exactly these headings:
 
 ```markdown
-## 00:00 The Messy Text in Front of Us
-## 01:25 Inspect Before You Change Anything
-## 03:05 Similar-Looking Text Can Still Differ
+## 00:00 The Text Looks Simple
+## 01:25 Reveal What Is Really There
+## 03:05 Similar-Looking Marks Can Still Differ
 ## 04:30 How Can Software Identify a Character?
 ## 06:05 Which Differences Should We Preserve?
-## 07:30 One Chosen Rule: Unicode Normalization
-## 09:05 Trace the Complete Preparation Function
-## 11:15 Predict, Run, and Change One Input
+## 07:30 Apply One Chosen Rule Consistently
+## 09:05 Put the Chosen Steps Into One Recipe
+## 11:15 Predict, Run, and Change the Starting Text
 ## 13:30 Carry the Explanation Forward
 ```
 
@@ -162,7 +162,7 @@ Connect it to the familiar experience of entering text into an AI tool, but do
 not define LLMs, tokenizers, or training internals. Establish this exact central
 question:
 
-> **How can we inspect and prepare source text consistently before later AI work?**
+> **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
 State learner success in observable terms: inspect hidden marks, distinguish
 character identity from preparation, trace every transformation, and predict a
@@ -223,8 +223,8 @@ ord
 
 Use this compact operational definition:
 
-> A code point is the fixed number Unicode uses to identify a character in
-> today’s examples.
+> In today’s examples, a code point is the fixed number Unicode uses to
+> identify one character.
 
 Immediately add the scope boundary:
 
@@ -513,14 +513,14 @@ path = Path("final_final copy")
 script = path.read_text(encoding="utf-8")
 
 expected_headings = [
-    "## 00:00 The Messy Text in Front of Us",
-    "## 01:25 Inspect Before You Change Anything",
-    "## 03:05 Similar-Looking Text Can Still Differ",
+    "## 00:00 The Text Looks Simple",
+    "## 01:25 Reveal What Is Really There",
+    "## 03:05 Similar-Looking Marks Can Still Differ",
     "## 04:30 How Can Software Identify a Character?",
     "## 06:05 Which Differences Should We Preserve?",
-    "## 07:30 One Chosen Rule: Unicode Normalization",
-    "## 09:05 Trace the Complete Preparation Function",
-    "## 11:15 Predict, Run, and Change One Input",
+    "## 07:30 Apply One Chosen Rule Consistently",
+    "## 09:05 Put the Chosen Steps Into One Recipe",
+    "## 11:15 Predict, Run, and Change the Starting Text",
     "## 13:30 Carry the Explanation Forward",
 ]
 actual_headings = re.findall(r"^## \d{2}:\d{2} .+$", script, re.MULTILINE)
@@ -587,8 +587,8 @@ for term in (
     assert term.casefold() not in spoken.casefold(), term
 
 required = [
-    "How can we inspect and prepare source text consistently before later AI work?",
-    "A code point is the fixed number Unicode uses to identify a character in today’s examples.",
+    "How can we find out exactly what a piece of text contains and change it consistently before later AI work?",
+    "In today’s examples, a code point is the fixed number Unicode uses to identify one character.",
     "NFKC can remove distinctions that matter",
     "python inspect_and_prepare_text.py",
     "Prepared text: 'Lesson 1: A cat ff\\nsecond line'",
