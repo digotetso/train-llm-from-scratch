@@ -60,9 +60,10 @@ export async function writeNewProfileJson(
   try {
     const handle = await filesystem.open(temporary, "wx", 0o600);
     try {
+      // Establish ownership before any fallible write so cleanup never deletes by pathname alone.
+      temporaryIdentity = identity(await handle.stat());
       await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
       await handle.sync();
-      temporaryIdentity = identity(await handle.stat());
     } finally {
       await handle.close();
     }

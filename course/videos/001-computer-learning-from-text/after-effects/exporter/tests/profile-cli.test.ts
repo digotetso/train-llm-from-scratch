@@ -280,6 +280,36 @@ test("never unlinks a successor that replaces output after publication", async (
   assert.equal((await readdir(root)).some((entry) => entry.includes("race.json.tmp-")), false);
 });
 
+test("cleans only its owned temporary file after write and sync failures", async () => {
+  const root = await mkdtemp("/private/tmp/video001-profile-cli-writer-failure-");
+  for (const failure of ["writeFile", "sync"] as const) {
+    const output = join(root, `${failure}.json`);
+    await assert.rejects(
+      writeNewProfileJson(output, { value: 1 }, {
+        ...realProfileCliRuntimeFilesystem,
+        open: (async (...args: Parameters<typeof realProfileCliRuntimeFilesystem.open>) => {
+          const handle = await realProfileCliRuntimeFilesystem.open(...args);
+          if (String(args[0]).includes(`.${failure}.json.tmp-`)) {
+            return new Proxy(handle, {
+              get(target, property, receiver) {
+                if (property === failure) return async () => {
+                  throw Object.assign(new Error(`injected ${failure} failure`), { code: "EIO" });
+                };
+                const value = Reflect.get(target, property, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              }
+            });
+          }
+          return handle;
+        }) as unknown as typeof realProfileCliRuntimeFilesystem.open
+      }),
+      { code: "EIO" }
+    );
+    await assert.rejects(readFile(output, "utf8"), { code: "ENOENT" });
+    assert.equal((await readdir(root)).some((entry) => entry.includes(`.${failure}.json.tmp-`)), false);
+  }
+});
+
 test("derives contiguous declared sections from optional wizard section answers", async () => {
   const registry = await registryFixture();
   const io = scriptedIo([
