@@ -119,6 +119,42 @@ test("accepts normalized Unicode human names and conventional font identities", 
   }
 });
 
+test("rejects leading shell and executable command forms in declarative names", () => {
+  const cases: Array<[string, (value: Record<string, unknown>) => void]> = [
+    ["case-insensitive git status", (value) => { (value.project as Record<string, unknown>).displayName = "GIT status"; }],
+    ["ls -la", (value) => { (value.source as Record<string, unknown>).pageName = "ls -la"; }],
+    ["echo hello", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.family = "echo hello"; }],
+    ["find docs", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.style = "find docs"; }],
+    ["umask 077", (value) => { (value.naming as Record<string, unknown>).importFolder = "umask 077"; }],
+    ["Python runtime option", (value) => { (value.source as Record<string, unknown>).pageName = "Python -m"; }],
+    ["sftp command", (value) => { (value.project as Record<string, unknown>).displayName = "sftp archive"; }],
+    ["JavaScript declaration", (value) => { (value.project as Record<string, unknown>).displayName = "const Profile"; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const value = makeFixtureProfile();
+    mutate(value);
+    assert.throws(() => validateProjectProfile(value), /unsafe value/, label);
+  }
+});
+
+test("accepts language and runtime names when they are ordinary titles", () => {
+  for (const displayName of ["Python Basics", "Node Tutorial", "Java Course"]) {
+    const value = makeFixtureProfile();
+    (value.project as Record<string, unknown>).displayName = displayName;
+    assert.doesNotThrow(() => validateProjectProfile(value), displayName);
+  }
+});
+
+test("normalizes NFD names to NFC before canonical hashing", () => {
+  const nfd = makeFixtureProfile();
+  const nfc = makeFixtureProfile();
+  (nfd.naming as Record<string, unknown>).importFolder = "cafe\u0301 overview";
+  (nfc.naming as Record<string, unknown>).importFolder = "café overview";
+  assert.equal(validateProjectProfile(nfd).naming.importFolder, "café overview");
+  assert.equal(canonicalProfileJson(nfd), canonicalProfileJson(nfc));
+  assert.equal(hashProjectProfile(nfd).profileSha256, hashProjectProfile(nfc).profileSha256);
+});
+
 test("rejects revisions outside positive safe integer bounds", () => {
   for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const value = makeFixtureProfile();

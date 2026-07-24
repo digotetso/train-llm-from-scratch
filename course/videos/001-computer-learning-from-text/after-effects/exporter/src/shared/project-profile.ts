@@ -82,7 +82,20 @@ const PREFIX_PATTERN = /^[A-Z][A-Z0-9]*$/;
 const MASTER_COMP_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 const COMP_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
 const FONT_NAME_PATTERN = /^[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}&_'’ -]*[\p{L}\p{M}\p{N}])?$/u;
-const RESERVED_OPERATIONAL_TOKEN_PATTERN = /^(?:curl|wget|chmod|chown|rm|mv|cp|sh|bash|zsh|fish|cmd|powershell|pwsh|node|deno|bun|python(?:3)?|perl|ruby|php|java|sudo|ssh|scp|sftp|nc|netcat|telnet|osascript|eval|exec|function|const|let|var|import|require)\b/iu;
+// Defense in depth only: profile values are declarative data and are never executed.
+const DECLARATIVE_COMMAND_TOKENS = Object.freeze([
+  "alias", "awk", "basename", "bash", "bg", "break", "cat", "cd", "chgrp", "chmod", "chown", "command",
+  "cmd", "const", "continue", "cp", "curl", "cut", "dash", "date", "dd", "df", "diff", "dirname", "dirs", "disown", "docker",
+  "du", "echo", "env", "eval", "exec", "exit", "export", "fc", "fg", "find", "fish", "function", "getopts", "gh", "git",
+  "grep", "hash", "head", "history", "id", "install", "jobs", "kill", "kubectl", "less", "ln", "ls", "make",
+  "mkdir", "more", "mount", "mv", "nc", "netcat", "npm", "npx", "osascript", "pkill", "pnpm",
+  "import", "let", "powershell", "ps", "pwd", "pwsh", "read", "readonly", "require", "return", "rm", "rmdir", "scp", "sed", "set",
+  "sh", "sha256sum", "shift", "source", "sort", "sftp", "ssh", "stat", "sudo", "suspend", "tail", "tar", "tee", "telnet",
+  "terraform", "test", "times", "touch", "tr", "trap", "type", "ulimit", "umask", "unalias", "uname", "uniq", "unset",
+  "var", "wait", "wget", "which", "xargs", "yarn", "zsh"
+] as const);
+const RUNTIME_TITLE_TOKENS = Object.freeze(["bun", "deno", "java", "node", "perl", "php", "python", "python3", "ruby"] as const);
+const RUNTIME_COMMAND_OPTION_TOKENS = Object.freeze(["-c", "-m", "-v", "-V", "--help", "--version"] as const);
 
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid project profile at ${path}: ${message}`);
@@ -138,6 +151,15 @@ function matchingStringAt(value: unknown, path: string, pattern: RegExp): string
   return result;
 }
 
+function isDeclarativeCommandLanguage(value: string): boolean {
+  const tokens = value.split(" ");
+  const firstToken = tokens[0]!.toLowerCase();
+  if ((DECLARATIVE_COMMAND_TOKENS as readonly string[]).includes(firstToken)) return true;
+  if (!(RUNTIME_TITLE_TOKENS as readonly string[]).includes(firstToken)) return false;
+  const secondToken = tokens[1]?.toLowerCase();
+  return secondToken !== undefined && (RUNTIME_COMMAND_OPTION_TOKENS as readonly string[]).includes(secondToken);
+}
+
 function normalizedNamedStringAt(value: unknown, path: string, pattern: RegExp): string {
   const normalized = boundedStringAt(value, path).normalize("NFC");
   if (
@@ -145,7 +167,7 @@ function normalizedNamedStringAt(value: unknown, path: string, pattern: RegExp):
     normalized.endsWith(" ") ||
     normalized.includes("  ") ||
     !pattern.test(normalized) ||
-    RESERVED_OPERATIONAL_TOKEN_PATTERN.test(normalized)
+    isDeclarativeCommandLanguage(normalized)
   ) invalid(path, "unsafe value");
   return normalized;
 }
