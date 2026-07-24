@@ -137,6 +137,9 @@ test("rejects leading shell and executable command forms in declarative names", 
     ["uv run", (value) => { (value.project as Record<string, unknown>).displayName = "uv run"; }],
     ["pip install", (value) => { (value.project as Record<string, unknown>).displayName = "pip install"; }],
     ["npm install", (value) => { (value.project as Record<string, unknown>).displayName = "npm install"; }],
+    ["npm install Course", (value) => { (value.project as Record<string, unknown>).displayName = "npm install Course"; }],
+    ["python -m Tutorial", (value) => { (value.project as Record<string, unknown>).displayName = "python -m Tutorial"; }],
+    ["go test Guide", (value) => { (value.project as Record<string, unknown>).displayName = "go test Guide"; }],
     ["sftp command", (value) => { (value.project as Record<string, unknown>).displayName = "sftp archive"; }],
     ["JavaScript declaration", (value) => { (value.project as Record<string, unknown>).displayName = "const Profile"; }]
   ];

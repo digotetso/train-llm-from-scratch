@@ -94,7 +94,7 @@ const DECLARATIVE_COMMAND_TOKENS = Object.freeze([
   "terraform", "test", "times", "touch", "tr", "trap", "type", "ulimit", "umask", "unalias", "uname", "uniq", "unset",
   "var", "wait", "wget", "which", "xargs", "zsh"
 ] as const);
-// Runtime/tool-led labels are reserved unless their final token makes the entire phrase an educational title.
+// Runtime/tool-led labels are reserved unless the entire two-token phrase is an educational title.
 // Arbitrary command text is otherwise indistinguishable from a plain human-readable label.
 const RUNTIME_TOOL_TOKENS = Object.freeze([
   "bun", "cargo", "clang", "deno", "dotnet", "gcc", "go", "java", "node", "npm", "npx", "perl", "php",
@@ -163,8 +163,7 @@ function isReservedDeclarativeCommand(value: string): boolean {
   const firstToken = tokens[0]!.toLowerCase();
   if ((DECLARATIVE_COMMAND_TOKENS as readonly string[]).includes(firstToken)) return true;
   if (!(RUNTIME_TOOL_TOKENS as readonly string[]).includes(firstToken)) return false;
-  const finalToken = tokens[tokens.length - 1]!.toLowerCase();
-  return !(EDUCATIONAL_TITLE_FINAL_TOKENS as readonly string[]).includes(finalToken);
+  return tokens.length !== 2 || !(EDUCATIONAL_TITLE_FINAL_TOKENS as readonly string[]).includes(tokens[1]!.toLowerCase());
 }
 
 function normalizedNamedStringAt(value: unknown, path: string, pattern: RegExp): string {
