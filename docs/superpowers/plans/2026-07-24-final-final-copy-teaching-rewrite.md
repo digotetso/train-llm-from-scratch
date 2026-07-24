@@ -153,9 +153,9 @@ The final section is paced to end at approximately `15:00`.
 Begin with this inspectable source:
 
 ```text
-  Lesson ①: Ａ cat ﬀ  
+  Lesson ①: Ａ cat ﬀ
 
-  second line  
+  second line
 ```
 
 Connect it to the familiar experience of entering text into an AI tool, but do
