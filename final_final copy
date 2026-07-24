@@ -139,7 +139,7 @@ So the numbers tell us what is present. Which differences should we keep for thi
 
 For this example, we want the ordinary digit `1`, the basic letter `A`, and two letters, `ff`. That choice depends on what we need this text for. It does not mean the original forms are wrong. Code, poetry, math, or historical writing may need to keep differences that this example doesn’t.
 
-Here’s what we want to happen:
+Here are the changes we see in this example:
 
 ```text
 ① -> 1
@@ -147,7 +147,7 @@ Here’s what we want to happen:
 ﬀ -> ff
 ```
 
-Changing text in the same planned way each time is called **normalization**. The particular rule we use here is **NFKC**.
+**Normalization** means applying one standard character-conversion rule to the whole text. We choose the rule called **NFKC**.
 
 One change keeps the same length. Another makes the text longer:
 
@@ -169,7 +169,7 @@ Now that we’ve named the rules, let’s see exactly how each one changes the s
 
 ## 08:00 Put the Preparation Steps Together
 
-Text preparation is a useful name, but the name alone doesn’t explain what happens. First, NFKC changes the forms we chose. Then Python splits the result wherever it finds a line ending:
+Text preparation is a useful name, but the name alone doesn’t explain what happens. First, Python applies NFKC to the whole string. In this example, it changes the three forms we just saw. Then Python splits the result wherever it finds a line ending:
 
 ```text
 ['  Lesson 1: A cat ff  ', '', '\tsecond line  ']
@@ -224,7 +224,7 @@ Let’s trace the whole path:
 
 ```text
 source
-→ NFKC changes the selected forms
+→ apply NFKC to the whole string
 → split into three lines
 → remove surrounding whitespace
 → reject the empty line
