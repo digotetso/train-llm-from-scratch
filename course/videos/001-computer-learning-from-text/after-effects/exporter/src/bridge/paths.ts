@@ -39,24 +39,30 @@ export function exporterRoot(): string {
   return join(homedir(), "Library", "Application Support", "Video001FigmaAEExporter");
 }
 
-export function exporterPaths(root: string = exporterRoot()): GenericExporterPaths & ExporterPaths {
+export function exporterPaths(root: string = exporterRoot()): GenericExporterPaths {
   if (!isAbsolute(root)) throw new TypeError("Exporter root must be an absolute path");
   const resolvedRoot = resolve(root);
-  const paths: GenericExporterPaths = {
+  return {
     root: resolvedRoot,
     auth: join(resolvedRoot, "auth"),
     profiles: join(resolvedRoot, "profiles"),
     projects: join(resolvedRoot, "projects"),
     tmp: join(resolvedRoot, "tmp")
   };
-  // Existing queue consumers keep their flat locations until they migrate to projectPaths().
-  // They are non-enumerable so the generic public path value remains exactly project-scoped.
-  return Object.defineProperties(paths, {
-    incoming: { value: join(resolvedRoot, "incoming"), enumerable: false },
-    quarantine: { value: join(resolvedRoot, "quarantine"), enumerable: false },
-    assets: { value: join(resolvedRoot, "assets"), enumerable: false },
-    logs: { value: join(resolvedRoot, "logs"), enumerable: false }
-  }) as GenericExporterPaths & ExporterPaths;
+}
+
+/** @deprecated QueueStore compatibility until queue storage becomes project-scoped. */
+export function legacyExporterPaths(root: string = exporterRoot()): ExporterPaths {
+  if (!isAbsolute(root)) throw new TypeError("Exporter root must be an absolute path");
+  const resolvedRoot = resolve(root);
+  return {
+    root: resolvedRoot,
+    tmp: join(resolvedRoot, "tmp"),
+    incoming: join(resolvedRoot, "incoming"),
+    quarantine: join(resolvedRoot, "quarantine"),
+    assets: join(resolvedRoot, "assets"),
+    logs: join(resolvedRoot, "logs")
+  };
 }
 
 export function projectPaths(paths: GenericExporterPaths, projectId: string): ProjectPaths {

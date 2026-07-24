@@ -3,7 +3,8 @@ import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rename, symlink, write
 import test from "node:test";
 import { join, relative } from "node:path";
 import { ProfileRegistry } from "../src/bridge/profile-registry.ts";
-import { exporterPaths, projectPaths } from "../src/bridge/paths.ts";
+import { exporterPaths, legacyExporterPaths, projectPaths } from "../src/bridge/paths.ts";
+import { QueueStore } from "../src/bridge/queue.ts";
 import { PROFILE_LIMITS } from "../src/shared/limits.ts";
 import { canonicalProfileJson, profileReference } from "../src/shared/project-profile.ts";
 import { makeFixtureProfile, makeVideo001Profile } from "./helpers/profile.ts";
@@ -15,6 +16,11 @@ async function registryFixture(): Promise<{ root: string; registry: ProfileRegis
 
 function revisionPath(root: string, projectId: string, revision: number): string {
   return join(root, "profiles", projectId, String(revision));
+}
+
+function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>((complete) => { resolve = complete; }), resolve };
 }
 
 test("installs a canonical immutable profile with private permissions", async () => {
@@ -128,26 +134,93 @@ test("derives contained project-scoped paths", () => {
   for (const path of Object.values(project)) assert.equal(relative(paths.projects, path).startsWith(".."), false);
 });
 
-test("cleans temporary files after an atomic publication failure", async () => {
-  const { root, registry } = await registryFixture();
-  const profile = makeFixtureProfile();
-  await mkdir(revisionPath(root, "fixture-two", 2), { recursive: true, mode: 0o700 });
-  const path = join(revisionPath(root, "fixture-two", 2), "f".repeat(64) + ".figma-ae-project.json");
-  await symlink(join(root, "missing-target"), path);
+test("exposes only generic own path keys and an explicit legacy queue adapter", async () => {
+  const root = await mkdtemp("/private/tmp/video001-profile-paths-");
+  const generic = exporterPaths(root);
+  assert.deepEqual(Object.getOwnPropertyNames(generic).sort(), ["auth", "profiles", "projects", "root", "tmp"]);
+  const legacy = legacyExporterPaths(root);
+  assert.deepEqual(Object.keys(legacy).sort(), ["assets", "incoming", "logs", "quarantine", "root", "tmp"]);
+  assert.deepEqual(new QueueStore(root).paths, legacy);
+});
 
-  await assert.rejects(registry.installValue(profile), /PROFILE_REGISTRY_UNSAFE_PATH/);
+test("cleans a created temporary file when publication setup fails", async () => {
+  const { root } = await registryFixture();
+  const registry = new ProfileRegistry(exporterPaths(root), {
+    testHooks: { afterTemporaryCreated: async () => { throw new Error("INJECTED_TEMP_FAILURE"); } }
+  } as never);
+  await assert.rejects(registry.installValue(makeFixtureProfile()), /INJECTED_TEMP_FAILURE/);
   assert.deepEqual((await readdir(revisionPath(root, "fixture-two", 2))).filter((name) => name.includes(".tmp")), []);
 });
 
-test("enforces the maximum installed immutable profile count", async () => {
-  const { registry } = await registryFixture();
+test("serializes concurrent identical and conflicting revisions across registry instances", async () => {
+  const { root } = await registryFixture();
+  const acquired = deferred();
+  const release = deferred();
+  const first = new ProfileRegistry(exporterPaths(root), {
+    testHooks: { afterInstallLockAcquired: async () => { acquired.resolve(); await release.promise; } }
+  } as never);
+  const second = new ProfileRegistry(exporterPaths(root));
+  const install = first.installValue(makeFixtureProfile());
+  await acquired.promise;
+  const same = second.installValue(makeFixtureProfile());
+  release.resolve();
+  assert.deepEqual(await install, await same);
+
+  const changed = makeFixtureProfile();
+  (changed.project as Record<string, unknown>).revision = 3;
+  const conflicting = structuredClone(changed);
+  (conflicting.project as Record<string, unknown>).displayName = "Fixture Three";
+  const outcomes = await Promise.allSettled([first.installValue(changed), second.installValue(conflicting)]);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+  assert.match((outcomes.find((outcome) => outcome.status === "rejected") as PromiseRejectedResult).reason.message, /PROFILE_REVISION_CONFLICT/);
+});
+
+test("serializes the installed-profile capacity limit across registry instances", async () => {
+  const { root, registry } = await registryFixture();
   const value = makeFixtureProfile();
-  for (let revision = 1; revision <= PROFILE_LIMITS.maxInstalledProfiles; revision += 1) {
+  for (let revision = 1; revision < PROFILE_LIMITS.maxInstalledProfiles; revision += 1) {
     (value.project as Record<string, unknown>).revision = revision;
     await registry.installValue(structuredClone(value));
   }
+  const acquired = deferred();
+  const release = deferred();
+  const first = new ProfileRegistry(exporterPaths(root), {
+    testHooks: { afterInstallLockAcquired: async () => { acquired.resolve(); await release.promise; } }
+  } as never);
+  const second = new ProfileRegistry(exporterPaths(root));
+  (value.project as Record<string, unknown>).revision = PROFILE_LIMITS.maxInstalledProfiles;
+  const last = first.installValue(structuredClone(value));
+  await acquired.promise;
   (value.project as Record<string, unknown>).revision = PROFILE_LIMITS.maxInstalledProfiles + 1;
-  await assert.rejects(registry.installValue(value), /PROFILE_REGISTRY_CAPACITY/);
+  const over = second.installValue(structuredClone(value));
+  release.resolve();
+  await last;
+  await assert.rejects(over, /PROFILE_REGISTRY_CAPACITY/);
+  assert.equal((await registry.list()).length, PROFILE_LIMITS.maxInstalledProfiles);
+});
+
+test("fsyncs each new registry directory's parent before installing", async () => {
+  const { root } = await registryFixture();
+  const synced: string[] = [];
+  const registry = new ProfileRegistry(exporterPaths(root), {
+    testHooks: { afterDirectorySynced: async (path: string) => { synced.push(path); } }
+  } as never);
+  await registry.installValue(makeFixtureProfile());
+  assert.deepEqual(synced, [join(root, "profiles"), join(root, "profiles", "fixture-two"), revisionPath(root, "fixture-two", 2)]);
+});
+
+test("normalizes a source path before opening it and permits ordinary source directories", async () => {
+  const base = await mkdtemp("/private/tmp/video001-profile-source-");
+  const root = join(base, "registry");
+  const source = join(base, "profile.json");
+  await mkdir(root, { mode: 0o700 });
+  await writeFile(source, JSON.stringify(makeFixtureProfile()));
+  await chmod(base, 0o755);
+  const link = join(base, "link");
+  await symlink("/private/tmp", link);
+  const installed = await new ProfileRegistry(exporterPaths(root)).installFile(`${base}/link/../profile.json`);
+  assert.equal(installed.profile.project.id, "fixture-two");
 });
 
 test("emits redacted install, list, and resolve events", async () => {
@@ -179,4 +252,16 @@ test("emits redacted install, list, and resolve events", async () => {
   assert.equal(serialized.includes(source), false);
   assert.equal(serialized.includes(JSON.stringify(installed.profile)), false);
   assert.equal(serialized.includes(installed.profile.source.fileKey), false);
+});
+
+test("records malformed resolve references as redacted errors", async () => {
+  const events: unknown[] = [];
+  const { root } = await registryFixture();
+  const registry = new ProfileRegistry(exporterPaths(root), { record: (event) => events.push(event) });
+  await assert.rejects(
+    registry.resolve({ projectId: "../escape", profileRevision: 1, profileSha256: "a".repeat(64) }),
+    /PROFILE_REGISTRY_UNSAFE_PATH/
+  );
+  assert.deepEqual(events, [{ operation: "resolve", status: "error", elapsedMs: events[0] instanceof Object ? (events[0] as { elapsedMs: number }).elapsedMs : 0 }]);
+  assert.equal(JSON.stringify(events).includes("../escape"), false);
 });

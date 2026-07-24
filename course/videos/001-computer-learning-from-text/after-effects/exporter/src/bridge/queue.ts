@@ -31,7 +31,7 @@ import {
   serializeBridgeOwner,
   type BridgeOwner
 } from "./ownership.ts";
-import { exporterPaths, type ExporterPaths } from "./paths.ts";
+import { legacyExporterPaths, type ExporterPaths } from "./paths.ts";
 import type { StreamedAssetFile } from "./streaming-package.ts";
 import { checkpointBridgeWork, type BridgeWorkContext } from "./work-control.ts";
 
@@ -150,7 +150,7 @@ export class QueueStore {
   private readonly lockOwner: BridgeOwner | undefined;
 
   constructor(root?: string, lockOwner?: BridgeOwner) {
-    this.paths = exporterPaths(root);
+    this.paths = legacyExporterPaths(root);
     const directories = [
       this.paths.root,
       this.paths.tmp,

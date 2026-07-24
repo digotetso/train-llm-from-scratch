@@ -21,6 +21,9 @@ const PROFILE_FILE_PATTERN = /^([0-9a-f]{64})\.figma-ae-project\.json$/;
 const PROFILE_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const REVISION_PATTERN = /^[1-9][0-9]*$/;
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
+const INSTALL_LOCK_FILENAME = ".profile-registry.install.lock";
+const LOCK_RETRY_LIMIT = 100;
+const LOCK_RETRY_DELAY_MS = 10;
 
 export interface ProfileRegistryEvent {
   operation: "install" | "list" | "resolve";
@@ -34,6 +37,17 @@ export interface ProfileRegistryEvent {
 interface RegistryOptions {
   now?: () => number;
   record?: (event: ProfileRegistryEvent) => void;
+  /** @internal Test-only observable hooks for failure and durability coverage. */
+  testHooks?: {
+    afterInstallLockAcquired?: () => Promise<void>;
+    afterTemporaryCreated?: () => Promise<void>;
+    afterDirectorySynced?: (path: string) => Promise<void>;
+  };
+}
+
+interface HeldInstallLock {
+  path: string;
+  identity: FileIdentity;
 }
 
 interface FileIdentity {
@@ -122,7 +136,10 @@ async function lstatFile(path: string, requirePrivate = true): Promise<FileIdent
   return asFileIdentity(details);
 }
 
-async function ensurePrivateDirectory(path: string): Promise<FileIdentity> {
+async function ensurePrivateDirectory(
+  path: string,
+  onDirectorySynced?: (path: string) => Promise<void>
+): Promise<FileIdentity> {
   const resolved = resolve(path);
   const segments = resolved.split(sep).filter(Boolean);
   let current = resolved.startsWith(sep) ? sep : "";
@@ -132,28 +149,33 @@ async function ensurePrivateDirectory(path: string): Promise<FileIdentity> {
       await lstatDirectory(current, current === resolved);
     } catch (error) {
       if (!isNotFound(error)) throw error;
+      const parent = dirname(current);
+      const parentIdentity = await lstatDirectory(parent, false);
       try {
         await mkdir(current, { mode: 0o700 });
       } catch (mkdirError) {
         if (!isAlreadyExists(mkdirError)) throw mkdirError;
       }
-      await lstatDirectory(current, current === resolved);
+      await lstatDirectory(current, true);
+      await syncDirectory(parent, parentIdentity, false);
+      await onDirectorySynced?.(current);
     }
   }
   return lstatDirectory(resolved);
 }
 
-async function assertSafeExistingDirectoryAncestors(path: string): Promise<void> {
+async function assertSafeExistingDirectoryAncestors(path: string, requirePrivateFinal = true): Promise<void> {
   const resolved = resolve(path);
   const segments = resolved.split(sep).filter(Boolean);
   let current = resolved.startsWith(sep) ? sep : "";
   for (const segment of segments) {
     current = current === sep ? join(current, segment) : current === "" ? segment : join(current, segment);
-    await lstatDirectory(current, current === resolved);
+    await lstatDirectory(current, current === resolved && requirePrivateFinal);
   }
 }
 
-async function syncDirectory(path: string, expected?: FileIdentity): Promise<void> {
+async function syncDirectory(path: string, expected?: FileIdentity, requirePrivate = true): Promise<void> {
+  await assertSafeExistingDirectoryAncestors(path, requirePrivate);
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const details = await handle.stat();
@@ -164,10 +186,11 @@ async function syncDirectory(path: string, expected?: FileIdentity): Promise<voi
   } finally {
     await handle.close();
   }
+  await assertSafeExistingDirectoryAncestors(path, requirePrivate);
 }
 
 async function readRegularFile(path: string, requirePrivate = true): Promise<Buffer> {
-  await assertSafeExistingDirectoryAncestors(dirname(path));
+  await assertSafeExistingDirectoryAncestors(dirname(path), requirePrivate);
   const before = await lstatFile(path, requirePrivate);
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -216,19 +239,22 @@ export class ProfileRegistry {
   private readonly paths: GenericExporterPaths;
   private readonly now: () => number;
   private readonly record: ((event: ProfileRegistryEvent) => void) | undefined;
+  private readonly testHooks: RegistryOptions["testHooks"];
 
   constructor(paths: GenericExporterPaths, options: RegistryOptions = {}) {
     this.paths = validatePaths(paths);
     this.now = options.now ?? Date.now;
     this.record = options.record;
+    this.testHooks = options.testHooks;
   }
 
   async installFile(sourcePath: string): Promise<InstalledProfile> {
     return this.withInstallEvent(async () => {
       if (!isAbsolute(sourcePath)) throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
+      const canonicalSourcePath = resolve(sourcePath);
       let value: unknown;
       try {
-        value = JSON.parse((await readRegularFile(sourcePath, false)).toString("utf8")) as unknown;
+        value = JSON.parse((await readRegularFile(canonicalSourcePath, false)).toString("utf8")) as unknown;
       } catch (error) {
         if ((error as Error).message.startsWith("PROFILE_REGISTRY_")) throw error;
         throw registryError("PROFILE_REGISTRY_CORRUPT");
@@ -251,8 +277,10 @@ export class ProfileRegistry {
   }
 
   async resolve(reference: ProfileReference): Promise<InstalledProfile> {
-    const safeReference = validateReference(reference);
-    return this.withEvent("resolve", safeReference, async () => {
+    const started = this.now();
+    let safeReference: ProfileReference | undefined;
+    try {
+      safeReference = validateReference(reference);
       const path = this.profilePath(safeReference);
       try {
         await this.ensureRevisionDirectory(safeReference.projectId, safeReference.profileRevision, false);
@@ -261,12 +289,17 @@ export class ProfileRegistry {
         throw error;
       }
       try {
-        return await readInstalled(path, safeReference);
+        const installed = await readInstalled(path, safeReference);
+        this.emit("resolve", "ok", safeReference, started);
+        return installed;
       } catch (error) {
         if (isNotFound(error)) throw registryError("PROFILE_NOT_FOUND");
         throw error;
       }
-    });
+    } catch (error) {
+      this.emit("resolve", "error", safeReference, started);
+      throw error;
+    }
   }
 
   async projection(reference: ProfileReference): Promise<ProfileProjection> {
@@ -281,40 +314,94 @@ export class ProfileRegistry {
       profileSha256: installed.profileSha256
     };
     const destination = this.profilePath(reference);
-    const existing = await this.entries();
-    const sameRevision = existing.filter((entry) =>
-      entry.reference.projectId === reference.projectId && entry.reference.profileRevision === reference.profileRevision
-    );
-    if (sameRevision.length > 0) {
-      if (sameRevision.length !== 1 || sameRevision[0]!.reference.profileSha256 !== reference.profileSha256) {
-        throw registryError("PROFILE_REVISION_CONFLICT");
+    return this.withInstallLock(async () => {
+      const existing = await this.entries();
+      const sameRevision = existing.filter((entry) =>
+        entry.reference.projectId === reference.projectId && entry.reference.profileRevision === reference.profileRevision
+      );
+      if (sameRevision.length > 0) {
+        if (sameRevision.length !== 1 || sameRevision[0]!.reference.profileSha256 !== reference.profileSha256) {
+          throw registryError("PROFILE_REVISION_CONFLICT");
+        }
+        return readInstalled(destination, reference);
       }
+      if (existing.length >= PROFILE_LIMITS.maxInstalledProfiles) throw registryError("PROFILE_REGISTRY_CAPACITY");
+      const directory = await this.ensureRevisionDirectory(reference.projectId, reference.profileRevision, true);
+      const bytes = Buffer.from(canonicalProfileJson(installed.profile), "utf8");
+      await this.publish(directory, destination, bytes);
       return readInstalled(destination, reference);
+    });
+  }
+
+  private async withInstallLock<T>(action: () => Promise<T>): Promise<T> {
+    const lock = await this.acquireInstallLock();
+    try {
+      await this.testHooks?.afterInstallLockAcquired?.();
+      return await action();
+    } finally {
+      await this.releaseInstallLock(lock);
     }
-    if (existing.length >= PROFILE_LIMITS.maxInstalledProfiles) throw registryError("PROFILE_REGISTRY_CAPACITY");
-    const directory = await this.ensureRevisionDirectory(reference.projectId, reference.profileRevision, true);
-    const bytes = Buffer.from(canonicalProfileJson(installed.profile), "utf8");
-    await this.publish(directory, destination, bytes);
-    return readInstalled(destination, reference);
+  }
+
+  private async acquireInstallLock(): Promise<HeldInstallLock> {
+    await ensurePrivateDirectory(this.paths.root, this.testHooks?.afterDirectorySynced);
+    const profilesIdentity = await ensurePrivateDirectory(this.paths.profiles, this.testHooks?.afterDirectorySynced);
+    const lockPath = join(this.paths.profiles, INSTALL_LOCK_FILENAME);
+    assertContained(this.paths.profiles, lockPath);
+    for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        await assertSafeExistingDirectoryAncestors(this.paths.profiles);
+        handle = await open(
+          lockPath,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          0o600
+        );
+        const details = await handle.stat();
+        if (!details.isFile()) throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
+        await handle.sync();
+        const identity = asFileIdentity(details);
+        await handle.close();
+        handle = undefined;
+        const current = await lstatFile(lockPath);
+        if (!sameIdentity(current, identity)) throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
+        await syncDirectory(this.paths.profiles, profilesIdentity);
+        return { path: lockPath, identity };
+      } catch (error) {
+        if (handle !== undefined) await handle.close();
+        if (!isAlreadyExists(error)) throw error;
+        await lstatFile(lockPath);
+        await new Promise<void>((complete) => setTimeout(complete, LOCK_RETRY_DELAY_MS));
+      }
+    }
+    throw registryError("PROFILE_REGISTRY_LOCKED");
+  }
+
+  private async releaseInstallLock(lock: HeldInstallLock): Promise<void> {
+    const profilesIdentity = await lstatDirectory(this.paths.profiles);
+    const current = await lstatFile(lock.path);
+    if (!sameIdentity(current, lock.identity)) throw registryError("PROFILE_REGISTRY_UNSAFE_PATH");
+    await unlink(lock.path);
+    await syncDirectory(this.paths.profiles, profilesIdentity);
   }
 
   private async ensureRevisionDirectory(projectId: string, revision: number, create: boolean): Promise<FileIdentity> {
     const profiles = this.paths.profiles;
     assertContained(this.paths.root, profiles);
     if (create) {
-      await ensurePrivateDirectory(this.paths.root);
-      await ensurePrivateDirectory(profiles);
+      await ensurePrivateDirectory(this.paths.root, this.testHooks?.afterDirectorySynced);
+      await ensurePrivateDirectory(profiles, this.testHooks?.afterDirectorySynced);
     } else {
       await assertSafeExistingDirectoryAncestors(this.paths.root);
       await lstatDirectory(profiles);
     }
     const project = join(profiles, projectId);
     assertContained(profiles, project);
-    if (create) await ensurePrivateDirectory(project);
+    if (create) await ensurePrivateDirectory(project, this.testHooks?.afterDirectorySynced);
     else await lstatDirectory(project);
     const revisionPath = join(project, String(revision));
     assertContained(project, revisionPath);
-    if (create) return ensurePrivateDirectory(revisionPath);
+    if (create) return ensurePrivateDirectory(revisionPath, this.testHooks?.afterDirectorySynced);
     return lstatDirectory(revisionPath);
   }
 
@@ -337,6 +424,10 @@ export class ProfileRegistry {
     }
     const entries: Array<{ path: string; reference: ProfileReference }> = [];
     for (const projectId of projectNames.sort()) {
+      if (projectId === INSTALL_LOCK_FILENAME) {
+        await lstatFile(join(this.paths.profiles, projectId));
+        continue;
+      }
       validateRegistryProjectId(projectId);
       const project = join(this.paths.profiles, projectId);
       assertContained(this.paths.profiles, project);
@@ -382,6 +473,7 @@ export class ProfileRegistry {
       await handle.close();
       handle = undefined;
       await lstatFile(temporary);
+      await this.testHooks?.afterTemporaryCreated?.();
       await lstatDirectory(dirname(destination));
       // link(2) publishes the completed file atomically and fails with EEXIST, unlike rename(2)'s replacement semantics.
       await link(temporary, destination);
