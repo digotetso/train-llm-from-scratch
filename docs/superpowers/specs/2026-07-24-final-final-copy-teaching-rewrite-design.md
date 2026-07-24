@@ -84,8 +84,8 @@ By the end, the learner should be able to:
    sequences;
 4. explain why text preparation uses chosen rules rather than a universal
    definition of “clean” text;
-5. trace the complete preparation function from source string to output;
-6. predict the result for one changed input; and
+5. trace the complete preparation function from starting text to result;
+6. predict the result for one changed source; and
 7. distinguish character identification from text preparation.
 
 ## Content Scope
@@ -211,9 +211,11 @@ The rewrite is complete only when:
 - **Risk: Unicode caveats overwhelm the opening.** Teach one-code-point
   examples first, then add one short scope boundary.
 - **Risk: the rewrite becomes terminology-first again.** Check first-use order
-  for code point, normalization, NFKC, `repr`, `splitlines`, `strip`, and
-  `join`.
+  in headings, narration, and code for source, string, `repr`, whitespace,
+  inspection, character, Unicode, code point, normalization, NFKC, text
+  preparation, list, loop, `splitlines`, `strip`, `append`, `join`, function
+  boundaries, `def`, indentation, parameter flow, and `return`.
 - **Risk: the lab becomes a copying exercise.** Require a prediction and a
-  changed input before the result is shown.
+  changed source before the result is shown.
 - **Risk: unrelated user work is committed.** Stage and commit only this design
   document during the design phase.

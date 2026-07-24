@@ -137,12 +137,12 @@ Use exactly these headings:
 ```markdown
 ## 00:00 The Text Looks Simple
 ## 01:25 Reveal What Is Really There
-## 03:05 Similar-Looking Marks Can Still Differ
-## 04:30 How Can Software Identify a Character?
+## 03:09 Similar-Looking Marks Can Still Differ
+## 04:30 Where Do the Agreed Numbers Come From?
 ## 06:05 Which Differences Should We Preserve?
 ## 07:30 Apply One Chosen Rule Consistently
 ## 09:05 Put the Chosen Steps Into One Recipe
-## 11:15 Predict, Run, and Change the Starting Text
+## 11:40 Predict, Run, and Change the Starting Text
 ## 13:30 Carry the Explanation Forward
 ```
 
@@ -296,7 +296,7 @@ inspection reveals hidden differences
 -> the chosen behavior earns the name normalization
 -> normalization handles only one part of preparation
 -> the complete function combines all chosen steps
--> the changed input tests whether the explanation transfers
+-> the changed source tests whether the explanation transfers
 ```
 
 Remove transitions that only say what the next section will discuss.
@@ -322,9 +322,15 @@ import unicodedata
 
 def prepare_text(text):
     text = unicodedata.normalize("NFKC", text)
-    lines = [line.strip() for line in text.splitlines()]
-    non_empty_lines = [line for line in lines if line]
-    return "\n".join(non_empty_lines)
+    lines = text.splitlines()
+    prepared_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if line != "":
+            prepared_lines.append(line)
+
+    return "\n".join(prepared_lines)
 
 
 source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
@@ -353,16 +359,18 @@ Explain the program in this exact causal order:
 ```text
 source string
 -> NFKC changes ①, Ａ, and ﬀ
--> splitlines separates three lines
--> strip removes surrounding whitespace from each line
--> the next list removes the empty line
+-> splitlines creates a three-item list
+-> a loop visits each line
+-> strip removes surrounding whitespace from the current line
+-> if line != "" rejects the empty string
+-> append keeps each non-empty line
 -> join rebuilds two lines with one \n
 -> prepared string
 ```
 
-Explain each method’s behavior before relying on its name. Do not call the list
-comprehension “the filter,” because the program does not call Python’s
-`filter` function.
+Explain each behavior before relying on its name. Before showing the complete
+program, establish assignment, list boundaries, loop behavior, the `!=` check,
+`append`, function input-to-parameter flow, indentation, and `return`.
 
 - [ ] **Step 3: Put prediction before execution**
 
@@ -450,9 +458,15 @@ import unicodedata
 
 def prepare_text(text):
     text = unicodedata.normalize("NFKC", text)
-    lines = [line.strip() for line in text.splitlines()]
-    non_empty_lines = [line for line in lines if line]
-    return "\n".join(non_empty_lines)
+    lines = text.splitlines()
+    prepared_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if line != "":
+            prepared_lines.append(line)
+
+    return "\n".join(prepared_lines)
 
 
 source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
@@ -515,12 +529,12 @@ script = path.read_text(encoding="utf-8")
 expected_headings = [
     "## 00:00 The Text Looks Simple",
     "## 01:25 Reveal What Is Really There",
-    "## 03:05 Similar-Looking Marks Can Still Differ",
-    "## 04:30 How Can Software Identify a Character?",
+    "## 03:09 Similar-Looking Marks Can Still Differ",
+    "## 04:30 Where Do the Agreed Numbers Come From?",
     "## 06:05 Which Differences Should We Preserve?",
     "## 07:30 Apply One Chosen Rule Consistently",
     "## 09:05 Put the Chosen Steps Into One Recipe",
-    "## 11:15 Predict, Run, and Change the Starting Text",
+    "## 11:40 Predict, Run, and Change the Starting Text",
     "## 13:30 Carry the Explanation Forward",
 ]
 actual_headings = re.findall(r"^## \d{2}:\d{2} .+$", script, re.MULTILINE)
