@@ -20,6 +20,8 @@ Large collections used for training may combine writing from web pages, books, c
 
 Now let’s place that mystery inside the larger goal. How do we take writing like this and eventually use it to train an LLM?
 
+For now, LLM names the system we are building; we will explain its technical meaning later.
+
 Training needs many text examples arranged so the system can learn from them. Once those examples are organized, we call the collection a **training dataset**.
 
 Here is the whole-course map, not a full explanation. We collect writing, organize the training dataset, inspect and prepare the text, split it into pieces, give the pieces numbers, create learning exercises, and then train and test the system. Each later stage has a proper technical name. We will introduce each name only after its behavior makes sense.
