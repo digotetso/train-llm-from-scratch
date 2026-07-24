@@ -160,12 +160,12 @@ One detail is worth holding onto as we test it. The original source used `\r\n` 
 
 ## 11:15 Predict, Run, and Change One Input
 
-Before you run the file, make a complete prediction. Which Unicode forms will change? Which whitespace will disappear? Will the empty line remain? Which line separator will remain between the two surviving lines? Use the function, not a guess from how the source looks on screen.
+Save this exact program in a working folder you control as `inspect_and_prepare_text.py`. Before you run it, make a complete prediction. Which Unicode forms will change? Which whitespace will disappear? Will the empty line remain? Which line separator will remain between the two surviving lines? Use the function, not a guess from how the source looks on screen.
 
-Run the program from the folder containing the file.
+Then run it from that same working folder.
 
 ```bash
-python text_preparation.py
+python inspect_and_prepare_text.py
 ```
 
 ```text
