@@ -72,3 +72,15 @@ test("rejects an altered profile sharing the bundled Video 001 ID and revision",
   profile.profile.target.width = 1280;
   assert.throws(() => adaptLegacyVideo001Package(legacyVideo001Package(), profile), /exact bundled Video 001 profile/i);
 });
+
+test("rejects a canonically restamped legacy package above the 48-frame legacy ceiling", () => {
+  const value = legacyVideo001Package();
+  const frame = (value.frames as Array<Record<string, unknown>>)[0]!;
+  value.frames = Array.from({ length: 49 }, (_, index) => {
+    const next = structuredClone(frame);
+    next.nodeId = `9:${index + 1}`;
+    ((next.children as Array<Record<string, unknown>>)[0]!).id = `legacy-node-${index}`;
+    return next;
+  });
+  assert.throws(() => finalizeLegacyVideo001Package({ ...value, contentHash: "" }), /48-frame limit/i);
+});

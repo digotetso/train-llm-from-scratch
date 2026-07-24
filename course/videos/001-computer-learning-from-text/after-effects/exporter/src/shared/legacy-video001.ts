@@ -1,6 +1,8 @@
 import {
   canonicalJson,
+  EXTERNAL_ASSET_DATA,
   validatePackage,
+  validatePackageWithVerifiedAssets,
   validatePackageAgainstProfile,
   type ExporterPackage
 } from "./contract.ts";
@@ -20,9 +22,10 @@ export type LegacyVideo001Package = Omit<ExporterPackage, "schemaVersion" | "pro
 
 type UnknownRecord = Record<string, unknown>;
 
-const LEGACY_SCHEMA_VERSION = "2.0.0";
+export const legacyVideo001SchemaVersion = "2.0.0";
 export const legacyVideo001ExportMediaType = "application/vnd.video001.figma-ae+json";
 export const legacyVideo001PackageSuffix = ".video001-ae.json";
+export const legacyVideo001MaxFrames = 48;
 const BUNDLED_VIDEO001_REFERENCE = Object.freeze({
   projectId: "video-001",
   profileRevision: 1,
@@ -32,6 +35,11 @@ const BUNDLED_VIDEO001_REFERENCE = Object.freeze({
 /** The schema-3 reference used only while the Video 001 producer remains legacy-bound. */
 export function legacyVideo001ProfileReference(): ProfileReference {
   return { ...BUNDLED_VIDEO001_REFERENCE };
+}
+
+export function isLegacyVideo001Package(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    (value as UnknownRecord).schemaVersion === legacyVideo001SchemaVersion;
 }
 
 function recordAt(value: unknown, path: string): UnknownRecord {
@@ -69,7 +77,7 @@ export function finalizeLegacyVideo001Package(value: unknown): LegacyVideo001Pac
 export function createLegacyVideo001Package(
   value: Omit<LegacyVideo001Package, "schemaVersion" | "contentHash">
 ): LegacyVideo001Package {
-  return { ...value, schemaVersion: LEGACY_SCHEMA_VERSION, contentHash: "" };
+  return { ...value, schemaVersion: legacyVideo001SchemaVersion, contentHash: "" };
 }
 
 export function validateLegacyVideo001Package(value: unknown): LegacyVideo001Package {
@@ -79,8 +87,11 @@ export function validateLegacyVideo001Package(value: unknown): LegacyVideo001Pac
 function validateLegacyPackage(value: unknown, allowEmptyContentHash: boolean): LegacyVideo001Package {
   const record = recordAt(value, "$");
   exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "source", "target", "frames", "assets"], "$");
-  if (record.schemaVersion !== LEGACY_SCHEMA_VERSION) {
-    throw new TypeError(`Invalid legacy Video 001 package at $.schemaVersion: expected ${JSON.stringify(LEGACY_SCHEMA_VERSION)}`);
+  if (record.schemaVersion !== legacyVideo001SchemaVersion) {
+    throw new TypeError(`Invalid legacy Video 001 package at $.schemaVersion: expected ${JSON.stringify(legacyVideo001SchemaVersion)}`);
+  }
+  if (!Array.isArray(record.frames) || record.frames.length > legacyVideo001MaxFrames) {
+    throw new TypeError(`Invalid legacy Video 001 package at $.frames: exceeds the ${legacyVideo001MaxFrames}-frame limit`);
   }
   if (typeof record.contentHash !== "string" || (!allowEmptyContentHash && record.contentHash.length === 0)) {
     throw new TypeError("Invalid legacy Video 001 package at $.contentHash: expected a content hash");
@@ -93,7 +104,7 @@ function validateLegacyPackage(value: unknown, allowEmptyContentHash: boolean): 
   };
   const generic = validatePackage(candidate);
   const legacy: LegacyVideo001Package = {
-    schemaVersion: LEGACY_SCHEMA_VERSION,
+    schemaVersion: legacyVideo001SchemaVersion,
     exporterVersion: generic.exporterVersion,
     exportedAt: generic.exportedAt,
     contentHash: record.contentHash as string,
@@ -109,6 +120,23 @@ function validateLegacyPackage(value: unknown, allowEmptyContentHash: boolean): 
     }
   }
   return legacy;
+}
+
+export function validateLegacyVideo001PackageWithVerifiedAssets(
+  value: unknown,
+  evidence: ReadonlyArray<{ byteLength: number; hash: string }>,
+  byteCounts: { bodyBytes: number; manifestBytes: number }
+): ReturnType<typeof validatePackageWithVerifiedAssets> {
+  const record = recordAt(value, "$");
+  exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "source", "target", "frames", "assets"], "$");
+  if (record.schemaVersion !== legacyVideo001SchemaVersion) throw new TypeError("Invalid legacy Video 001 package schema");
+  const candidate = {
+    ...record,
+    schemaVersion: "3.0.0",
+    project: legacyVideo001ProfileReference(),
+    assets: Array.isArray(record.assets) ? record.assets.map((asset) => ({ ...(asset as UnknownRecord), dataBase64: EXTERNAL_ASSET_DATA })) : record.assets
+  };
+  return validatePackageWithVerifiedAssets(candidate, evidence, byteCounts);
 }
 
 function assertBundledVideo001Profile(installed: InstalledProfile): ProjectProfile {

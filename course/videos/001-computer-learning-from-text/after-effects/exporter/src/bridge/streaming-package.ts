@@ -8,6 +8,7 @@ import {
   type ExternalExporterPackage,
   type VerifiedAssetEvidence
 } from "../shared/contract.ts";
+import { isLegacyVideo001Package, validateLegacyVideo001PackageWithVerifiedAssets } from "../shared/legacy-video001.ts";
 import { LIMITS } from "../shared/limits.ts";
 import {
   ownedHttpTemporaryFilename,
@@ -699,11 +700,9 @@ export async function readStreamingPackage(
     if (after.dev !== spool.device || after.ino !== spool.inode || after.size !== spool.size) {
       throw new Error("HTTP body spool changed during streaming parse");
     }
-    const packageValue = validatePackageWithVerifiedAssets(
-      value,
-      parser.verifiedEvidence,
-      { bodyBytes: spool.size, manifestBytes: reader.manifestBytes }
-    );
+    const packageValue = isLegacyVideo001Package(value)
+      ? validateLegacyVideo001PackageWithVerifiedAssets(value, parser.verifiedEvidence, { bodyBytes: spool.size, manifestBytes: reader.manifestBytes })
+      : validatePackageWithVerifiedAssets(value, parser.verifiedEvidence, { bodyBytes: spool.size, manifestBytes: reader.manifestBytes });
     return {
       assets: [...parser.assets],
       bodyBytes: spool.size,

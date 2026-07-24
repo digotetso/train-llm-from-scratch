@@ -2,6 +2,7 @@ import { validatePackage, type AssetDescriptor, type ExporterPackage } from "../
 import {
   legacyVideo001ContentFingerprintInput,
   legacyVideo001ExportMediaType,
+  legacyVideo001SchemaVersion,
   createLegacyVideo001Package,
   validateLegacyVideo001Package,
   type LegacyVideo001Package
@@ -220,7 +221,7 @@ export function validateUiToController(value: unknown): UiToController {
       return {
         type: "package-ready",
         generation: record.generation as number,
-      value: (recordAtSchemaVersion(record.value) === "2.0.0" ? validateLegacyVideo001Package(record.value) : validatePackage(record.value)) as unknown as ExporterPackage
+      value: (recordAtSchemaVersion(record.value) === legacyVideo001SchemaVersion ? validateLegacyVideo001Package(record.value) : validatePackage(record.value)) as unknown as ExporterPackage
       };
     default:
       invalidMessage("$.type", `unsupported message type ${JSON.stringify(record.type)}`);

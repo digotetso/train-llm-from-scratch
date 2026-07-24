@@ -10,6 +10,7 @@ import {
   legacyVideo001ContentFingerprintInput,
   legacyVideo001ExportMediaType,
   legacyVideo001PackageSuffix,
+  legacyVideo001SchemaVersion,
   validateLegacyVideo001Package
 } from "../shared/legacy-video001.ts";
 import { sha256Hex } from "../shared/sha256.ts";
@@ -21,7 +22,7 @@ type UnknownRecord = Record<string, unknown>;
 
 function isLegacyPackage(value: unknown): boolean {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    (value as UnknownRecord).schemaVersion === "2.0.0";
+    (value as UnknownRecord).schemaVersion === legacyVideo001SchemaVersion;
 }
 
 export interface UiViewModel {

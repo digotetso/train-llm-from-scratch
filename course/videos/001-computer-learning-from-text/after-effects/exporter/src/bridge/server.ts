@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { LIMITS } from "../shared/limits.ts";
+import { legacyVideo001ExportMediaType } from "../shared/legacy-video001.ts";
 import { PairingCodeError, type AuthStore } from "./auth.ts";
 import { ownedHttpTemporaryFilename, type BridgeOwner } from "./ownership.ts";
 import { QueueConflictError, type QueueStore } from "./queue.ts";
@@ -25,7 +26,7 @@ import {
 } from "./work-control.ts";
 
 const JSON_MEDIA_TYPE = "application/json";
-const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
+const EXPORT_MEDIA_TYPE = legacyVideo001ExportMediaType;
 const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_LOG_BYTES = 10 * 1024 * 1024;
 const PAIRING_WINDOW_MS = 60_000;

@@ -24,6 +24,7 @@ import {
   validatePackage,
   validatePackageWithVerifiedAssets
 } from "../shared/contract.ts";
+import { isLegacyVideo001Package, validateLegacyVideo001Package } from "../shared/legacy-video001.ts";
 import {
   ownedHttpTemporaryFilename,
   parseOwnedHttpTemporaryFilename,
@@ -176,7 +177,7 @@ export class QueueStore {
 
   async enqueue(value: unknown): Promise<EnqueueResult> {
     this.assertDirectoryIdentities();
-    const validated = validatePackage(value);
+    const validated = (isLegacyVideo001Package(value) ? validateLegacyVideo001Package(value) : validatePackage(value)) as ExporterPackage;
     return this.enqueueValidated(validated, async (_index, asset) => {
       if (!("dataBase64" in asset)) throw new Error("In-memory asset data is missing");
       const bytes = Buffer.from(asset.dataBase64, "base64");
