@@ -14,7 +14,7 @@ import {
   validatePackageWithVerifiedAssets
 } from "../src/shared/contract.ts";
 import { utf8ByteLength } from "../src/shared/utf8.ts";
-import { LIMITS } from "../src/shared/limits.ts";
+import { LIMITS, PROFILE_LIMITS } from "../src/shared/limits.ts";
 import { makeFixtureProfile } from "./helpers/profile.ts";
 import { makeValidPackage, installedVideo001 } from "./helpers/package.ts";
 import { hashProjectProfile, profileReference } from "../src/shared/project-profile.ts";
@@ -248,15 +248,31 @@ test("rejects raster nodes whose asset is missing", () => {
 test("rejects frame and asset counts above configured limits", () => {
   const tooManyFrames = makeValidPackage();
   tooManyFrames.frames = Array.from(
-    { length: LIMITS.maxFrames + 1 },
-    () => structuredClone(tooManyFrames.frames[0]!)
+    { length: PROFILE_LIMITS.maxFrames + 1 },
+    (_, index) => {
+      const frame = structuredClone(tooManyFrames.frames[0]!);
+      frame.nodeId = `generic:${index}`;
+      (frame.children[0] as TextNode).id = `generic-node-${index}`;
+      return frame;
+    }
   );
-  assert.throws(() => validatePackage(tooManyFrames), /frame limit/);
+  assert.throws(() => validatePackage(tooManyFrames), /256-frame limit/);
 
   const tooManyAssets = makeValidPackage();
   const asset = { hash: "b".repeat(64), mimeType: "image/png" as const, byteLength: 1, dataBase64: "Zg==" };
   tooManyAssets.assets = Array.from({ length: LIMITS.maxAssets + 1 }, () => structuredClone(asset));
   assert.throws(() => validatePackage(tooManyAssets), /asset limit/);
+});
+
+test("accepts the generic 256-frame ceiling", () => {
+  const value = makeValidPackage();
+  value.frames = Array.from({ length: PROFILE_LIMITS.maxFrames }, (_, index) => {
+    const frame = structuredClone(value.frames[0]!);
+    frame.nodeId = `generic:${index}`;
+    (frame.children[0] as TextNode).id = `generic-node-${index}`;
+    return frame;
+  });
+  assert.doesNotThrow(() => validatePackage(value));
 });
 
 test("preflights declared per-asset and aggregate byte limits without large payloads", () => {

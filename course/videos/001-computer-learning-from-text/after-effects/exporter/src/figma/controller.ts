@@ -1,10 +1,11 @@
+import { validatePackage, type AssetDescriptor, type ExporterPackage } from "../shared/contract.ts";
 import {
-  contentFingerprintInput,
-  validatePackage,
-  type AssetDescriptor,
-  type ExporterPackage
-} from "../shared/contract.ts";
-import { legacyVideo001ExportMediaType, legacyVideo001ProfileReference } from "../shared/legacy-video001.ts";
+  legacyVideo001ContentFingerprintInput,
+  legacyVideo001ExportMediaType,
+  createLegacyVideo001Package,
+  validateLegacyVideo001Package,
+  type LegacyVideo001Package
+} from "../shared/legacy-video001.ts";
 import {
   serializeFrame,
   type FigmaNodeSnapshot,
@@ -163,6 +164,12 @@ function plainRecord(value: unknown, path: string): UnknownRecord {
   return value as UnknownRecord;
 }
 
+function recordAtSchemaVersion(value: unknown): unknown {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord).schemaVersion
+    : undefined;
+}
+
 function exactKeys(record: UnknownRecord, keys: readonly string[], path: string): void {
   const allowed = new Set(keys);
   for (const key of Object.keys(record)) {
@@ -213,7 +220,7 @@ export function validateUiToController(value: unknown): UiToController {
       return {
         type: "package-ready",
         generation: record.generation as number,
-        value: validatePackage(record.value)
+      value: (recordAtSchemaVersion(record.value) === "2.0.0" ? validateLegacyVideo001Package(record.value) : validatePackage(record.value)) as unknown as ExporterPackage
       };
     default:
       invalidMessage("$.type", `unsupported message type ${JSON.stringify(record.type)}`);
@@ -664,21 +671,18 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       dataBase64: bytesToBase64(bytes)
     }));
     const page = host.getCurrentPage();
-    const value: ExporterPackage = {
-      schemaVersion: "3.0.0",
+    const value: LegacyVideo001Package = createLegacyVideo001Package({
       exporterVersion: EXPORTER_VERSION,
       exportedAt: host.now().toISOString(),
-      contentHash: "",
-      project: legacyVideo001ProfileReference(),
       source: { fileKey: host.fileKey!, pageId: page.id },
       target: { ...config.target },
       frames,
       assets: descriptors
-    };
-    contentFingerprintInput(value);
+    });
+    legacyVideo001ContentFingerprintInput(value);
     if (generation !== packageGeneration) return;
-    pendingPackage = { generation, value };
-    host.postMessage({ type: "package-unhashed", generation, value });
+    pendingPackage = { generation, value: value as unknown as ExporterPackage };
+    host.postMessage({ type: "package-unhashed", generation, value: value as unknown as ExporterPackage });
   };
 
   const resolveFullLessonFrames = async (
@@ -728,8 +732,8 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
       throw controllerFailure("PACKAGE_NOT_PENDING", "Build a package before returning its content hash.");
     }
     if (pendingPackage.generation !== generation) return;
-    const validated = validatePackage(value);
-    if (contentFingerprintInput(validated) !== contentFingerprintInput(pendingPackage.value)) {
+    const validated = validateLegacyVideo001Package(value) as unknown as ExporterPackage;
+    if (legacyVideo001ContentFingerprintInput(validated) !== legacyVideo001ContentFingerprintInput(pendingPackage.value)) {
       throw controllerFailure("PACKAGE_CONTENT_CHANGED", "The UI returned a package whose content changed during hashing.");
     }
     readyPackage = { generation, value: validated };

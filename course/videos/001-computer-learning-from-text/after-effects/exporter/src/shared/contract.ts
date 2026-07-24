@@ -1,5 +1,5 @@
 import { canonicalJson } from "./canonical-json.ts";
-import { LIMITS } from "./limits.ts";
+import { LIMITS, PROFILE_LIMITS } from "./limits.ts";
 import {
   hashProjectProfile,
   profileReference,
@@ -102,6 +102,9 @@ export interface ExporterPackage {
   frames: ExportFrame[];
   assets: AssetDescriptor[];
 }
+
+export const EXPORT_PACKAGE_MEDIA_TYPE = "application/vnd.figma-ae+json";
+export const EXPORT_PACKAGE_SUFFIX = ".figma-ae.json";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -503,7 +506,7 @@ function validatePackageInternal(
 
   const frameValues = arrayAt(record.frames, "$.frames");
   if (frameValues.length === 0) invalid("$.frames", "expected at least one frame");
-  if (frameValues.length > LIMITS.maxFrames) invalid("$.frames", `exceeds the ${LIMITS.maxFrames}-frame limit`);
+  if (frameValues.length > PROFILE_LIMITS.maxFrames) invalid("$.frames", `exceeds the ${PROFILE_LIMITS.maxFrames}-frame limit`);
 
   const assetValues = arrayAt(record.assets, "$.assets");
   if (assetValues.length > LIMITS.maxAssets) invalid("$.assets", `exceeds the ${LIMITS.maxAssets}-asset limit`);

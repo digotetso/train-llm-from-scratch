@@ -5,12 +5,24 @@ import {
   type ExportNode,
   type ExporterPackage
 } from "../shared/contract.ts";
+import {
+  finalizeLegacyVideo001Package,
+  legacyVideo001ContentFingerprintInput,
+  legacyVideo001ExportMediaType,
+  legacyVideo001PackageSuffix,
+  validateLegacyVideo001Package
+} from "../shared/legacy-video001.ts";
 import { sha256Hex } from "../shared/sha256.ts";
 import type { ControllerToUi, FrameSummary, UiToController } from "./controller.ts";
 
-const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
+const EXPORT_MEDIA_TYPE = legacyVideo001ExportMediaType;
 
 type UnknownRecord = Record<string, unknown>;
+
+function isLegacyPackage(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    (value as UnknownRecord).schemaVersion === "2.0.0";
+}
 
 export interface UiViewModel {
   frames: FrameSummary[];
@@ -102,7 +114,8 @@ function validateUnhashedPackage(value: unknown): ExporterPackage {
     invalidMessage("$.value", "expected an exporter package");
   }
   const clone = structuredClone(value) as ExporterPackage;
-  contentFingerprintInput(clone);
+  if (isLegacyPackage(clone)) legacyVideo001ContentFingerprintInput(clone);
+  else contentFingerprintInput(clone);
   if (clone.contentHash !== "") invalidMessage("$.value.contentHash", "expected an empty content hash");
   return clone;
 }
@@ -171,16 +184,18 @@ function countNodes(nodes: readonly ExportNode[]): { native: number; raster: num
 }
 
 export function packageFilename(value: ExporterPackage): string {
-  const validated = validatePackage(value);
+  const legacy = isLegacyPackage(value);
+  const validated = legacy ? validateLegacyVideo001Package(value) as unknown as ExporterPackage : validatePackage(value);
   const frameName = validated.frames[0]!.name;
-  return `${frameName}-${validated.contentHash.slice(0, 12)}.video001-ae.json`;
+  return `${frameName}-${validated.contentHash.slice(0, 12)}${legacyVideo001PackageSuffix}`;
 }
 
 export function downloadPackage(
   value: ExporterPackage,
   save: (blob: Blob, filename: string) => void
 ): void {
-  const validated = validatePackage(value);
+  const legacy = isLegacyPackage(value);
+  const validated = legacy ? validateLegacyVideo001Package(value) as unknown as ExporterPackage : validatePackage(value);
   const encoded = new TextEncoder().encode(JSON.stringify(validated));
   const blob = new Blob([
     encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength) as ArrayBuffer
@@ -250,12 +265,13 @@ export function createUiController(dependencies: UiDependencies): UiController {
         const generationAtStart = message.generation;
         update({ busy: true, error: "", status: "Hashing package…" });
         try {
-          const input = new TextEncoder().encode(contentFingerprintInput(message.value));
+          const legacy = isLegacyPackage(message.value);
+          const input = new TextEncoder().encode(legacy ? legacyVideo001ContentFingerprintInput(message.value) : contentFingerprintInput(message.value));
           const contentHash = await dependencies.sha256(input);
-          const finalValue = validatePackage({
+          const finalValue = (legacy ? finalizeLegacyVideo001Package({
             ...message.value,
             contentHash
-          });
+          }) : validatePackage({ ...message.value, contentHash })) as unknown as ExporterPackage;
           if (generationAtStart !== packageGeneration) return;
           retainedPackage = finalValue;
           const counts = finalValue.frames.reduce(
