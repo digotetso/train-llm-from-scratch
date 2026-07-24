@@ -133,11 +133,9 @@ The brackets make that difference countable: the single `ﬀ` produces one ident
 
 A code point identifies a character. It is not the later kind of number used to train the LLM.
 
-We can now identify what is present without confusing identification with learning. But identification gives us facts, not a policy, so which differences should we change?
+Identification gives us facts, not policy, so which differences should remain distinct for this source?
 
 ## 06:25 Choose Which Differences to Change
-
-Identification gave us facts, so now ask a policy question: which differences should remain distinct for this source?
 
 For this example, we choose the ordinary digit `1`, the basic letter `A`, and two separate letters `ff`. That choice is purpose-dependent, not a judgment that the original forms are wrong. Code, poetry, mathematical notation, or historical text may need to preserve distinctions that this source does not.
 
@@ -179,7 +177,7 @@ Text preparation is a useful name, but we still need its mechanism. First, NFKC 
 
 The three values remain in order as one group. Python calls an ordered group a **list**. The line-separation operation is named `splitlines`.
 
-The same instructions must act on each list item. Repeated instructions form a **loop**; `for line in lines` takes one value at a time and names it `line`. We begin with an empty list named `prepared_lines`, giving retained values somewhere to go.
+The same instructions must act on each list item. Repeated instructions form a **loop**; `for line in lines` takes one value at a time and names it `line`. An empty `prepared_lines` list receives retained values.
 
 For each value, we first remove whitespace from both ends, behavior Python names `strip`. We retain a line only when it is not empty, written `if line != ""`; `!=` means “is not equal to.” We add each retained value to the new list, an operation named `append`.
 
@@ -193,7 +191,7 @@ The empty middle value remained empty after trimming, so the check rejected it w
 
 Because we need the recipe more than once, we give the instructions a name. A named reusable group of instructions is a **function**. To announce that definition, Python uses `def`. The name `text` receives the supplied value; an input name like this is a **parameter**. Finally, the program sends the finished string back with `return`.
 
-Here is the complete standalone program:
+Here is the complete program:
 
 ```python
 import unicodedata
@@ -218,7 +216,11 @@ print("Source text:", repr(source))
 print("Prepared text:", repr(prepare_text(source)))
 ```
 
-Follow the source through the same causal chain:
+Python’s normalization tool becomes available through `import unicodedata`.
+
+The final `print` calls `prepare_text(source)`, so `source` becomes parameter `text`; `return` sends the prepared string through `repr` back to that `print` call.
+
+Now trace the same chain:
 
 ```text
 source
@@ -233,7 +235,7 @@ source
 
 The source used `\r\n` at two line boundaries. `splitlines` removed those boundary marks while making the three-item list. After the empty line was rejected, `join` inserted one `\n` between the surviving lines; normalization did not create that separator.
 
-Every output change now has a cause. Can we predict the exact result before Python reveals it?
+Every change now has a cause. Can we predict the exact result before Python reveals it?
 
 ## 10:20 Predict, Run, and Change the Source
 
