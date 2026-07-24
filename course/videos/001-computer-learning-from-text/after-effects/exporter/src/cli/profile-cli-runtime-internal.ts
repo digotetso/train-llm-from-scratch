@@ -57,7 +57,6 @@ export async function writeNewProfileJson(
   const parent = dirname(output);
   const temporary = join(parent, `.${basename(output)}.tmp-${randomUUID()}`);
   let temporaryIdentity: FileIdentity | undefined;
-  let publishedIdentity: FileIdentity | undefined;
   try {
     const handle = await filesystem.open(temporary, "wx", 0o600);
     try {
@@ -68,15 +67,15 @@ export async function writeNewProfileJson(
       await handle.close();
     }
     await filesystem.link(temporary, output);
-    publishedIdentity = identity(await filesystem.lstat(output));
-    if (temporaryIdentity === undefined || !sameIdentity(temporaryIdentity, publishedIdentity)) {
+    // Publication is now visible. Never unlink output during cleanup: it may be a successor.
+    const observedOutputIdentity = identity(await filesystem.lstat(output));
+    if (temporaryIdentity === undefined || !sameIdentity(temporaryIdentity, observedOutputIdentity)) {
       throw new Error("PROFILE_OUTPUT_PUBLICATION_FAILED");
     }
     await syncDirectory(parent, filesystem);
     await unlinkIfIdentity(temporary, temporaryIdentity, filesystem);
     await syncDirectory(parent, filesystem);
   } catch (error) {
-    if (publishedIdentity !== undefined) await unlinkIfIdentity(output, publishedIdentity, filesystem);
     if (temporaryIdentity !== undefined) await unlinkIfIdentity(temporary, temporaryIdentity, filesystem);
     throw error;
   }

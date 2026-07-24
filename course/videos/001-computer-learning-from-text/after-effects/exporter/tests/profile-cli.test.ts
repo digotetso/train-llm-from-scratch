@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import type { PathLike } from "node:fs";
 import { ProfileRegistry } from "../src/bridge/profile-registry.ts";
 import { exporterPaths } from "../src/bridge/paths.ts";
 import { parseProfileCli, runProfileCli, type ProfileCliIo } from "../src/cli/profile-cli.ts";
@@ -255,6 +256,28 @@ test("publishes runtime profiles atomically without overwriting or leaving faile
   );
   assert.equal((await readdir(root)).some((entry) => entry.includes("failed.json.tmp-")), false);
   await assert.rejects(readFile(failedOutput, "utf8"), { code: "ENOENT" });
+});
+
+test("never unlinks a successor that replaces output after publication", async () => {
+  const root = await mkdtemp("/private/tmp/video001-profile-cli-writer-race-");
+  const output = join(root, "race.json");
+  let replaced = false;
+  await assert.rejects(
+    writeNewProfileJson(output, { value: 1 }, {
+      ...realProfileCliRuntimeFilesystem,
+      lstat: (async (path: PathLike) => {
+        if (path === output && !replaced) {
+          replaced = true;
+          await realProfileCliRuntimeFilesystem.unlink(output);
+          await writeFile(output, "successor\n", { mode: 0o600 });
+        }
+        return realProfileCliRuntimeFilesystem.lstat(path);
+      }) as unknown as typeof realProfileCliRuntimeFilesystem.lstat
+    }),
+    /PROFILE_OUTPUT_PUBLICATION_FAILED/
+  );
+  assert.equal(await readFile(output, "utf8"), "successor\n");
+  assert.equal((await readdir(root)).some((entry) => entry.includes("race.json.tmp-")), false);
 });
 
 test("derives contiguous declared sections from optional wizard section answers", async () => {
