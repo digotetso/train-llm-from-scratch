@@ -88,14 +88,21 @@ const DECLARATIVE_COMMAND_TOKENS = Object.freeze([
   "cmd", "const", "continue", "cp", "curl", "cut", "dash", "date", "dd", "df", "diff", "dirname", "dirs", "disown", "docker",
   "du", "echo", "env", "eval", "exec", "exit", "export", "fc", "fg", "find", "fish", "function", "getopts", "gh", "git",
   "grep", "hash", "head", "history", "id", "install", "jobs", "kill", "kubectl", "less", "ln", "ls", "make",
-  "mkdir", "more", "mount", "mv", "nc", "netcat", "npm", "npx", "osascript", "pkill", "pnpm",
+  "mkdir", "more", "mount", "mv", "nc", "netcat", "osascript", "pkill",
   "import", "let", "powershell", "ps", "pwd", "pwsh", "read", "readonly", "require", "return", "rm", "rmdir", "scp", "sed", "set",
   "sh", "sha256sum", "shift", "source", "sort", "sftp", "ssh", "stat", "sudo", "suspend", "tail", "tar", "tee", "telnet",
   "terraform", "test", "times", "touch", "tr", "trap", "type", "ulimit", "umask", "unalias", "uname", "uniq", "unset",
-  "var", "wait", "wget", "which", "xargs", "yarn", "zsh"
+  "var", "wait", "wget", "which", "xargs", "zsh"
 ] as const);
-const RUNTIME_TITLE_TOKENS = Object.freeze(["bun", "deno", "java", "node", "perl", "php", "python", "python3", "ruby"] as const);
-const RUNTIME_COMMAND_OPTION_TOKENS = Object.freeze(["-c", "-m", "-v", "-V", "--help", "--version"] as const);
+// Runtime/tool-led labels are reserved unless their final token makes the entire phrase an educational title.
+// Arbitrary command text is otherwise indistinguishable from a plain human-readable label.
+const RUNTIME_TOOL_TOKENS = Object.freeze([
+  "bun", "cargo", "clang", "deno", "dotnet", "gcc", "go", "java", "node", "npm", "npx", "perl", "php",
+  "pip", "pip3", "pnpm", "python", "python3", "ruby", "rustc", "swift", "uv", "yarn"
+] as const);
+const EDUCATIONAL_TITLE_FINAL_TOKENS = Object.freeze([
+  "basics", "course", "fundamentals", "guide", "introduction", "lesson", "overview", "project", "training", "tutorial", "workshop"
+] as const);
 
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid project profile at ${path}: ${message}`);
@@ -151,23 +158,24 @@ function matchingStringAt(value: unknown, path: string, pattern: RegExp): string
   return result;
 }
 
-function isDeclarativeCommandLanguage(value: string): boolean {
+function isReservedDeclarativeCommand(value: string): boolean {
   const tokens = value.split(" ");
   const firstToken = tokens[0]!.toLowerCase();
   if ((DECLARATIVE_COMMAND_TOKENS as readonly string[]).includes(firstToken)) return true;
-  if (!(RUNTIME_TITLE_TOKENS as readonly string[]).includes(firstToken)) return false;
-  const secondToken = tokens[1]?.toLowerCase();
-  return secondToken !== undefined && (RUNTIME_COMMAND_OPTION_TOKENS as readonly string[]).includes(secondToken);
+  if (!(RUNTIME_TOOL_TOKENS as readonly string[]).includes(firstToken)) return false;
+  const finalToken = tokens[tokens.length - 1]!.toLowerCase();
+  return !(EDUCATIONAL_TITLE_FINAL_TOKENS as readonly string[]).includes(finalToken);
 }
 
 function normalizedNamedStringAt(value: unknown, path: string, pattern: RegExp): string {
-  const normalized = boundedStringAt(value, path).normalize("NFC");
+  if (typeof value !== "string" || value.length === 0) invalid(path, "expected a non-empty string");
+  const normalized = boundedStringAt(value.normalize("NFC"), path);
   if (
     normalized.startsWith(" ") ||
     normalized.endsWith(" ") ||
     normalized.includes("  ") ||
     !pattern.test(normalized) ||
-    isDeclarativeCommandLanguage(normalized)
+    isReservedDeclarativeCommand(normalized)
   ) invalid(path, "unsafe value");
   return normalized;
 }

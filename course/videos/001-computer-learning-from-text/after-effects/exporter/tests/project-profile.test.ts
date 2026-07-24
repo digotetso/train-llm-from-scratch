@@ -127,6 +127,16 @@ test("rejects leading shell and executable command forms in declarative names", 
     ["find docs", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.style = "find docs"; }],
     ["umask 077", (value) => { (value.naming as Record<string, unknown>).importFolder = "umask 077"; }],
     ["Python runtime option", (value) => { (value.source as Record<string, unknown>).pageName = "Python -m"; }],
+    ["node build", (value) => { (value.project as Record<string, unknown>).displayName = "node build"; }],
+    ["bun run", (value) => { (value.project as Record<string, unknown>).displayName = "bun run"; }],
+    ["deno task", (value) => { (value.project as Record<string, unknown>).displayName = "deno task"; }],
+    ["java Main", (value) => { (value.project as Record<string, unknown>).displayName = "java Main"; }],
+    ["python script", (value) => { (value.project as Record<string, unknown>).displayName = "python script"; }],
+    ["go test", (value) => { (value.project as Record<string, unknown>).displayName = "go test"; }],
+    ["cargo build", (value) => { (value.project as Record<string, unknown>).displayName = "cargo build"; }],
+    ["uv run", (value) => { (value.project as Record<string, unknown>).displayName = "uv run"; }],
+    ["pip install", (value) => { (value.project as Record<string, unknown>).displayName = "pip install"; }],
+    ["npm install", (value) => { (value.project as Record<string, unknown>).displayName = "npm install"; }],
     ["sftp command", (value) => { (value.project as Record<string, unknown>).displayName = "sftp archive"; }],
     ["JavaScript declaration", (value) => { (value.project as Record<string, unknown>).displayName = "const Profile"; }]
   ];
@@ -153,6 +163,26 @@ test("normalizes NFD names to NFC before canonical hashing", () => {
   assert.equal(validateProjectProfile(nfd).naming.importFolder, "café overview");
   assert.equal(canonicalProfileJson(nfd), canonicalProfileJson(nfc));
   assert.equal(hashProjectProfile(nfd).profileSha256, hashProjectProfile(nfc).profileSha256);
+});
+
+test("normalizes names before enforcing the character limit", () => {
+  const nfd = makeFixtureProfile();
+  const nfc = makeFixtureProfile();
+  const normalizedLimitName = `café${"a".repeat(PROFILE_LIMITS.maxNameCharacters - 4)}`;
+  (nfd.naming as Record<string, unknown>).importFolder = `cafe\u0301${"a".repeat(PROFILE_LIMITS.maxNameCharacters - 4)}`;
+  (nfc.naming as Record<string, unknown>).importFolder = normalizedLimitName;
+  assert.equal(validateProjectProfile(nfd).naming.importFolder, normalizedLimitName);
+  assert.equal(canonicalProfileJson(nfd), canonicalProfileJson(nfc));
+  assert.equal(hashProjectProfile(nfd).profileSha256, hashProjectProfile(nfc).profileSha256);
+
+  for (const overLimitName of [
+    `café${"a".repeat(PROFILE_LIMITS.maxNameCharacters - 3)}`,
+    `cafe\u0301${"a".repeat(PROFILE_LIMITS.maxNameCharacters - 3)}`
+  ]) {
+    const value = makeFixtureProfile();
+    (value.naming as Record<string, unknown>).importFolder = overLimitName;
+    assert.throws(() => validateProjectProfile(value), /exceeds the 120-character limit/);
+  }
 });
 
 test("rejects revisions outside positive safe integer bounds", () => {
