@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": { "id": "fixture-two", "displayName": "Fixture Two", "revision": 2 },
+  "source": { "fileKey": "fixture-two-file-key", "pageId": "700:2", "pageName": "Fixture Two Assets" },
+  "target": { "width": 1280, "height": 720, "fps": 24, "timeUnit": "seconds" },
+  "naming": { "shotPrefix": "F002", "masterCompBase": "FIXTURE_TWO_MASTER", "importFolder": "Fixture Two" },
+  "timeline": {
+    "sections": [{ "id": "intro", "name": "Introduction", "firstShot": 1, "lastShot": 3 }],
+    "shots": [
+      { "index": 1, "nodeId": "700:10", "compName": "F002_SH01_Open", "start": 0, "duration": 2, "sectionId": "intro", "sectionParentNodeId": "700:1" },
+      { "index": 2, "nodeId": "700:11", "compName": "F002_SH02_Explain", "start": 2, "duration": 2, "sectionId": "intro", "sectionParentNodeId": "700:1" },
+      { "index": 3, "nodeId": "700:12", "compName": "F002_SH03_Close", "start": 4, "duration": 2, "sectionId": "intro", "sectionParentNodeId": "700:1" }
+    ]
+  },
+  "fontPolicy": {
+    "required": [{ "family": "Inter", "style": "Regular" }, { "family": "Sora", "style": "Bold" }],
+    "fallbacks": [{ "source": { "family": "Sora", "style": "Bold" }, "fallback": { "family": "Inter", "style": "Regular" } }]
+  },
+  "limits": { "maxFrames": 3, "maxAssets": 16 }
+}

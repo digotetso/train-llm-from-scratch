@@ -10,3 +10,16 @@ export const LIMITS = Object.freeze({
   pairingTtlMs: 5 * 60_000,
   tokenIdleTtlMs: 30 * 24 * 60 * 60_000
 });
+
+export const PROFILE_LIMITS = Object.freeze({
+  maxProfileBytes: 1 * 1024 * 1024,
+  maxInstalledProfiles: 256,
+  maxFrames: 256,
+  maxAssets: 2_048,
+  maxDimension: 16_384,
+  maxFps: 120,
+  maxDurationSeconds: 6 * 60 * 60,
+  maxNameCharacters: 120,
+  maxRequiredFonts: 256,
+  maxFontFallbacks: 512
+});

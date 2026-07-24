@@ -1,0 +1,491 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": {
+    "id": "video-001",
+    "displayName": "Video 001 - What AI Models Actually Do",
+    "revision": 1
+  },
+  "source": {
+    "fileKey": "fFTux3sx2AzVQtoya67f95",
+    "pageId": "90:2",
+    "pageName": "02 Video 001 - AE Assets"
+  },
+  "target": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "timeUnit": "seconds"
+  },
+  "naming": {
+    "shotPrefix": "S001",
+    "masterCompBase": "VIDEO001_MASTER",
+    "importFolder": "Video 001"
+  },
+  "timeline": {
+    "sections": [
+      {
+        "id": "hook",
+        "name": "Hook",
+        "firstShot": 1,
+        "lastShot": 4
+      },
+      {
+        "id": "direct-explanation",
+        "name": "Direct Explanation",
+        "firstShot": 5,
+        "lastShot": 9
+      },
+      {
+        "id": "technical-meaning",
+        "name": "Technical Meaning",
+        "firstShot": 10,
+        "lastShot": 17
+      },
+      {
+        "id": "tiny-example",
+        "name": "Tiny Example",
+        "firstShot": 18,
+        "lastShot": 25
+      },
+      {
+        "id": "repository-walkthrough",
+        "name": "Repository Walkthrough",
+        "firstShot": 26,
+        "lastShot": 32
+      },
+      {
+        "id": "live-mini-lab",
+        "name": "Live Mini-Lab",
+        "firstShot": 33,
+        "lastShot": 39
+      },
+      {
+        "id": "common-mistake",
+        "name": "Common Mistake",
+        "firstShot": 40,
+        "lastShot": 43
+      },
+      {
+        "id": "recap-and-exercise",
+        "name": "Recap and Exercise",
+        "firstShot": 44,
+        "lastShot": 48
+      }
+    ],
+    "shots": [
+      {
+        "index": 1,
+        "nodeId": "94:2",
+        "compName": "S001_SH01_Hook_CatWord",
+        "start": 0,
+        "duration": 8,
+        "sectionId": "hook"
+      },
+      {
+        "index": 2,
+        "nodeId": "94:5",
+        "compName": "S001_SH02_Hook_HumanAssociations",
+        "start": 8,
+        "duration": 10,
+        "sectionId": "hook"
+      },
+      {
+        "index": 3,
+        "nodeId": "94:8",
+        "compName": "S001_SH03_Hook_ProgramData",
+        "start": 18,
+        "duration": 12,
+        "sectionId": "hook"
+      },
+      {
+        "index": 4,
+        "nodeId": "94:11",
+        "compName": "S001_SH04_Hook_LessonPromise",
+        "start": 30,
+        "duration": 15,
+        "sectionId": "hook"
+      },
+      {
+        "index": 5,
+        "nodeId": "94:14",
+        "compName": "S001_SH05_Direct_DefinedStandards",
+        "start": 45,
+        "duration": 13,
+        "sectionId": "direct-explanation"
+      },
+      {
+        "index": 6,
+        "nodeId": "94:17",
+        "compName": "S001_SH06_Direct_Ato65",
+        "start": 58,
+        "duration": 14,
+        "sectionId": "direct-explanation"
+      },
+      {
+        "index": 7,
+        "nodeId": "94:20",
+        "compName": "S001_SH07_Direct_AContexts",
+        "start": 72,
+        "duration": 16,
+        "sectionId": "direct-explanation"
+      },
+      {
+        "index": 8,
+        "nodeId": "94:23",
+        "compName": "S001_SH08_Direct_RepresentationNotMeaning",
+        "start": 88,
+        "duration": 15,
+        "sectionId": "direct-explanation"
+      },
+      {
+        "index": 9,
+        "nodeId": "94:26",
+        "compName": "S001_SH09_Direct_FixedVsAdjustable",
+        "start": 103,
+        "duration": 17,
+        "sectionId": "direct-explanation"
+      },
+      {
+        "index": 10,
+        "nodeId": "94:29",
+        "compName": "S001_SH10_Technical_CharacterStrip",
+        "start": 120,
+        "duration": 14,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 11,
+        "nodeId": "94:32",
+        "compName": "S001_SH11_Technical_UnicodeDefinition",
+        "start": 134,
+        "duration": 14,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 12,
+        "nodeId": "94:35",
+        "compName": "S001_SH12_Technical_OrdFunction",
+        "start": 148,
+        "duration": 15,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 13,
+        "nodeId": "94:38",
+        "compName": "S001_SH13_Technical_CatCodePoints",
+        "start": 163,
+        "duration": 15,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 14,
+        "nodeId": "94:41",
+        "compName": "S001_SH14_Technical_ByteRange",
+        "start": 178,
+        "duration": 14,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 15,
+        "nodeId": "94:44",
+        "compName": "S001_SH15_Technical_UTF8Cat",
+        "start": 192,
+        "duration": 15,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 16,
+        "nodeId": "94:47",
+        "compName": "S001_SH16_Technical_ModelParameters",
+        "start": 207,
+        "duration": 16,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 17,
+        "nodeId": "94:50",
+        "compName": "S001_SH17_Technical_TwoReasons",
+        "start": 223,
+        "duration": 17,
+        "sectionId": "technical-meaning"
+      },
+      {
+        "index": 18,
+        "nodeId": "95:2",
+        "compName": "S001_SH18_Example_ThreeSentences",
+        "start": 240,
+        "duration": 14,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 19,
+        "nodeId": "95:5",
+        "compName": "S001_SH19_Example_RepeatedPattern",
+        "start": 254,
+        "duration": 14,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 20,
+        "nodeId": "95:8",
+        "compName": "S001_SH20_Example_CatHandCheck",
+        "start": 268,
+        "duration": 15,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 21,
+        "nodeId": "95:11",
+        "compName": "S001_SH21_Example_NumericOperations",
+        "start": 283,
+        "duration": 15,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 22,
+        "nodeId": "95:14",
+        "compName": "S001_SH22_Example_DistanceNotMeaning",
+        "start": 298,
+        "duration": 14,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 23,
+        "nodeId": "95:17",
+        "compName": "S001_SH23_Example_BeforeTraining",
+        "start": 312,
+        "duration": 16,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 24,
+        "nodeId": "95:20",
+        "compName": "S001_SH24_Example_AfterTraining",
+        "start": 328,
+        "duration": 16,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 25,
+        "nodeId": "95:23",
+        "compName": "S001_SH25_Example_PatternVsMemorization",
+        "start": 344,
+        "duration": 16,
+        "sectionId": "tiny-example"
+      },
+      {
+        "index": 26,
+        "nodeId": "95:26",
+        "compName": "S001_SH26_Repo_PreparationOverview",
+        "start": 360,
+        "duration": 22,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 27,
+        "nodeId": "95:29",
+        "compName": "S001_SH27_Repo_NormalizeFunction",
+        "start": 382,
+        "duration": 26,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 28,
+        "nodeId": "95:32",
+        "compName": "S001_SH28_Repo_NFKCStep",
+        "start": 408,
+        "duration": 24,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 29,
+        "nodeId": "95:35",
+        "compName": "S001_SH29_Repo_NewlinesAndWhitespace",
+        "start": 432,
+        "duration": 26,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 30,
+        "nodeId": "95:38",
+        "compName": "S001_SH30_Repo_NormalizationWarning",
+        "start": 458,
+        "duration": 27,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 31,
+        "nodeId": "95:41",
+        "compName": "S001_SH31_Repo_PrepareRecord",
+        "start": 485,
+        "duration": 27,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 32,
+        "nodeId": "95:44",
+        "compName": "S001_SH32_Repo_PreparationNotLearning",
+        "start": 512,
+        "duration": 28,
+        "sectionId": "repository-walkthrough"
+      },
+      {
+        "index": 33,
+        "nodeId": "95:47",
+        "compName": "S001_SH33_Lab_FileOverview",
+        "start": 540,
+        "duration": 24,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 34,
+        "nodeId": "95:50",
+        "compName": "S001_SH34_Lab_PredictCat",
+        "start": 564,
+        "duration": 24,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 35,
+        "nodeId": "95:53",
+        "compName": "S001_SH35_Lab_RunCommand",
+        "start": 588,
+        "duration": 30,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 36,
+        "nodeId": "95:56",
+        "compName": "S001_SH36_Lab_CompareCatLists",
+        "start": 618,
+        "duration": 26,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 37,
+        "nodeId": "95:59",
+        "compName": "S001_SH37_Lab_EqualityCaveat",
+        "start": 644,
+        "duration": 21,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 38,
+        "nodeId": "95:62",
+        "compName": "S001_SH38_Lab_EditToA",
+        "start": 665,
+        "duration": 27,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 39,
+        "nodeId": "95:65",
+        "compName": "S001_SH39_Lab_RunAAndRestore",
+        "start": 692,
+        "duration": 28,
+        "sectionId": "live-mini-lab"
+      },
+      {
+        "index": 40,
+        "nodeId": "95:68",
+        "compName": "S001_SH40_Mistake_65IsMeaning",
+        "start": 720,
+        "duration": 14,
+        "sectionId": "common-mistake"
+      },
+      {
+        "index": 41,
+        "nodeId": "95:71",
+        "compName": "S001_SH41_Mistake_AContextWheel",
+        "start": 734,
+        "duration": 16,
+        "sectionId": "common-mistake"
+      },
+      {
+        "index": 42,
+        "nodeId": "95:74",
+        "compName": "S001_SH42_Mistake_MappingSwapTest",
+        "start": 750,
+        "duration": 14,
+        "sectionId": "common-mistake"
+      },
+      {
+        "index": 43,
+        "nodeId": "95:77",
+        "compName": "S001_SH43_Mistake_EncodingVsLearning",
+        "start": 764,
+        "duration": 16,
+        "sectionId": "common-mistake"
+      },
+      {
+        "index": 44,
+        "nodeId": "95:80",
+        "compName": "S001_SH44_Recap_Objective",
+        "start": 780,
+        "duration": 12,
+        "sectionId": "recap-and-exercise"
+      },
+      {
+        "index": 45,
+        "nodeId": "95:83",
+        "compName": "S001_SH45_Recap_FourSteps",
+        "start": 792,
+        "duration": 16,
+        "sectionId": "recap-and-exercise"
+      },
+      {
+        "index": 46,
+        "nodeId": "95:86",
+        "compName": "S001_SH46_Recap_SelfCheck",
+        "start": 808,
+        "duration": 14,
+        "sectionId": "recap-and-exercise"
+      },
+      {
+        "index": 47,
+        "nodeId": "95:89",
+        "compName": "S001_SH47_Recap_Exercise",
+        "start": 822,
+        "duration": 12,
+        "sectionId": "recap-and-exercise"
+      },
+      {
+        "index": 48,
+        "nodeId": "95:92",
+        "compName": "S001_SH48_Recap_NextLesson",
+        "start": 834,
+        "duration": 6,
+        "sectionId": "recap-and-exercise"
+      }
+    ]
+  },
+  "fontPolicy": {
+    "required": [
+      {
+        "family": "Sora",
+        "style": "SemiBold"
+      },
+      {
+        "family": "Sora",
+        "style": "Bold"
+      },
+      {
+        "family": "Inter",
+        "style": "Medium"
+      },
+      {
+        "family": "Inter",
+        "style": "Regular"
+      },
+      {
+        "family": "JetBrains_Mono",
+        "style": "Medium"
+      }
+    ],
+    "fallbacks": []
+  },
+  "limits": {
+    "maxFrames": 48,
+    "maxAssets": 2048
+  }
+}
