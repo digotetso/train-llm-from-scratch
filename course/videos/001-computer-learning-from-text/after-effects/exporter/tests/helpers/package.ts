@@ -1,10 +1,17 @@
 import type { ExporterPackage } from "../../src/shared/contract.ts";
+import { hashProjectProfile, profileReference, type InstalledProfile } from "../../src/shared/project-profile.ts";
+import { makeVideo001Profile } from "./profile.ts";
+
+export function installedVideo001(): InstalledProfile {
+  return hashProjectProfile(makeVideo001Profile());
+}
 
 const valid: ExporterPackage = {
-  schemaVersion: "2.0.0",
+  schemaVersion: "3.0.0",
   exporterVersion: "0.2.0",
   exportedAt: "2026-07-22T00:00:00.000Z",
   contentHash: "a".repeat(64),
+  project: profileReference(installedVideo001()),
   source: { fileKey: "fFTux3sx2AzVQtoya67f95", pageId: "90:2" },
   target: { width: 1920, height: 1080, fps: 30, timeUnit: "seconds" },
   frames: [{

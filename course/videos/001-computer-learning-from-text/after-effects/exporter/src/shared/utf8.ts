@@ -22,6 +22,43 @@ export function utf8ByteLength(value: string): number {
   return bytes;
 }
 
+/** UTF-8 encoding without relying on the browser-only TextEncoder global. */
+export function encodeUtf8(value: string): Uint8Array {
+  const result = new Uint8Array(utf8ByteLength(value));
+  let offset = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const first = value.charCodeAt(index);
+    let codePoint = first;
+    if (first >= 0xd800 && first <= 0xdbff) {
+      const second = value.charCodeAt(index + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) {
+        codePoint = 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00);
+        index += 1;
+      } else {
+        codePoint = 0xfffd;
+      }
+    } else if (first >= 0xdc00 && first <= 0xdfff) {
+      codePoint = 0xfffd;
+    }
+    if (codePoint <= 0x7f) {
+      result[offset++] = codePoint;
+    } else if (codePoint <= 0x7ff) {
+      result[offset++] = 0xc0 | (codePoint >> 6);
+      result[offset++] = 0x80 | (codePoint & 0x3f);
+    } else if (codePoint <= 0xffff) {
+      result[offset++] = 0xe0 | (codePoint >> 12);
+      result[offset++] = 0x80 | ((codePoint >> 6) & 0x3f);
+      result[offset++] = 0x80 | (codePoint & 0x3f);
+    } else {
+      result[offset++] = 0xf0 | (codePoint >> 18);
+      result[offset++] = 0x80 | ((codePoint >> 12) & 0x3f);
+      result[offset++] = 0x80 | ((codePoint >> 6) & 0x3f);
+      result[offset++] = 0x80 | (codePoint & 0x3f);
+    }
+  }
+  return result;
+}
+
 /** Strict UTF-8 decoding without relying on browser-only TextDecoder globals. */
 export function decodeUtf8(bytes: Uint8Array): string {
   let result = "";

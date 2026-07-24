@@ -62,6 +62,7 @@ function reverseWireOrder(value: ExporterPackage): Record<string, unknown> {
     frames: value.frames,
     target: value.target,
     source: value.source,
+    project: value.project,
     contentHash: value.contentHash,
     exportedAt: value.exportedAt,
     exporterVersion: value.exporterVersion,

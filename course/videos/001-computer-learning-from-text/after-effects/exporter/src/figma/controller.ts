@@ -4,6 +4,7 @@ import {
   type AssetDescriptor,
   type ExporterPackage
 } from "../shared/contract.ts";
+import { legacyVideo001ExportMediaType, legacyVideo001ProfileReference } from "../shared/legacy-video001.ts";
 import {
   serializeFrame,
   type FigmaNodeSnapshot,
@@ -17,7 +18,7 @@ import { FIGMA_BRIDGE_ORIGIN } from "../shared/figma-network.mjs";
 
 export const BRIDGE_BASE_URL = FIGMA_BRIDGE_ORIGIN;
 export const BRIDGE_TOKEN_KEY = "video001-ae-bridge-token";
-export const EXPORT_MEDIA_TYPE = "application/vnd.video001.figma-ae+json";
+export const EXPORT_MEDIA_TYPE = legacyVideo001ExportMediaType;
 
 const EXPORTER_VERSION = "0.2.0";
 const FRAME_LIKE_TYPES = new Set(["FRAME", "COMPONENT", "INSTANCE"]);
@@ -664,10 +665,11 @@ export function createController(host: ControllerHost, config: EmbeddedVideo001C
     }));
     const page = host.getCurrentPage();
     const value: ExporterPackage = {
-      schemaVersion: "2.0.0",
+      schemaVersion: "3.0.0",
       exporterVersion: EXPORTER_VERSION,
       exportedAt: host.now().toISOString(),
       contentHash: "",
+      project: legacyVideo001ProfileReference(),
       source: { fileKey: host.fileKey!, pageId: page.id },
       target: { ...config.target },
       frames,

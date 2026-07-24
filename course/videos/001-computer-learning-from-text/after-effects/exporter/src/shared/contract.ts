@@ -1,5 +1,11 @@
 import { canonicalJson } from "./canonical-json.ts";
 import { LIMITS } from "./limits.ts";
+import {
+  hashProjectProfile,
+  profileReference,
+  type InstalledProfile,
+  type ProfileReference
+} from "./project-profile.ts";
 import { utf8ByteLength } from "./utf8.ts";
 
 export interface BaseNode {
@@ -86,10 +92,11 @@ export interface PackageByteCounts {
 }
 
 export interface ExporterPackage {
-  schemaVersion: "2.0.0";
+  schemaVersion: "3.0.0";
   exporterVersion: string;
   exportedAt: string;
   contentHash: string;
+  project: ProfileReference;
   source: { fileKey: string; pageId: string };
   target: { width: number; height: number; fps: number; timeUnit: "seconds" };
   frames: ExportFrame[];
@@ -418,6 +425,22 @@ function isoTimestampAt(value: unknown, path: string): string {
   return timestamp;
 }
 
+function profileReferenceAt(value: unknown, path: string): ProfileReference {
+  const record = recordAt(value, path);
+  exactKeys(record, ["projectId", "profileRevision", "profileSha256"], path);
+  return {
+    projectId: stringAt(record.projectId, `${path}.projectId`),
+    profileRevision: safeIntegerAt(record.profileRevision, `${path}.profileRevision`),
+    profileSha256: hashAt(record.profileSha256, `${path}.profileSha256`)
+  };
+}
+
+function sameProfileReference(left: ProfileReference, right: ProfileReference): boolean {
+  return left.projectId === right.projectId &&
+    left.profileRevision === right.profileRevision &&
+    left.profileSha256 === right.profileSha256;
+}
+
 export function assertJsonContainerDepth(value: unknown): void {
   type Entry = { depth: number; exit: boolean; value: unknown };
   const ancestors = new Set<object>();
@@ -455,20 +478,20 @@ function validatePackageInternal(
 ): ExporterPackage {
   assertJsonContainerDepth(value);
   const record = recordAt(value, "$");
-  exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "source", "target", "frames", "assets"], "$");
+  exactKeys(record, ["schemaVersion", "exporterVersion", "exportedAt", "contentHash", "project", "source", "target", "frames", "assets"], "$");
 
   const schemaVersion = stringAt(record.schemaVersion, "$.schemaVersion");
   const schemaMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(schemaVersion);
-  if (schemaMatch?.[1] !== "2") {
+  if (schemaMatch?.[1] !== "3") {
     invalid(
       "$.schemaVersion",
-      `unsupported schema major in ${JSON.stringify(schemaVersion)}; exporter requires "2.0.0"`
+      `unsupported schema major in ${JSON.stringify(schemaVersion)}; exporter requires "3.0.0"`
     );
   }
-  if (schemaVersion !== "2.0.0") {
+  if (schemaVersion !== "3.0.0") {
     invalid(
       "$.schemaVersion",
-      `unsupported schema version ${JSON.stringify(schemaVersion)}; exporter requires "2.0.0"`
+      `unsupported schema version ${JSON.stringify(schemaVersion)}; exporter requires "3.0.0"`
     );
   }
 
@@ -513,10 +536,11 @@ function validatePackageInternal(
   }
 
   const result: ExporterPackage = {
-    schemaVersion: "2.0.0",
+    schemaVersion: "3.0.0",
     exporterVersion: stringAt(record.exporterVersion, "$.exporterVersion"),
     exportedAt: isoTimestampAt(record.exportedAt, "$.exportedAt"),
     contentHash: hashAt(record.contentHash, "$.contentHash", allowEmptyContentHash),
+    project: profileReferenceAt(record.project, "$.project"),
     source: {
       fileKey: stringAt(source.fileKey, "$.source.fileKey"),
       pageId: stringAt(source.pageId, "$.source.pageId")
@@ -567,6 +591,60 @@ function validatePackageInternal(
 
 export function validatePackage(value: unknown): ExporterPackage {
   return validatePackageInternal(value, false);
+}
+
+/**
+ * Enforces the installed declarative project profile after generic wire
+ * validation. A package may contain a chronological subset of a profile's
+ * timeline (for a selected-shot export), but every included frame must be an
+ * exact declared shot.
+ */
+export function validatePackageAgainstProfile(value: unknown, installed: InstalledProfile): ExporterPackage {
+  const canonicalInstalled = hashProjectProfile(installed.profile);
+  if (canonicalInstalled.profileSha256 !== installed.profileSha256) {
+    throw new TypeError("Installed profile hash does not match its profile content");
+  }
+  const result = validatePackage(value);
+  const expectedReference = profileReference(canonicalInstalled);
+  if (!sameProfileReference(result.project, expectedReference)) {
+    invalid("$.project", "profile reference does not match the installed profile");
+  }
+  const profile = canonicalInstalled.profile;
+  if (result.source.fileKey !== profile.source.fileKey || result.source.pageId !== profile.source.pageId) {
+    invalid("$.source", "source does not match the installed profile");
+  }
+  if (
+    result.target.width !== profile.target.width ||
+    result.target.height !== profile.target.height ||
+    result.target.fps !== profile.target.fps ||
+    result.target.timeUnit !== profile.target.timeUnit
+  ) {
+    invalid("$.target", "target does not match the installed profile");
+  }
+  if (result.frames.length > profile.limits.maxFrames) {
+    invalid("$.frames", `exceeds the installed profile's ${profile.limits.maxFrames}-frame limit`);
+  }
+  if (result.assets.length > profile.limits.maxAssets) {
+    invalid("$.assets", `exceeds the installed profile's ${profile.limits.maxAssets}-asset limit`);
+  }
+
+  const shotsByNodeId = new Map(profile.timeline.shots.map((shot) => [shot.nodeId, shot]));
+  let previousShotIndex = 0;
+  for (let index = 0; index < result.frames.length; index += 1) {
+    const frame = result.frames[index]!;
+    const shot = shotsByNodeId.get(frame.nodeId);
+    if (shot === undefined) invalid(`$.frames[${index}].nodeId`, "unknown profile shot");
+    if (shot.index <= previousShotIndex) invalid(`$.frames[${index}].nodeId`, "frames must preserve profile timeline order");
+    previousShotIndex = shot.index;
+    if (frame.name !== shot.compName) invalid(`$.frames[${index}].name`, "frame name does not match the installed profile shot");
+    if (frame.duration !== shot.duration) {
+      invalid(`$.frames[${index}].duration`, "frame duration does not match the installed profile shot");
+    }
+    if (frame.width !== profile.target.width || frame.height !== profile.target.height) {
+      invalid(`$.frames[${index}]`, "frame dimensions do not match the installed profile target");
+    }
+  }
+  return result;
 }
 
 export function validatePackageWithVerifiedAssets(

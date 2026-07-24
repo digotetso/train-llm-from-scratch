@@ -1,7 +1,7 @@
 import { canonicalJson } from "./canonical-json.ts";
 import { PROFILE_LIMITS } from "./limits.ts";
 import { sha256Hex } from "./sha256.ts";
-import { utf8ByteLength } from "./utf8.ts";
+import { encodeUtf8, utf8ByteLength } from "./utf8.ts";
 
 export interface ProjectProfile {
   schemaVersion: "1.0.0";
@@ -409,7 +409,7 @@ export function canonicalProfileJson(value: unknown): string {
 
 export function hashProjectProfile(value: unknown): InstalledProfile {
   const profile = validateProjectProfile(value);
-  const bytes = new TextEncoder().encode(canonicalJson(profile));
+  const bytes = encodeUtf8(canonicalJson(profile));
   return { profile, profileSha256: sha256Hex(bytes) };
 }
 

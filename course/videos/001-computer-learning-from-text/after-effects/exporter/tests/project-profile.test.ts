@@ -25,6 +25,16 @@ test("accepts the declared Video 001 profile without changing fidelity timing", 
   assert.equal(profile.naming.masterCompBase, "VIDEO001_MASTER");
 });
 
+test("hashes profiles without a browser TextEncoder global", { concurrency: false }, () => {
+  const OriginalTextEncoder = globalThis.TextEncoder;
+  Object.defineProperty(globalThis, "TextEncoder", { configurable: true, value: undefined, writable: true });
+  try {
+    assert.match(hashProjectProfile(makeFixtureProfile()).profileSha256, /^[0-9a-f]{64}$/);
+  } finally {
+    Object.defineProperty(globalThis, "TextEncoder", { configurable: true, value: OriginalTextEncoder, writable: true });
+  }
+});
+
 test("accepts the independent second profile fixture", () => {
   const profile = validateProjectProfile(makeFixtureProfile());
   assert.equal(profile.project.id, "fixture-two");

@@ -10,11 +10,14 @@ import {
   type RasterNode,
   type TextNode,
   validatePackage,
+  validatePackageAgainstProfile,
   validatePackageWithVerifiedAssets
 } from "../src/shared/contract.ts";
 import { utf8ByteLength } from "../src/shared/utf8.ts";
 import { LIMITS } from "../src/shared/limits.ts";
-import { makeValidPackage } from "./helpers/package.ts";
+import { makeFixtureProfile } from "./helpers/profile.ts";
+import { makeValidPackage, installedVideo001 } from "./helpers/package.ts";
+import { hashProjectProfile, profileReference } from "../src/shared/project-profile.ts";
 
 function firstTextNode(value: ExporterPackage): TextNode {
   const node = value.frames[0]?.children[0];
@@ -69,16 +72,74 @@ test("returns a deeply isolated clone", () => {
 
 test("rejects an unknown schema major version", () => {
   assert.throws(
-    () => validatePackage({ ...makeValidPackage(), schemaVersion: "3.0.0" }),
+    () => validatePackage({ ...makeValidPackage(), schemaVersion: "4.0.0" }),
     /schema major/i
   );
 });
 
-test("rejects legacy 1.x packages with the required 2.0.0 version", () => {
+test("rejects legacy packages from the generic schema 3 validator", () => {
   assert.throws(
     () => validatePackage({ ...makeValidPackage(), schemaVersion: "1.0.0" }),
-    /unsupported schema.*1\.0\.0.*requires.*2\.0\.0/i
+    /unsupported schema.*1\.0\.0.*requires.*3\.0\.0/i
   );
+});
+
+test("requires the exact profile reference for an installed profile", () => {
+  const value = makeValidPackage();
+  value.project.profileSha256 = "b".repeat(64);
+  assert.throws(
+    () => validatePackageAgainstProfile(value, installedVideo001()),
+    /profile reference does not match the installed profile/
+  );
+});
+
+test("binds source, target, frame identity, timing, and timeline order to the installed profile", () => {
+  const installed = installedVideo001();
+  const cases: Array<[string, (value: ExporterPackage) => void, RegExp]> = [
+    ["source file", (value) => { value.source.fileKey = "different-file"; }, /source does not match/i],
+    ["source page", (value) => { value.source.pageId = "1:2"; }, /source does not match/i],
+    ["target", (value) => { value.target.width = 1280; }, /target does not match/i],
+    ["unknown shot", (value) => { value.frames[0]!.nodeId = "1:2"; }, /unknown profile shot/i],
+    ["shot name", (value) => { value.frames[0]!.name = "Other"; }, /name does not match/i],
+    ["shot duration", (value) => { value.frames[0]!.duration = 1; }, /duration does not match/i],
+    ["timeline order", (value) => {
+      const second = structuredClone(value.frames[0]!);
+      second.nodeId = installed.profile.timeline.shots[0]!.nodeId;
+      second.name = installed.profile.timeline.shots[0]!.compName;
+      second.duration = installed.profile.timeline.shots[0]!.duration;
+      (second.children[0] as TextNode).id = "text-2";
+      value.frames.push(second);
+    }, /timeline order/i]
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const value = makeValidPackage();
+    mutate(value);
+    assert.throws(() => validatePackageAgainstProfile(value, installed), expected, label);
+  }
+});
+
+test("uses installed profile dimensions, timing, naming, and limits without Video 001 constants", () => {
+  const installed = hashProjectProfile(makeFixtureProfile());
+  const value = makeValidPackage();
+  value.project = profileReference(installed);
+  value.source = { fileKey: installed.profile.source.fileKey, pageId: installed.profile.source.pageId };
+  value.target = { ...installed.profile.target };
+  value.frames = installed.profile.timeline.shots.map((shot, index) => {
+    const frame = structuredClone(value.frames[0]!);
+    frame.nodeId = shot.nodeId;
+    frame.name = shot.compName;
+    frame.width = installed.profile.target.width;
+    frame.height = installed.profile.target.height;
+    frame.duration = shot.duration;
+    (frame.children[0] as TextNode).id = `text-${index + 1}`;
+    return frame;
+  });
+  assert.deepEqual(validatePackageAgainstProfile(value, installed).project, profileReference(installed));
+  const excess = structuredClone(value.frames[0]!);
+  excess.nodeId = "700:99";
+  (excess.children[0] as TextNode).id = "text-excess";
+  value.frames.push(excess);
+  assert.throws(() => validatePackageAgainstProfile(value, installed), /frame limit/i);
 });
 
 test("requires an explicit seconds time unit on the package target", () => {
