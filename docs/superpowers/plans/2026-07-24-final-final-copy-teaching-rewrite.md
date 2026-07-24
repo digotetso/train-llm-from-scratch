@@ -336,7 +336,7 @@ print("Prepared text:", repr(prepare_text(source)))
 The displayed run command must be:
 
 ```bash
-python text_preparation.py
+python inspect_and_prepare_text.py
 ```
 
 The displayed output must be:
@@ -590,7 +590,7 @@ required = [
     "How can we inspect and prepare source text consistently before later AI work?",
     "A code point is the fixed number Unicode uses to identify a character in today’s examples.",
     "NFKC can remove distinctions that matter",
-    "python text_preparation.py",
+    "python inspect_and_prepare_text.py",
     "Prepared text: 'Lesson 1: A cat ff\\nsecond line'",
     "'Chapter 2: Big office\\nfinal line'",
 ]
