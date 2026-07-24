@@ -1,10 +1,12 @@
-# Video 1 — What Is Really Inside Text?
+# Video 1 — Before AI Can Learn: How Computers Represent and Prepare Text
+
+**Subtitle:** How to inspect source text, understand character identities, and prepare consistent text before later AI work
 
 ---
 
 ## 00:00 The Text Looks Simple
 
-[On screen: the fenced sample below is a visual rendering, not the exact stored value. Production: reveal the surrounding spaces and the tab with visible markers. The exact stored value appears in the Python example below.]
+[On screen: show the sample as it normally appears. The exact stored value will be revealed in the next section.]
 
 ```text
   Lesson ①: Ａ cat ﬀ
@@ -12,46 +14,53 @@
   second line
 ```
 
-You may have pasted text into an AI tool to improve an email, reshape a paragraph, or suggest code. To us, the text can look simple: a few words, a blank line, perhaps an unusual symbol. Yet the software receives every mark that was entered, including marks our eyes may skip over.
+You may have used an AI text box to improve an email, reshape text, or suggest code. You enter ordinary writing, and useful writing comes back. Our course begins earlier, with a small mystery: when writing looks simple to us, what exactly has the computer received?
 
-This sample gives us a useful mystery. We can see spaces around the words, an empty line, a circled number, a wide letter, and a joined-looking symbol. There is also a mark before the second line that creates a gap but is difficult to see. Some marks even look interchangeable although software can tell them apart.
+Look at the sample. It appears to be two short lines with a gap between them, yet some of its marks are easy to overlook. That small mystery leads to the larger question we will answer across the course: How do we take writing like this and eventually use it to train an LLM?
 
-Large collections used for training may combine writing from web pages, books, code, and other sources. Alongside what we see here, they can contain extra spaces, tabs, repeated blank lines, different ways of ending lines, hidden marks, or several symbols used for the same intended role.
-
-Now let’s place that mystery inside the larger goal. This course will show how to train an LLM from scratch. How do we take writing like this and eventually use it to train an LLM?
+In this course, we are training an LLM from scratch, before those familiar abilities exist.
 
 For now, LLM names the system we are building; we will explain its technical meaning later.
 
-Training needs many text examples arranged so the system can learn from them. Once those examples are organized, we call the collection a **training dataset**.
+One example is not enough for practice. We need many examples of writing, collected and arranged so the system can work with them repeatedly. Once those examples are organized, we call the collection a **training dataset**.
 
-Here is the whole-course map, not a full explanation. We collect writing, organize the training dataset, make the text consistent, split it into smaller pieces, give the pieces numbers, create learning exercises, build an adjustable mathematical system, improve it through practice, and test the result. Each later stage has a proper technical name. We will introduce each name only after its behavior makes sense.
+Here is the whole-course path in ordinary language:
 
-Why must the text eventually become numbers? The system we are building performs mathematical operations, and those operations work with numbers. Therefore, a later stage must represent the writing using numbers.
+```text
+collect writing
+→ organize the training dataset
+→ inspect and prepare the text
+→ split it into pieces
+→ give the pieces numbers
+→ create learning exercises
+→ build an adjustable mathematical system
+→ improve it through practice
+→ test the result
+```
 
-But “turn text into numbers” is not one step. This video focuses on what must happen before we split the text and give its pieces numbers. We first reveal exactly what the collected text contains, decide which differences matter for our purpose, and apply those decisions consistently. That gives the next stage reliable starting material.
+Each step feeds the next. Why will the writing eventually need a numerical representation? The system performs mathematical operations, and those operations work with numbers.
 
-Not every difference is an error. A quote style, dash, space, or symbol may be meaningful in one collection and accidental in another. That is why we inspect first and change only according to a stated purpose.
+But “turn text into numbers” is not one step.
 
-So here is our question: **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
+That boundary matters because collected writing may look tidy while containing extra spaces, tabs, repeated blank lines, different line boundaries, hidden marks, and different symbols used for the same intended role. If we ignore those differences, later work receives material we have not actually understood.
 
+Yet not every difference is an error. Spacing or a particular symbol may carry meaning for one purpose and be accidental for another, so we must inspect before choosing what to preserve or change.
 
-## 03:10 Reveal What Is Really There
+That gives us today’s question: **How can we find out exactly what a piece of text contains and change it consistently before later AI work?**
 
-We need the exact text before changes: the **source text**, or **source**.
+## 02:20 Reveal What Is Really There
 
-Quotation marks show Python which text to store; they are not stored. Python calls the stored text a **string**.
+To answer that question, we first keep the starting value unchanged while we examine it. That unchanged starting text is the **source text**, shortened to **source**.
 
-Here, `\t` stores a tab, a larger gap. `\r\n` ends a line; writing it twice leaves an empty line.
+The quotation marks tell Python where the text begins and ends; the marks themselves are not stored. Python calls the stored value inside them a **string**.
 
-In `source = ...`, `=` stores the value on the right under `source`.
+Inside the value, `\t` places a tab, each `\r\n` marks one line boundary, and two consecutive boundaries leave an empty line. The `=` sign stores the value on its right under the name `source`.
 
 ```python
 source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
 ```
 
-What might normal printing hide? Predict before you run it.
-
-Python’s `repr` keeps those marks visible.
+Before running anything, predict: what might normal printing hide about the start, the end, and the gap between lines? Python’s `repr` lets those stored details remain visible.
 
 ```python
 print(repr(source))
@@ -61,15 +70,15 @@ print(repr(source))
 '  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
 ```
 
-The displayed `\t` and `\r\n` confirm the stored marks. `repr` adds display-only quotation marks to show the string’s boundaries.
+The result shows two leading spaces, two spaces after `ﬀ`, two `\r\n` boundaries, a tab before `second`, and two final spaces. The outer quotation marks are display boundaries added by `repr`; they are not part of the stored value.
 
-Spaces, tabs, and line-ending marks create gaps. Python calls them **whitespace**. Using `repr` to reveal the source is **inspection**: it changes nothing.
+Spaces, tabs, and line boundaries all create gaps; together we call them **whitespace**. Using evidence like this to reveal what the source holds is **inspection**. Inspection reveals the source without changing it.
 
-Hidden whitespace is now visible. But can two marks that are already visible also hide a difference?
+Now that hidden marks are visible, could visible symbols still conceal different identities?
 
-## 04:25 Similar-Looking Marks Can Still Differ
+## 03:45 Similar-Looking Text Can Still Be Different
 
-Look at these pairs before reading any result.
+Place these three pairs side by side. Each pair invites the same question.
 
 ```text
 ①    1
@@ -77,9 +86,9 @@ Look at these pairs before reading any result.
 ﬀ    ff
 ```
 
-A reader can understand the intended role of each pair. But does similar appearance or use force software to store both sides as the same character? Pause for a prediction.
+A reader may treat the two forms as serving a similar role. Before seeing any code, predict: does similar appearance or intended use force software to store both sides identically?
 
-Python can ask for the agreed number used to identify one stored character. It calls this tool `ord`. We will begin with the circled and ordinary forms of one.
+Python can ask for the agreed number used to identify one stored symbol. The built-in tool for that question is `ord`, so we can test the first pair rather than trust appearance.
 
 ```python
 print(ord("①"))
@@ -91,21 +100,19 @@ print(ord("1"))
 49
 ```
 
-The numbers differ, so software stores these as two different written symbols. A stored written symbol like either of these is called a **character**. The result does not say that one is better or that either should change. It only reveals different agreed numbers.
+The answers are `9312` and `49`. Because the numbers differ, the two stored symbols have different identities. A stored written symbol like `①` or `1` is called a **character**.
 
-## 05:20 Where Do the Agreed Numbers Come From?
+This result proves a difference in identity. It does not decide which form is better, whether their meanings always match, or whether either one should change. Our eyes helped us notice candidates; the result, not resemblance, is the storage evidence.
 
-Software needs a shared agreement to identify a character consistently. The widely used agreement here is **Unicode**.
+The other pairs leave the same issue open. To inspect them consistently, software needs a shared agreement. What provides it?
 
-Python’s `ord` asks Unicode for one character’s number, called a **code point**.
+## 05:00 The Numbers Identify Characters
 
-> In today’s examples, a code point is the fixed number Unicode uses to identify one character.
+If every program invented its own identifying numbers, the same stored character could be mistaken for another when text moved between programs. They need a shared character-identification agreement.
 
-Keep one boundary clear. A code point number identifies a character. It is useful here because it proves that two similar-looking forms can be different stored characters. It is not yet the kind of number used to train the LLM. A later lesson will explain how prepared text becomes those training numbers.
+That widely used agreement is **Unicode**. Within it, one character’s fixed identifying number is called a **code point**. This number identifies which character is present; it does not describe the character’s meaning or decide how we should use it.
 
-`ord` receives one character at a time and returns that character’s code point here. In the comparison below, `ff` deliberately contains two characters and therefore two code points.
-
-`①` has code point `9312`; `1` has `49`. The same check exposes two more differences.
+The shared agreement lets us extend the evidence:
 
 ```text
 ① -> 9312
@@ -118,17 +125,23 @@ A -> 65
 ff -> [102, 102]
 ```
 
-The last pair is useful: `ﬀ` is one character and `ff` is two, so the brackets show one number against two. Code points only identify the source; now decide which differences to keep.
+`ord` receives one character at a time and returns that character’s code point here.
 
-## 06:55 Which Differences Should We Preserve?
+`ff` deliberately contains two characters and therefore two code points.
 
-For one consistent source, should these forms stay distinct?
+The brackets make that difference countable: the single `ﬀ` produces one identifying number, while the two separate letters produce two. None of these numbers tells us whether the forms should remain different in our prepared text.
 
-For this lesson’s purpose, we choose the ordinary digit `1`, the basic letter `A`, and the two separate letters `ff`. That is a choice for this source—not proof that the other forms are universally wrong.
+A code point identifies a character. It is not the later kind of number used to train the LLM.
 
-There is no universal answer hidden in the code points. Code points identify characters; they do not tell us the purpose of the text. For code, poetry, mathematical notation, or historical text, a difference that is unimportant here may be meaningful and worth preserving.
+We can now identify what is present without confusing identification with learning. But identification gives us facts, not a policy, so which differences should we change?
 
-First notice the chosen behavior, without needing a label for it yet.
+## 06:25 Choose Which Differences to Change
+
+Identification gave us facts, so now ask a policy question: which differences should remain distinct for this source?
+
+For this example, we choose the ordinary digit `1`, the basic letter `A`, and two separate letters `ff`. That choice is purpose-dependent, not a judgment that the original forms are wrong. Code, poetry, mathematical notation, or historical text may need to preserve distinctions that this source does not.
+
+Our selected behavior is:
 
 ```text
 ① -> 1
@@ -136,61 +149,51 @@ First notice the chosen behavior, without needing a label for it yet.
 ﬀ -> ff
 ```
 
-We can make that choice because inspection exposed the source and code points exposed the identities. The next question is how to apply this one chosen consistency rule reliably instead of changing characters one by one.
+A repeatable selected transformation like this is called **normalization**. The rule selected for this example is **NFKC**.
 
-## 08:10 Apply One Chosen Rule Consistently
-
-We want the same selected changes every time. Applying a defined Unicode rule to produce chosen consistent forms is called **normalization**.
-
-Unicode offers several normalization rules because different situations preserve different distinctions. The particular rule used in this lesson is named **NFKC**. For our three examples, NFKC produces exactly the changes we chose.
-
-Notice that normalization can change more than appearance. In the first case, the string keeps the same length.
+One result keeps the same length, while another changes it:
 
 ```text
 ① -> 1
 length 1 -> 1
-```
 
-In the joined-looking case, one character becomes two.
-
-```text
 ﬀ -> ff
 length 1 -> 2
 ```
 
-That length change is why this is a rule we choose, not a visual polish we can assume is harmless. NFKC can remove distinctions that matter, so it is a chosen rule for this example—not a universal definition of clean text.
+The circled form starts as one character and ends as one. The joined `ﬀ` starts as one character but becomes the two characters `ff`.
 
-Normalization settles only the character forms we selected. Our source still has marks that end lines, an empty line, a tab, and surrounding spaces. We also want repeatable rules for those marks. Combining all these chosen changes into one repeatable process is what we will call **text preparation**.
+That change matters because NFKC can remove distinctions that matter. It is not a universal definition of clean or correct text; we choose it only when its changes fit our purpose.
 
-## 09:30 Put the Chosen Steps Into One Recipe
+For this source, our line and whitespace choices are also deliberate: trim each line, discard an empty line, and use one line separator. Combining those choices with normalization creates the reusable building block we will call **text preparation**.
 
-Before looking at the whole program, let’s follow its intermediate results. After NFKC changes the three selected forms, separating the text wherever a line ends gives us these three pieces:
+Now that the rules have a name, what does each one actually do to the source?
+
+## 08:00 Put the Preparation Steps Together
+
+Text preparation is a useful name, but we still need its mechanism. First, NFKC changes the selected forms. Separating that result wherever Python recognizes a line boundary then gives:
 
 ```text
 ['  Lesson 1: A cat ff  ', '', '\tsecond line  ']
 ```
 
-Python calls an ordered group like this a **list**; the brackets show its boundaries. The operation that produced this list is named `splitlines`. We store the list under the name `lines`.
+The three values remain in order as one group. Python calls an ordered group a **list**. The line-separation operation is named `splitlines`.
 
-Now we must repeat the same check for each line. Python calls repeated instructions a **loop**. `for line in lines` means: take the items from `lines` one at a time, and call the current item `line`.
+The same instructions must act on each list item. Repeated instructions form a **loop**; `for line in lines` takes one value at a time and names it `line`. We begin with an empty list named `prepared_lines`, giving retained values somewhere to go.
 
-We begin with another list that contains nothing and name it `prepared_lines`. For each item, we remove whitespace from both ends. Python calls this operation `strip`. The new value is stored again under `line`.
+For each value, we first remove whitespace from both ends, behavior Python names `strip`. We retain a line only when it is not empty, written `if line != ""`; `!=` means “is not equal to.” We add each retained value to the new list, an operation named `append`.
 
-Next, we ask whether the line differs from an empty string. In Python, we write that check as `if line != ""`; the symbol `!=` means “is not equal to.” Only a non-empty line is kept. Adding it to the end of `prepared_lines` is the behavior Python calls `append`.
-
-After the loop, the list contains:
+After trimming and empty-line removal:
 
 ```text
 ['Lesson 1: A cat ff', 'second line']
 ```
 
-The last text operation rebuilds those pieces with one `\n` between them. Python calls that operation `join`.
+The empty middle value remained empty after trimming, so the check rejected it while keeping the other two. We then rebuild the text with one chosen separator between retained lines. Python names that operation `join`.
 
-We want to reuse this recipe. Python calls a named, reusable group of instructions a **function**. To tell Python that we are defining one, we write `def`; the indented lines belong to it. We name ours `prepare_text`.
+Because we need the recipe more than once, we give the instructions a name. A named reusable group of instructions is a **function**. To announce that definition, Python uses `def`. The name `text` receives the supplied value; an input name like this is a **parameter**. Finally, the program sends the finished string back with `return`.
 
-When `prepare_text(source)` runs, the value stored in `source` is handed in. Inside the function, `text` refers to that value. When the work is complete, the result must go back to the requesting line; Python uses `return` for that step. The indented lines after `for` and `if` show which instructions they control.
-
-Here is the complete program. Its first line makes Python’s Unicode tools available.
+Here is the complete standalone program:
 
 ```python
 import unicodedata
@@ -215,15 +218,28 @@ print("Source text:", repr(source))
 print("Prepared text:", repr(prepare_text(source)))
 ```
 
-We can now trace the program without a hidden jump: source handed in as `text`, NFKC changes, three-item list, whitespace removed, empty string rejected, two-item list, and one returned string.
+Follow the source through the same causal chain:
 
-The source uses `\r\n` at its two line boundaries; the final line has no ending mark. Normalization did not cause the result’s `\n`. `splitlines` separates those boundaries before `join` inserts one `\n` between the surviving lines.
+```text
+source
+→ NFKC changes the selected forms
+→ split into three lines
+→ remove surrounding whitespace
+→ reject the empty line
+→ keep two lines
+→ join them with one \n
+→ return the prepared string
+```
 
-## 12:10 Predict, Run, and Change the Starting Text
+The source used `\r\n` at two line boundaries. `splitlines` removed those boundary marks while making the three-item list. After the empty line was rejected, `join` inserted one `\n` between the surviving lines; normalization did not create that separator.
 
-Save this exact program in a folder you control as `inspect_and_prepare_text.py`. Before you run it, make a complete prediction. Which characters will NFKC change? Which whitespace will `strip` remove? Will the empty line remain? Which mark will `join` place between the surviving lines? Use the recipe we traced, not a guess from how the source looks.
+Every output change now has a cause. Can we predict the exact result before Python reveals it?
 
-Then run it from that same working folder.
+## 10:20 Predict, Run, and Change the Source
+
+Save the complete program as `inspect_and_prepare_text.py`. Before execution, make a complete prediction: which forms will NFKC change, which end whitespace will `strip` remove, which line will the `if` reject, and what will `join` insert? Write the full result before running.
+
+Run the file from the folder where you saved it:
 
 ```bash
 python inspect_and_prepare_text.py
@@ -234,30 +250,39 @@ Source text: '  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
 Prepared text: 'Lesson 1: A cat ff\nsecond line'
 ```
 
-Compare the two lines shown by `repr`. NFKC changed `①` to `1`, `Ａ` to `A`, and `ﬀ` to `ff`. `splitlines` created three lines. `strip` removed their end whitespace. The `if` check rejected the empty string, `append` kept the other lines, and `join` placed one `\n` between them.
+Now explain the comparison using only operations we traced. NFKC changed `①` to `1`, `Ａ` to `A`, and `ﬀ` to `ff`. `splitlines` produced three lines. `strip` removed whitespace from their ends. The `if` rejected the empty line, `append` retained the other two, and `join` placed one `\n` between them. The function returned that prepared string.
 
-Now change only the source string. Keep the function exactly as it is.
+Change only the source; leave the function untouched:
 
 ```python
 source = "  Chapter ②: Ｂig oﬀice  \n\n  final line  "
 ```
 
-Predict the exact prepared line that `repr` will show. Which characters follow the same NFKC rule? Which preparation steps behave exactly as before? The changed words are not the point. The recipe should still explain the result.
+Before running again, predict the exact prepared output. Which new forms follow the same NFKC rule, and which line and whitespace choices behave as before?
 
 ```text
 'Chapter 2: Big office\nfinal line'
 ```
 
-Here, `②` becomes `2`, `Ｂ` becomes `B`, and `ﬀ` within `oﬀice` becomes `ff`. The outer whitespace disappears, the empty line disappears, and one newline joins the two text lines. Because only the starting text changed, this second result tests whether your explanation transfers rather than whether you remembered the first output.
+Here, NFKC changes `②` to `2`, `Ｂ` to `B`, and the joined form inside `oﬀice` to `ff`. Line separation again creates an empty middle value, trimming removes surrounding whitespace, the check rejects that empty value, and joining inserts one newline.
 
-Do not memorize the changed output as a new rule. If your prediction differed, go back to the first operation that would produce that difference. The same function should explain both examples.
+Only the source changed, so this second result tests whether the causal model transfers rather than whether you memorized the first output. If your prediction differed, find the first operation where your trace diverged. That transferable explanation is what we carry forward.
 
-## 14:05 Carry the Explanation Forward
+## 12:10 Carry the Explanation Forward
 
-We can now answer the central question. The source is the unchanged starting text. Inspection reveals its marks. A code point identifies one character. Normalization applies a chosen Unicode rule. Text preparation combines that rule with changes to lines and whitespace.
+We can now answer the central question. Inspect the unchanged source to reveal its marks and identities; then choose purpose-dependent rules, apply each operation, and test the result with changed text.
 
-Identification tells us what is present; preparation applies our decisions. We inspected first, chose NFKC with its limit in view, and traced every step.
+Identification tells us what is present. Preparation applies our purpose-dependent decisions.
 
-This order prevents a common mistake: assuming every difference should disappear. A difference can be real, while the purpose determines whether we preserve or change it.
+```text
+source
+→ inspect
+→ identify relevant differences
+→ choose rules for the purpose
+→ apply and test those rules
+→ prepared text
+```
 
-With new text, start the same way. Reveal its marks, identify relevant differences, choose rules that fit the purpose, and test changed starting text. Prepared text is now a dependable building block for the next lesson.
+Do not make the common mistake of treating every real difference as one that should disappear. A difference may be meaningful, and purpose decides whether we preserve it.
+
+When new source arrives, the same sequence lets you explain and predict its result. Prepared text is now the dependable building block for the next lesson.
