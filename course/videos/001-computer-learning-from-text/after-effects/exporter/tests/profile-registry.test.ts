@@ -3,6 +3,7 @@ import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rename, symlink, write
 import test from "node:test";
 import { join, relative } from "node:path";
 import { ProfileRegistry } from "../src/bridge/profile-registry.ts";
+import { ProfileRegistryCore, realProfileRegistryFilesystem, type ProfileRegistryFilesystem } from "../src/bridge/profile-registry-internal.ts";
 import { exporterPaths, legacyExporterPaths, projectPaths } from "../src/bridge/paths.ts";
 import { QueueStore } from "../src/bridge/queue.ts";
 import { PROFILE_LIMITS } from "../src/shared/limits.ts";
@@ -21,6 +22,10 @@ function revisionPath(root: string, projectId: string, revision: number): string
 function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void;
   return { promise: new Promise<T>((complete) => { resolve = complete; }), resolve };
+}
+
+function coreRegistry(root: string, filesystem: Readonly<ProfileRegistryFilesystem> = realProfileRegistryFilesystem): ProfileRegistryCore {
+  return new ProfileRegistryCore(exporterPaths(root), filesystem);
 }
 
 test("installs a canonical immutable profile with private permissions", async () => {
@@ -143,23 +148,177 @@ test("exposes only generic own path keys and an explicit legacy queue adapter", 
   assert.deepEqual(new QueueStore(root).paths, legacy);
 });
 
-test("cleans a created temporary file when publication setup fails", async () => {
+test("recovers failed publication by removing its temporary file and created empty directories", async () => {
   const { root } = await registryFixture();
-  const registry = new ProfileRegistry(exporterPaths(root), {
-    testHooks: { afterTemporaryCreated: async () => { throw new Error("INJECTED_TEMP_FAILURE"); } }
-  } as never);
+  let failOnce = true;
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    link: async (...args) => {
+      if (failOnce) { failOnce = false; throw new Error("INJECTED_TEMP_FAILURE"); }
+      return realProfileRegistryFilesystem.link(...args);
+    }
+  });
   await assert.rejects(registry.installValue(makeFixtureProfile()), /INJECTED_TEMP_FAILURE/);
-  assert.deepEqual((await readdir(revisionPath(root, "fixture-two", 2))).filter((name) => name.includes(".tmp")), []);
+  await assert.rejects(lstat(revisionPath(root, "fixture-two", 2)), { code: "ENOENT" });
+  await assert.rejects(lstat(join(root, "profiles", "fixture-two")), { code: "ENOENT" });
+  assert.equal((await registry.installValue(makeFixtureProfile())).profile.project.id, "fixture-two");
+});
+
+test("cleans an acquired lock after a later lock fsync failure", async () => {
+  const { root } = await registryFixture();
+  let failLockSync = true;
+  let failIdentityCheck = false;
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      if (failLockSync && String(args[0]).endsWith(".profile-registry.install.lock")) {
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "sync") return async () => {
+              failLockSync = false;
+              failIdentityCheck = true;
+              throw new Error("INJECTED_LOCK_FSYNC_FAILURE");
+            };
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+      return handle;
+    },
+    lstat: async (path) => {
+      if (failIdentityCheck && String(path).endsWith(".profile-registry.install.lock")) {
+        failIdentityCheck = false;
+        throw new Error("INJECTED_LOCK_IDENTITY_FAILURE");
+      }
+      return realProfileRegistryFilesystem.lstat(path);
+    }
+  });
+
+  await assert.rejects(registry.installValue(makeFixtureProfile()), /INJECTED_LOCK_FSYNC_FAILURE/);
+  await assert.rejects(lstat(join(root, "profiles", ".profile-registry.install.lock")), { code: "ENOENT" });
+  assert.equal((await registry.installValue(makeFixtureProfile())).profile.project.id, "fixture-two");
+});
+
+test("fails closed when the first lock fstat cannot establish an inode identity", async () => {
+  const { root } = await registryFixture();
+  let failFirstLockStat = true;
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      if (failFirstLockStat && String(args[0]).endsWith(".profile-registry.install.lock")) {
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "stat") return async () => {
+              failFirstLockStat = false;
+              throw new Error("INJECTED_FIRST_LOCK_FSTAT_FAILURE");
+            };
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+      return handle;
+    }
+  });
+
+  await assert.rejects(registry.installValue(makeFixtureProfile()), /INJECTED_FIRST_LOCK_FSTAT_FAILURE/);
+  assert.equal((await lstat(join(root, "profiles", ".profile-registry.install.lock"))).isFile(), true);
+});
+
+test("fails with a bounded timeout while a stale lock remains", async () => {
+  const { root } = await registryFixture();
+  const profiles = join(root, "profiles");
+  await mkdir(profiles, { mode: 0o700 });
+  await writeFile(join(profiles, ".profile-registry.install.lock"), "", { mode: 0o600 });
+
+  const started = performance.now();
+  await assert.rejects(coreRegistry(root).installValue(makeFixtureProfile()), /PROFILE_REGISTRY_LOCKED/);
+  assert.equal(performance.now() - started < 2_500, true);
+});
+
+test("retries an EEXIST lock race when the lock vanishes before inspection", async () => {
+  const { root } = await registryFixture();
+  let injectAlreadyExists = true;
+  let injectNotFound = false;
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      if (injectAlreadyExists && String(args[0]).endsWith(".profile-registry.install.lock")) {
+        injectAlreadyExists = false;
+        injectNotFound = true;
+        throw Object.assign(new Error("synthetic lock race"), { code: "EEXIST" });
+      }
+      return realProfileRegistryFilesystem.open(...args);
+    },
+    lstat: async (path) => {
+      if (injectNotFound && String(path).endsWith(".profile-registry.install.lock")) {
+        injectNotFound = false;
+        throw Object.assign(new Error("synthetic vanished lock"), { code: "ENOENT" });
+      }
+      return realProfileRegistryFilesystem.lstat(path);
+    }
+  });
+
+  assert.equal((await registry.installValue(makeFixtureProfile())).profile.project.id, "fixture-two");
+});
+
+test("list waits for a staging installation and observes only the completed immutable profile", async () => {
+  const { root } = await registryFixture();
+  const staged = deferred();
+  const release = deferred();
+  let pausePublication = true;
+  const writer = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    link: async (...args) => {
+      if (pausePublication) {
+        pausePublication = false;
+        staged.resolve();
+        await release.promise;
+      }
+      return realProfileRegistryFilesystem.link(...args);
+    }
+  });
+  const listAttempted = deferred();
+  let listSettled = false;
+  const reader = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      if (String(args[0]).endsWith(".profile-registry.install.lock")) listAttempted.resolve();
+      return realProfileRegistryFilesystem.open(...args);
+    }
+  });
+
+  const installation = writer.installValue(makeFixtureProfile());
+  await staged.promise;
+  const listing = reader.list().then((result) => { listSettled = true; return result; });
+  await listAttempted.promise;
+  assert.equal(listSettled, false);
+  release.resolve();
+  assert.equal((await installation).profile.project.id, "fixture-two");
+  assert.deepEqual((await listing).map((summary) => `${summary.projectId}:${summary.revision}`), ["fixture-two:2"]);
 });
 
 test("serializes concurrent identical and conflicting revisions across registry instances", async () => {
   const { root } = await registryFixture();
   const acquired = deferred();
   const release = deferred();
-  const first = new ProfileRegistry(exporterPaths(root), {
-    testHooks: { afterInstallLockAcquired: async () => { acquired.resolve(); await release.promise; } }
-  } as never);
-  const second = new ProfileRegistry(exporterPaths(root));
+  let pauseFirstLock = true;
+  const first = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      if (pauseFirstLock && String(args[0]).endsWith(".profile-registry.install.lock")) {
+        pauseFirstLock = false;
+        acquired.resolve();
+        await release.promise;
+      }
+      return handle;
+    }
+  });
+  const second = coreRegistry(root);
   const install = first.installValue(makeFixtureProfile());
   await acquired.promise;
   const same = second.installValue(makeFixtureProfile());
@@ -185,10 +344,20 @@ test("serializes the installed-profile capacity limit across registry instances"
   }
   const acquired = deferred();
   const release = deferred();
-  const first = new ProfileRegistry(exporterPaths(root), {
-    testHooks: { afterInstallLockAcquired: async () => { acquired.resolve(); await release.promise; } }
-  } as never);
-  const second = new ProfileRegistry(exporterPaths(root));
+  let pauseFirstLock = true;
+  const first = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      if (pauseFirstLock && String(args[0]).endsWith(".profile-registry.install.lock")) {
+        pauseFirstLock = false;
+        acquired.resolve();
+        await release.promise;
+      }
+      return handle;
+    }
+  });
+  const second = coreRegistry(root);
   (value.project as Record<string, unknown>).revision = PROFILE_LIMITS.maxInstalledProfiles;
   const last = first.installValue(structuredClone(value));
   await acquired.promise;
@@ -203,11 +372,24 @@ test("serializes the installed-profile capacity limit across registry instances"
 test("fsyncs each new registry directory's parent before installing", async () => {
   const { root } = await registryFixture();
   const synced: string[] = [];
-  const registry = new ProfileRegistry(exporterPaths(root), {
-    testHooks: { afterDirectorySynced: async (path: string) => { synced.push(path); } }
-  } as never);
+  const registry = coreRegistry(root, {
+    ...realProfileRegistryFilesystem,
+    open: async (...args) => {
+      const handle = await realProfileRegistryFilesystem.open(...args);
+      const path = String(args[0]);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === "sync") return async () => { synced.push(path); return target.sync(); };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+      });
+    }
+  });
   await registry.installValue(makeFixtureProfile());
-  assert.deepEqual(synced, [join(root, "profiles"), join(root, "profiles", "fixture-two"), revisionPath(root, "fixture-two", 2)]);
+  for (const parent of [root, join(root, "profiles"), join(root, "profiles", "fixture-two")]) {
+    assert.equal(synced.includes(parent), true, parent);
+  }
 });
 
 test("normalizes a source path before opening it and permits ordinary source directories", async () => {
