@@ -58,7 +58,7 @@ By the end of Video 1, the learner should be able to:
 - Target endpoint: approximately `13:00`.
 - Acceptable runtime: 12:30–13:30.
 - Target spoken words: 1,550–1,700.
-- Timed sections: 8 or 9.
+- Timed sections: exactly 8.
 - Section density: 105–145 spoken words per minute.
 - Maximum spoken sentence: 40 words.
 - Spoken delivery: conversational, causal, and readable aloud.
@@ -245,7 +245,7 @@ Before the compressed artifact is accepted:
 
 1. verify 1,550–1,700 spoken words;
 2. verify an endpoint between 12:30 and 13:30;
-3. verify 8 or 9 timed sections at 105–145 spoken words per minute;
+3. verify exactly 8 timed sections at 105–145 spoken words per minute;
 4. verify no spoken sentence exceeds 40 words;
 5. scan spoken narration for prohibited future terminology;
 6. verify the behavior-before-terminology order;

@@ -3,6 +3,14 @@
 **Date:** 2026-07-24
 **Status:** Approved in conversation on 2026-07-24
 
+> **Superseded status — do not apply to the current artifact.** This historical
+> design is superseded by the
+> [Thirteen-Minute Video 1 Compression Design](2026-07-24-thirteen-minute-video-one-design.md)
+> and the
+> [Thirteen-Minute Video 1 Implementation Plan](../plans/2026-07-24-thirteen-minute-video-one.md).
+> Its older 15-minute/nine-section constraints and validators are historical
+> and must not be applied to the current artifact.
+
 ## Goal
 
 Rewrite `final_final copy` in place so it follows the course's established

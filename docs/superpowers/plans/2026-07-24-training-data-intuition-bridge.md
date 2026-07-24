@@ -1,5 +1,12 @@
 # Training-Data Intuition Bridge Implementation Plan
 
+> **Superseded status — do not apply to the current artifact.** This historical
+> plan is superseded by the
+> [Thirteen-Minute Video 1 Compression Design](../specs/2026-07-24-thirteen-minute-video-one-design.md)
+> and the [Thirteen-Minute Video 1 Implementation Plan](2026-07-24-thirteen-minute-video-one.md).
+> Its older 15-minute/nine-section/1,800–1,950-word validators are historical
+> and must not be applied to the current artifact.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Integrate the approved training-dataset and text-to-numbers intuition into `final_final copy` while preserving the existing hook, keeping Video 1 focused on text inspection and preparation, and preventing code-point identifiers from being mistaken for LLM training numbers.
