@@ -101,6 +101,24 @@ test("accepts current profile values through each field-specific grammar", () =>
   assert.doesNotThrow(() => validateProjectProfile(value));
 });
 
+test("accepts normalized Unicode human names and conventional font identities", () => {
+  const cases: Array<[string, (value: Record<string, unknown>) => void]> = [
+    ["lowercase human name", (value) => { (value.project as Record<string, unknown>).displayName = "my project"; }],
+    ["apostrophe", (value) => { (value.source as Record<string, unknown>).pageName = "What's new"; }],
+    ["ampersand", (value) => { fixtureTimeline(value).sections[0]!.name = "R&D overview"; }],
+    ["diacritics", (value) => { (value.naming as Record<string, unknown>).importFolder = "café overview"; }],
+    ["Open Sans", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.family = "Open Sans"; }],
+    ["IBM Plex Mono", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.family = "IBM Plex Mono"; }],
+    ["Noto Sans CJK", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.family = "Noto Sans CJK"; }],
+    ["Semi Bold", (value) => { ((value.fontPolicy as Record<string, unknown>).required as Array<Record<string, unknown>>)[0]!.style = "Semi Bold"; }]
+  ];
+  for (const [label, mutate] of cases) {
+    const value = makeFixtureProfile();
+    mutate(value);
+    assert.doesNotThrow(() => validateProjectProfile(value), label);
+  }
+});
+
 test("rejects revisions outside positive safe integer bounds", () => {
   for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const value = makeFixtureProfile();

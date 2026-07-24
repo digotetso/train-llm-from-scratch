@@ -75,13 +75,14 @@ type UnknownRecord = Record<string, unknown>;
 
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/;
 const SECTION_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const HUMAN_NAME_PATTERN = /^[A-Z0-9][A-Za-z0-9]*(?:(?: | - |-)(?:[A-Z0-9][A-Za-z0-9]*|and))*$/;
+const HUMAN_NAME_PATTERN = /^[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}&'’ -]*[\p{L}\p{M}\p{N}])?$/u;
 const FIGMA_FILE_KEY_PATTERN = /^(?:[A-Za-z0-9]{16,128}|[a-z][a-z0-9]*(?:-[a-z0-9]+)*)$/;
 const FIGMA_NODE_ID_PATTERN = /^\d+:\d+$/;
 const PREFIX_PATTERN = /^[A-Z][A-Z0-9]*$/;
 const MASTER_COMP_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 const COMP_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
-const FONT_TOKEN_PATTERN = /^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/;
+const FONT_NAME_PATTERN = /^[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}&_'’ -]*[\p{L}\p{M}\p{N}])?$/u;
+const RESERVED_OPERATIONAL_TOKEN_PATTERN = /^(?:curl|wget|chmod|chown|rm|mv|cp|sh|bash|zsh|fish|cmd|powershell|pwsh|node|deno|bun|python(?:3)?|perl|ruby|php|java|sudo|ssh|scp|sftp|nc|netcat|telnet|osascript|eval|exec|function|const|let|var|import|require)\b/iu;
 
 function invalid(path: string, message: string): never {
   throw new TypeError(`Invalid project profile at ${path}: ${message}`);
@@ -137,8 +138,20 @@ function matchingStringAt(value: unknown, path: string, pattern: RegExp): string
   return result;
 }
 
+function normalizedNamedStringAt(value: unknown, path: string, pattern: RegExp): string {
+  const normalized = boundedStringAt(value, path).normalize("NFC");
+  if (
+    normalized.startsWith(" ") ||
+    normalized.endsWith(" ") ||
+    normalized.includes("  ") ||
+    !pattern.test(normalized) ||
+    RESERVED_OPERATIONAL_TOKEN_PATTERN.test(normalized)
+  ) invalid(path, "unsafe value");
+  return normalized;
+}
+
 function humanNameAt(value: unknown, path: string): string {
-  return matchingStringAt(value, path, HUMAN_NAME_PATTERN);
+  return normalizedNamedStringAt(value, path, HUMAN_NAME_PATTERN);
 }
 
 function figmaFileKeyAt(value: unknown, path: string): string {
@@ -166,7 +179,7 @@ function compNameAt(value: unknown, path: string): string {
 }
 
 function fontTokenAt(value: unknown, path: string): string {
-  return matchingStringAt(value, path, FONT_TOKEN_PATTERN);
+  return normalizedNamedStringAt(value, path, FONT_NAME_PATTERN);
 }
 
 function projectIdAt(value: unknown, path: string): string {
