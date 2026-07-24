@@ -164,7 +164,7 @@ test("queue filenames derive only from hashes and become atomically visible", as
   assert.equal(result.path, join(root, "incoming", result.filename));
   assert.deepEqual(await readdir(join(root, "incoming")), [result.filename]);
   assert.deepEqual(await readdir(join(root, "tmp")), []);
-  assert.match(await readFile(result.path, "utf8"), /"schemaVersion":"2.0.0"/);
+  assert.match(await readFile(result.path, "utf8"), /"schemaVersion":"3.0.0"/);
 });
 
 test("queue directories and files are owner-only", async () => {
@@ -718,7 +718,7 @@ test("bridge returns distinct validation, fingerprint, asset, and duplicate fail
   assert.equal(malformed.status, 400);
   assert.equal((await malformed.json() as { error: { code: string } }).error.code, "INVALID_JSON");
 
-  const invalid = await send({ ...makeValidPackage(), schemaVersion: "3.0.0" });
+  const invalid = await send({ ...makeValidPackage(), schemaVersion: "4.0.0" });
   assert.equal(invalid.status, 422);
   assert.equal((await invalid.json() as { error: { code: string } }).error.code, "INVALID_PACKAGE");
 

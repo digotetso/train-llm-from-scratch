@@ -136,7 +136,9 @@ export function validateLegacyVideo001PackageWithVerifiedAssets(
     project: legacyVideo001ProfileReference(),
     assets: Array.isArray(record.assets) ? record.assets.map((asset) => ({ ...(asset as UnknownRecord), dataBase64: EXTERNAL_ASSET_DATA })) : record.assets
   };
-  return validatePackageWithVerifiedAssets(candidate, evidence, byteCounts);
+  const validated = validatePackageWithVerifiedAssets(candidate, evidence, byteCounts);
+  const { project: _project, ...legacy } = validated;
+  return { ...legacy, schemaVersion: legacyVideo001SchemaVersion } as unknown as ReturnType<typeof validatePackageWithVerifiedAssets>;
 }
 
 function assertBundledVideo001Profile(installed: InstalledProfile): ProjectProfile {

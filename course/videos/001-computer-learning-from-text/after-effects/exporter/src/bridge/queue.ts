@@ -24,7 +24,11 @@ import {
   validatePackage,
   validatePackageWithVerifiedAssets
 } from "../shared/contract.ts";
-import { isLegacyVideo001Package, validateLegacyVideo001Package } from "../shared/legacy-video001.ts";
+import {
+  isLegacyVideo001Package,
+  validateLegacyVideo001Package,
+  validateLegacyVideo001PackageWithVerifiedAssets
+} from "../shared/legacy-video001.ts";
 import {
   ownedHttpTemporaryFilename,
   parseOwnedHttpTemporaryFilename,
@@ -201,11 +205,11 @@ export class QueueStore {
       ...value,
       assets: value.assets.map((asset) => ({ ...asset, dataBase64: "" }))
     }));
-    const validated = validatePackageWithVerifiedAssets(
-      validationValue,
-      sources.map((source) => ({ byteLength: source.size, hash: source.hash })),
-      { bodyBytes: normalizedManifestBytes, manifestBytes: normalizedManifestBytes }
-    );
+    const evidence = sources.map((source) => ({ byteLength: source.size, hash: source.hash }));
+    const byteCounts = { bodyBytes: normalizedManifestBytes, manifestBytes: normalizedManifestBytes };
+    const validated = (isLegacyVideo001Package(value)
+      ? validateLegacyVideo001PackageWithVerifiedAssets(validationValue, evidence, byteCounts)
+      : validatePackageWithVerifiedAssets(validationValue, evidence, byteCounts)) as ExternalExporterPackage;
     return this.enqueueValidated(validated, (index, asset) => {
       const source = sources[index];
       if (source === undefined) throw new Error("Verified asset source is missing");

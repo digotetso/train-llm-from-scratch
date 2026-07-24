@@ -25,6 +25,7 @@ import {
   validatePackage
 } from "../src/shared/contract.ts";
 import { LIMITS } from "../src/shared/limits.ts";
+import { finalizeLegacyVideo001Package, legacyVideo001ExportMediaType } from "../src/shared/legacy-video001.ts";
 import { makeValidPackage } from "./helpers/package.ts";
 
 const OWNER = {
@@ -511,4 +512,24 @@ test("verified queue enqueue rechecks streamed files and publishes the same slim
     ownerlessQueue.enqueueVerified(parsed.package, parsed.assets),
     /lifecycle owner/i
   );
+});
+
+test("legacy controller wire payload keeps its schema-2 content hash and media semantics through streaming and queue publication", async () => {
+  const root = await mkdtemp(join(tmpdir(), "video001-legacy-streaming-queue-"));
+  const queue = new QueueStore(root, OWNER);
+  const generic = makeValidPackage();
+  const { project: _project, ...legacyInput } = generic;
+  const legacy = finalizeLegacyVideo001Package({ ...legacyInput, schemaVersion: "2.0.0", contentHash: "" });
+  const body = JSON.stringify(legacy);
+  assert.equal(legacyVideo001ExportMediaType, "application/vnd.video001.figma-ae+json");
+  const parsed = await readStreamingPackage(await spool(queue, body), queue, OWNER, {
+    chunkBytes: 3,
+    limits: limits(body, generic)
+  });
+  assert.equal(parsed.package.schemaVersion, "2.0.0");
+  assert.equal(parsed.package.contentHash, legacy.contentHash);
+  const queued = await queue.enqueueVerified(parsed.package, parsed.assets);
+  const persisted = JSON.parse(await readFile(queued.path, "utf8"));
+  assert.deepEqual(persisted, legacy);
+  assert.equal(queued.filename, `${legacy.contentHash}.video001-ae.json`);
 });
