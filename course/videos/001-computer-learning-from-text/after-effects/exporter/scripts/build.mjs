@@ -1,5 +1,5 @@
 import { build as esbuild, version as esbuildVersion } from "esbuild";
-import { access, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateFigmaManifest, readPluginId } from "./generate-figma-manifest.mjs";
@@ -317,6 +317,33 @@ export async function buildBridge({ projectRoot } = {}) {
   return { destination };
 }
 
+export async function buildProfileCli({ projectRoot } = {}) {
+  const root = resolve(projectRoot ?? rootFromScript);
+  const destination = join(root, "dist", "cli");
+  const result = await esbuild({
+    absWorkingDir: root,
+    banner: { js: "#!/usr/bin/env node" },
+    bundle: true,
+    charset: "utf8",
+    entryPoints: [join(root, "src", "cli", "profile-cli.ts")],
+    format: "esm",
+    legalComments: "none",
+    minify: false,
+    outfile: "figma-ae.mjs",
+    platform: "node",
+    sourcemap: false,
+    target: ["node20"],
+    treeShaking: true,
+    write: false
+  });
+  const cliJavaScript = singleOutput(result, "profile CLI");
+  const output = join(destination, "figma-ae.mjs");
+  await mkdir(destination, { recursive: true });
+  await writeFile(output, cliJavaScript, { encoding: "utf8", mode: 0o700 });
+  await chmod(output, 0o700);
+  return { destination, output };
+}
+
 export async function buildAfterEffects({ projectRoot, environment = process.env } = {}) {
   const root = resolve(projectRoot ?? rootFromScript);
   const sourceDirectory = join(root, "src", "ae");
@@ -452,7 +479,8 @@ export async function buildExporter(options = {}) {
   const plugin = await buildPlugin(options);
   const bridge = await buildBridge(options);
   const afterEffects = await buildAfterEffects(options);
-  return { plugin, bridge, afterEffects };
+  const profileCli = await buildProfileCli(options);
+  return { plugin, bridge, afterEffects, profileCli };
 }
 
 function parseArguments(argv) {

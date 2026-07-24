@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit",
     "typecheck:controller": "tsc --project tsconfig.controller.json --noEmit",
     "build": "node scripts/build.mjs",
+    "profile": "node dist/cli/figma-ae.mjs profile",
+    "profile:validate": "node dist/cli/figma-ae.mjs profile validate",
     "release:build": "node scripts/build-release.mjs",
     "release:verify": "node scripts/verify-release.mjs"
   },
