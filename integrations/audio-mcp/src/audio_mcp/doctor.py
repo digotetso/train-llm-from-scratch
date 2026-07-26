@@ -5,6 +5,7 @@ import json
 import os
 import plistlib
 import socket
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Literal, Sequence
@@ -39,6 +40,14 @@ def _audacity_version(app_path: Path) -> str | None:
 
     version = metadata.get("CFBundleShortVersionString")
     return version if isinstance(version, str) and version else None
+
+
+def _is_owned_fifo(path: Path, uid: int) -> bool:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISFIFO(metadata.st_mode) and metadata.st_uid == uid
 
 
 def audacity_checks(
@@ -88,16 +97,23 @@ def audacity_checks(
 
     to_pipe = pipe_dir / f"audacity_script_pipe.to.{uid}"
     from_pipe = pipe_dir / f"audacity_script_pipe.from.{uid}"
-    pipes_ready = to_pipe.exists() and from_pipe.exists()
+    endpoints_exist = to_pipe.exists() and from_pipe.exists()
+    pipes_ready = endpoints_exist and all(
+        _is_owned_fifo(endpoint, uid) for endpoint in (to_pipe, from_pipe)
+    )
+    if pipes_ready:
+        pipe_detail = f"{to_pipe} and {from_pipe}"
+    elif endpoints_exist:
+        pipe_detail = "Script-pipe endpoints must be same-user named pipes."
+    else:
+        pipe_detail = (
+            "Enable mod-script-pipe, restart Audacity, and run doctor again."
+        )
     checks.append(
         Check(
             "audacity.script_pipe",
             "pass" if pipes_ready else "fail",
-            (
-                f"{to_pipe} and {from_pipe}"
-                if pipes_ready
-                else "Enable mod-script-pipe, restart Audacity, and run doctor again."
-            ),
+            pipe_detail,
         )
     )
 

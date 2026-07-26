@@ -255,6 +255,37 @@ process.stdout.write(JSON.stringify({{status: status, document: documentResult}}
     assert output["document"]["result"]["display_name"] == display_name
 
 
+def test_host_reports_unsupported_for_unproven_selection_shape() -> None:
+    host = ROOT / "jsx" / "host.jsx"
+    node_program = f"""
+const fs = require("fs");
+const vm = require("vm");
+global.app = {{
+  activeDocument: {{
+    playheadPosition: 0,
+    timeSelection: {{start: 0, end: 1}},
+    reflect: {{
+      name: "WaveDocument",
+      properties: [{{name: "timeSelection"}}],
+      methods: []
+    }}
+  }}
+}};
+vm.runInThisContext(fs.readFileSync({json.dumps(str(host))}, "utf8"));
+process.stdout.write(AudioMcpHost.getSelection());
+"""
+    result = subprocess.run(
+        ["node", "-e", node_program],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    output = json.loads(result.stdout)
+
+    assert output["ok"] is False
+    assert output["error"]["code"] == "UNSUPPORTED_OPERATION"
+
+
 def test_panel_renders_status_only_and_main_has_bounded_reconnects() -> None:
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     main = (ROOT / "js" / "main.js").read_text(encoding="utf-8")

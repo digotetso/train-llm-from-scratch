@@ -217,15 +217,23 @@ var AudioMcpHost = AudioMcpHost || {};
         "This Audition version does not expose a safe timeSelection property."
       );
     }
-    return run(function () {
+    try {
       selection = document.timeSelection;
-      if (
-        !selection ||
-        !hasMember(selection, "start") ||
-        !hasMember(selection, "end")
-      ) {
-        throw new Error("Unsupported time selection shape.");
-      }
+    } catch (ignored) {
+      return unsupported(
+        "This Audition version cannot read the fixed timeSelection property."
+      );
+    }
+    if (
+      !selection ||
+      !hasMember(selection, "start") ||
+      !hasMember(selection, "end")
+    ) {
+      return unsupported(
+        "This Audition version exposes an unrecognized timeSelection shape."
+      );
+    }
+    return run(function () {
       return {
         playhead_samples: Number(document.playheadPosition),
         start_samples: Number(selection.start),

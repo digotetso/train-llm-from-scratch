@@ -1,4 +1,5 @@
 import json
+import os
 import plistlib
 from pathlib import Path
 
@@ -18,10 +19,11 @@ def test_audacity_3_7_8_and_both_pipes_pass(tmp_path: Path) -> None:
     executable = tmp_path / "audacity-mcp"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o755)
-    (tmp_path / "audacity_script_pipe.to.501").touch()
-    (tmp_path / "audacity_script_pipe.from.501").touch()
+    uid = os.getuid()
+    os.mkfifo(tmp_path / f"audacity_script_pipe.to.{uid}")
+    os.mkfifo(tmp_path / f"audacity_script_pipe.from.{uid}")
 
-    checks = audacity_checks(app, tmp_path, executable, uid=501)
+    checks = audacity_checks(app, tmp_path, executable, uid=uid)
 
     assert [(check.name, check.status) for check in checks] == [
         ("audacity.application", "pass"),
@@ -52,6 +54,20 @@ def test_missing_pipes_explain_safe_recovery(tmp_path: Path) -> None:
     pipe = next(check for check in checks if check.name == "audacity.script_pipe")
     assert pipe.status == "fail"
     assert pipe.detail == "Enable mod-script-pipe, restart Audacity, and run doctor again."
+
+
+def test_regular_files_do_not_pass_as_audacity_pipes(tmp_path: Path) -> None:
+    app = tmp_path / "Audacity.app"
+    _write_app(app, "3.7.8.0")
+    uid = os.getuid()
+    (tmp_path / f"audacity_script_pipe.to.{uid}").touch()
+    (tmp_path / f"audacity_script_pipe.from.{uid}").touch()
+
+    checks = audacity_checks(app, tmp_path, tmp_path / "missing", uid=uid)
+
+    pipe = next(check for check in checks if check.name == "audacity.script_pipe")
+    assert pipe.status == "fail"
+    assert "named pipes" in pipe.detail
 
 
 def test_json_report_is_machine_readable() -> None:
