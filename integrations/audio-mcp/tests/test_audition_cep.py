@@ -32,12 +32,17 @@ OPERATIONS = {
 def test_manifest_targets_only_audition_and_local_panel() -> None:
     manifest = ROOT / "CSXS" / "manifest.xml"
     tree = ET.parse(manifest)
-    namespace = {"c": "http://www.adobe.com/ExtensionManifest/7.0"}
+    root = tree.getroot()
 
-    host = tree.find(".//c:Host", namespace)
-    runtime = tree.find(".//c:RequiredRuntime", namespace)
-    main_path = tree.find(".//c:MainPath", namespace)
-    script_path = tree.find(".//c:ScriptPath", namespace)
+    # CEP 9 expects an unqualified ExtensionManifest element. A default XML
+    # namespace makes PlugPlug report the Version attribute as empty.
+    assert root.tag == "ExtensionManifest"
+    assert root.attrib["Version"] == "7.0"
+
+    host = tree.find(".//Host")
+    runtime = tree.find(".//RequiredRuntime")
+    main_path = tree.find(".//MainPath")
+    script_path = tree.find(".//ScriptPath")
     assert host is not None and host.attrib == {
         "Name": "AUDT",
         "Version": "[13.0,99.9]",
@@ -51,10 +56,7 @@ def test_manifest_targets_only_audition_and_local_panel() -> None:
 
     text = manifest.read_text(encoding="utf-8")
     assert "--enable-nodejs" not in text
-    assert "http://" not in text.replace(
-        "http://www.adobe.com/ExtensionManifest/7.0",
-        "",
-    )
+    assert "http://" not in text
     assert "https://" not in text
 
 

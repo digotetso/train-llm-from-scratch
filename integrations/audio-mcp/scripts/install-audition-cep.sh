@@ -14,6 +14,7 @@ fi
 readonly user_support="${HOME}/Library/Application Support"
 readonly config_dir="${user_support}/audio-mcp"
 readonly config_path="${config_dir}/audition.json"
+readonly backup_dir="${config_dir}/backups"
 readonly extensions_dir="${user_support}/Adobe/CEP/extensions"
 readonly extension_path="${extensions_dir}/${extension_name}"
 readonly default_media_dir="${HOME}/Music/AudioMCP"
@@ -33,7 +34,7 @@ if [[ "${dry_run}" == true ]]; then
   echo "Create owner-only directory: ${extensions_dir}"
   echo "Create default media roots: ${read_root} and ${write_root}"
   echo "Create config if absent: ${config_path}"
-  echo "Back up existing extension if present: ${extension_path}.backup-YYYYMMDD-HHMMSS"
+  echo "Back up existing extension if present: ${backup_dir}/${extension_name}.backup-YYYYMMDD-HHMMSS"
   echo "Copy extension: ${source_extension} -> ${extension_path}"
   exit 0
 fi
@@ -87,11 +88,13 @@ fi
 
 if [[ -e "${extension_path}" || -L "${extension_path}" ]]; then
   readonly timestamp="$(date '+%Y%m%d-%H%M%S')"
-  readonly backup_path="${extension_path}.backup-${timestamp}"
+  readonly backup_path="${backup_dir}/${extension_name}.backup-${timestamp}"
   if [[ -e "${backup_path}" || -L "${backup_path}" ]]; then
     echo "Backup already exists; wait one second and retry: ${backup_path}" >&2
     exit 1
   fi
+  mkdir -p "${backup_dir}"
+  chmod 0700 "${backup_dir}"
   mv "${extension_path}" "${backup_path}"
   echo "Backed up existing extension: ${backup_path}"
 fi

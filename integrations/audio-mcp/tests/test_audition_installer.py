@@ -103,10 +103,9 @@ def test_audition_installer_preserves_existing_config(tmp_path: Path) -> None:
 
 def test_audition_installer_backs_up_existing_extension(tmp_path: Path) -> None:
     home = tmp_path / "home"
+    support = home / "Library" / "Application Support"
     extension_parent = (
-        home
-        / "Library"
-        / "Application Support"
+        support
         / "Adobe"
         / "CEP"
         / "extensions"
@@ -123,9 +122,11 @@ def test_audition_installer_backs_up_existing_extension(tmp_path: Path) -> None:
         check=True,
     )
 
-    backups = list(extension_parent.glob(f"{EXTENSION_NAME}.backup-*"))
+    backup_parent = support / "audio-mcp" / "backups"
+    backups = list(backup_parent.glob(f"{EXTENSION_NAME}.backup-*"))
     assert len(backups) == 1
     assert (backups[0] / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not list(extension_parent.glob(f"{EXTENSION_NAME}.backup-*"))
     assert (existing / "CSXS" / "manifest.xml").is_file()
 
 

@@ -17,6 +17,7 @@ test = ["pytest>=8,<9"]
 
 [project.scripts]
 audio-mcp-doctor = "audio_mcp.doctor:main"
+audio-mcp-audacity = "audio_mcp.audacity_compat:main"
 audio-mcp-audition = "audio_mcp.audition.server:main"
 
 [tool.setuptools.packages.find]

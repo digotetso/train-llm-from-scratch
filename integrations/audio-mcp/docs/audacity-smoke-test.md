@@ -36,19 +36,28 @@ printf 'Smoke directory: %s\n' "$smoke_dir"
 Keep the printed absolute directory path. All output in this test must stay
 inside it.
 
+Quit and reopen Audacity so exactly one empty project window is present.
+Dismiss welcome or recovery dialogs without deleting recovery data. On the
+local Audacity 3.7.8 target, do not call `project_new`: the official scripting
+interface supports one project at a time, and `New:` can create a second
+project without returning a completion reply.
+
 ## Exercise the MCP tools
 
 In the selected MCP client, issue one operation at a time and verify Audacity
 after each result:
 
-1. Call `project_new`.
+1. Call `project_get_info` with `info_type="Tracks"` and confirm the initial
+   result is empty.
 2. Call `project_import_audio` with the printed directory's `input.wav`.
-3. Call `project_get_info` with `info_type="Tracks"` and confirm one audio
+3. Call `project_get_info` again with `info_type="Tracks"` and confirm one audio
    track is reported.
 4. Call `select_region` with `start=0.2` and `end=0.8`; confirm the visible
    selection.
 5. Call `analyze_sample_data_export` with a new path named `samples.txt`
-   inside the printed directory and `limit=100`.
+   inside the printed directory and `limit=100`. Audacity may show a modal
+   completion message; dismiss it promptly. If the MCP call times out after
+   the file is written, record the compatibility warning and do not retry.
 6. Call `project_save_as` with a new path named `smoke.aup3` inside the
    printed directory. This is an explicit save to a disposable path.
 7. Confirm `input.wav`, `samples.txt`, and `smoke.aup3` exist. Close the

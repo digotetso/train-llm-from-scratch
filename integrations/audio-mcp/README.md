@@ -2,10 +2,10 @@
 
 This isolated project connects MCP clients to Audacity and Adobe Audition
 without changing the repository's model-training environment. The Audacity
-integration uses the reviewed upstream `audacity-mcp==0.1.8` release. The
-Audition integration is a safety-bounded Python MCP server plus a local CEP
-extension. Both support Codex and Claude Desktop, one controlling client at a
-time.
+integration uses the reviewed upstream `audacity-mcp==0.1.8` release through
+a local POSIX response-framing and shutdown wrapper. The Audition integration
+is a safety-bounded Python MCP server plus a local CEP extension. Both support
+Codex and Claude Desktop, one controlling client at a time.
 
 Documentation and compatibility research baseline: 2026-07-26.
 
@@ -34,9 +34,13 @@ scripts/install-audacity-mcp.sh
 uv run audio-mcp-doctor --json
 ```
 
-The dry run prints the only two installation commands. The real installation
-creates or updates only `.venv-audacity` and verifies the installed package
-version. It does not edit Codex, Claude Desktop, Audacity, or Adobe settings.
+The dry run prints the scoped installation commands. The real installation
+creates or updates only `.venv-audacity`, verifies the pinned upstream
+package, and installs the local `audio-mcp-audacity` wrapper. The wrapper
+prevents macOS/Linux pipe replies from shifting between MCP calls and closes
+the pipes synchronously at process exit. It does not alter the upstream
+131-tool surface. The installer does not edit Codex, Claude Desktop, Audacity,
+or Adobe settings.
 
 In Audacity, open **Audacity → Settings/Preferences → Modules**, set
 **mod-script-pipe** to **Enabled**, quit Audacity completely, and reopen it.
@@ -65,6 +69,12 @@ disposable project before using valuable media.
 - `audacity.script_pipe` fails: confirm the module is enabled, then fully
   restart Audacity.
 - Tool calls report a missing pipe: open Audacity and keep it running.
+- On Audacity 3.7.8, do not call `project_new` from the initial empty project;
+  `New:` creates another project while scripting supports one project at a
+  time and may not return a completion reply.
+- A sample-data export can show an Audacity completion dialog. Dismiss it
+  promptly; if the MCP call has already timed out but the new output exists,
+  do not replay the export.
 - The version check rejects Audacity 4: use a supported Audacity 3.x
   installation for this pinned integration.
 - The MCP client cannot start the command: confirm the template contains an
@@ -117,7 +127,9 @@ uv run --project integrations/audio-mcp audio-mcp-doctor --json
 The installer creates default read/write roots under `~/Music/AudioMCP`,
 creates the config only when absent, and installs the extension under the
 current user's Adobe CEP directory. An existing extension is moved to a
-timestamped backup. Existing config is preserved. The installer does not
+timestamped backup under
+`~/Library/Application Support/audio-mcp/backups`, outside Adobe's scanned
+extension directory. Existing config is preserved. The installer does not
 enable CEP development mode or edit an MCP client.
 
 ### Explicit unsigned-extension setting
@@ -180,11 +192,14 @@ using valuable sessions or media.
 2. Quit Audition.
 3. Move
    `~/Library/Application Support/Adobe/CEP/extensions/com.zx.audio-mcp-audition`
-   to a timestamped backup or the operating-system Trash.
+   to a timestamped backup under
+   `~/Library/Application Support/audio-mcp/backups` or to the
+   operating-system Trash.
 4. Retain the owner-only configuration unless you explicitly choose to
    archive it.
-5. To restore, move the newest known-good timestamped extension backup back
-   to the exact extension path.
+5. To restore, move the newest known-good timestamped extension backup from
+   `~/Library/Application Support/audio-mcp/backups` back to the exact
+   extension path.
 6. Reverse `PlayerDebugMode` with the command above if no other unsigned CEP
    development extensions require it.
 

@@ -7,7 +7,7 @@ CONFIGS = Path(__file__).parents[1] / "configs"
 ROOT_SENTINEL = "__ABSOLUTE_REPOSITORY_ROOT__"
 AUDACITY_COMMAND = (
     f"{ROOT_SENTINEL}/"
-    "integrations/audio-mcp/.venv-audacity/bin/audacity-mcp"
+    "integrations/audio-mcp/.venv-audacity/bin/audio-mcp-audacity"
 )
 AUDITION_ARGS = [
     "run",

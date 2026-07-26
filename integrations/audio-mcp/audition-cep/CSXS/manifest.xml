@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest
-  xmlns="http://www.adobe.com/ExtensionManifest/7.0"
   ExtensionBundleId="com.zx.audio-mcp-audition"
   ExtensionBundleName="Audio MCP for Adobe Audition"
   ExtensionBundleVersion="1.0.0"

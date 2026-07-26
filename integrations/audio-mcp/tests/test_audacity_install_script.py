@@ -37,6 +37,7 @@ def test_dry_run_is_scoped_and_pinned(tmp_path: Path) -> None:
 
     assert ".venv-audacity" in result.stdout
     assert "audacity-mcp==0.1.8" in result.stdout
+    assert "audio-mcp-integrations" in result.stdout
     assert "/Applications" not in result.stdout
     assert "Library/Application Support" not in result.stdout
     assert not (integration_root / ".venv-audacity").exists()
@@ -75,8 +76,13 @@ if [[ "$1" == "venv" ]]; then
 elif [[ "$1" == "pip" ]]; then
   python_path="$4"
   venv="${python_path%/bin/python}"
-  printf '#!/usr/bin/env bash\\nexit 0\\n' > "$venv/bin/audacity-mcp"
-  chmod +x "$venv/bin/audacity-mcp"
+  if [[ "$*" == *"audacity-mcp==0.1.8"* ]]; then
+    printf '#!/usr/bin/env bash\\nexit 0\\n' > "$venv/bin/audacity-mcp"
+    chmod +x "$venv/bin/audacity-mcp"
+  else
+    printf '#!/usr/bin/env bash\\nexit 0\\n' > "$venv/bin/audio-mcp-audacity"
+    chmod +x "$venv/bin/audio-mcp-audacity"
+  fi
 fi
 """,
         encoding="utf-8",
@@ -101,9 +107,17 @@ fi
         check=True,
     )
 
-    assert "Installed audacity-mcp==0.1.8" in first.stdout
-    assert "Installed audacity-mcp==0.1.8" in second.stdout
+    assert "Installed audacity-mcp==0.1.8 with compatibility wrapper" in first.stdout
+    assert "Installed audacity-mcp==0.1.8 with compatibility wrapper" in second.stdout
     assert (integration_root / ".venv-audacity" / "bin" / "audacity-mcp").is_file()
+    assert (
+        integration_root
+        / ".venv-audacity"
+        / "bin"
+        / "audio-mcp-audacity"
+    ).is_file()
     calls = call_log.read_text(encoding="utf-8").splitlines()
     assert sum(call.startswith("venv ") for call in calls) == 1
-    assert sum(call.startswith("pip install ") for call in calls) == 2
+    assert sum(call.startswith("pip install ") for call in calls) == 4
+    assert sum("audacity-mcp==0.1.8" in call for call in calls) == 2
+    assert sum("--editable" in call for call in calls) == 2

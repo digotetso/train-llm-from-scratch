@@ -23,9 +23,14 @@ Required operating constraints:
 - Stop the MCP server and disable the module when remote control is not needed.
 
 The repository pins `audacity-mcp==0.1.8` in a dedicated environment so an
-unreviewed future release is not installed implicitly. The upstream package,
-its transitive dependencies, Audacity, and the MCP client remain separate
-trust boundaries.
+unreviewed future release is not installed implicitly. On macOS and Linux,
+the local `audio-mcp-audacity` launcher patches only response framing and
+process-exit pipe cleanup: it ignores empty frames before a real response,
+drains buffered lines through the terminating blank line, and replaces the
+upstream unawaited async `atexit` callback with synchronous pipe closure. It
+does not reduce the upstream package's broad 131-tool permissions. The
+upstream package, its transitive dependencies, Audacity, and the MCP client
+remain separate trust boundaries.
 
 ## Adobe Audition
 

@@ -288,7 +288,7 @@ def run_doctor(*, json_output: bool = False) -> int:
     checks = audacity_checks(
         Path("/Applications/Audacity.app"),
         Path("/tmp"),
-        integration_root / ".venv-audacity" / "bin" / "audacity-mcp",
+        integration_root / ".venv-audacity" / "bin" / "audio-mcp-audacity",
         uid=os.getuid(),
     )
     checks.extend(
