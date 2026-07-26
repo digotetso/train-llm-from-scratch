@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' ws://127.0.0.1:*; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Audio MCP for Adobe Audition</title>
+    <style>
+      body {
+        background: #252525;
+        color: #f1f1f1;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 16px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 16px;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 8px 12px;
+        margin: 0;
+      }
+      dt {
+        color: #bdbdbd;
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Audio MCP for Adobe Audition</h1>
+    <dl aria-live="polite">
+      <dt>Configuration:</dt>
+      <dd id="configuration-status">error</dd>
+      <dt>Bridge:</dt>
+      <dd id="bridge-status">disconnected</dd>
+      <dt>Last operation:</dt>
+      <dd id="last-operation">none</dd>
+    </dl>
+    <script src="./js/cep.js"></script>
+    <script src="./js/dispatcher.js"></script>
+    <script src="./js/main.js"></script>
+  </body>
+</html>
