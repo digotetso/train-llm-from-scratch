@@ -7,13 +7,17 @@ name = "audio-mcp-integrations"
 version = "0.1.0"
 description = "Local Audacity and Adobe Audition MCP integrations."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "mcp>=1.28.1,<2",
+  "websockets==16.1.1",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
 
 [project.scripts]
 audio-mcp-doctor = "audio_mcp.doctor:main"
+audio-mcp-audition = "audio_mcp.audition.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
