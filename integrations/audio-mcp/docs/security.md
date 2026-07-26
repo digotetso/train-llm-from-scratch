@@ -27,6 +27,61 @@ unreviewed future release is not installed implicitly. The upstream package,
 its transitive dependencies, Audacity, and the MCP client remain separate
 trust boundaries.
 
+## Adobe Audition
+
+The Audition integration has four trust boundaries:
+
+```text
+MCP client -> Python policy server -> authenticated 127.0.0.1 WebSocket
+           -> CEP fixed dispatcher -> ExtendScript fixed host functions
+```
+
+The Python process is the policy boundary. It requires an owner-only config
+file, a 64-character random token, exact `127.0.0.1` binding, one MCP host,
+one authenticated CEP connection, a 64 KiB message limit, finite deadlines,
+fixed request identifiers, and at most eight concurrent pending calls. The
+token is sent only as the first local WebSocket frame and is never rendered
+in the panel or written to operational logs.
+
+The server validates the complete request before emitting a bridge message:
+
+- literal JSON `confirm=true` is required for record, open, import, save,
+  export, and favorite application;
+- read paths must resolve to existing regular files inside configured read
+  roots;
+- export parents must resolve inside configured write roots;
+- symlink escapes, traversal, device files, missing parents, wrong
+  extensions, and existing destinations are rejected;
+- effect favorite names and export preset names are exact allowlists;
+- side-effecting requests are not retried automatically.
+
+The CEP layer does not expose raw ExtendScript, a generic evaluation tool,
+arbitrary command IDs, shell execution, Node.js, remote content, or
+caller-selected functions. It maps 14 bridge operations to fixed
+`AudioMcpHost` calls. The fifteenth MCP tool, effect-list discovery, is
+answered locally from the configuration.
+
+Residual risks:
+
+- A malicious process already running as the same user can read user-owned
+  files and may obtain the token. Loopback authentication is not a sandbox.
+- CEP is a legacy extension runtime. Enabling `PlayerDebugMode` permits
+  unsigned CEP extensions for that CSXS generation, not only this extension.
+  Enable it only for testing and reverse it afterward when possible.
+- Save intentionally modifies the active document after confirmation. Export
+  never overwrites, but save-in-place cannot provide that guarantee.
+- An allowlisted Audition favorite can still make destructive audio changes.
+  Validate on disposable media and keep the initial allowlist empty if unsure.
+- Installed Audition DOM behavior varies by release. Missing or unproven APIs
+  return `UNSUPPORTED_OPERATION`; bypassing that response is outside the
+  security model.
+- Audition opens and exports by pathname, not by a file descriptor supplied
+  by the policy process. The policy resolves paths and the host rechecks
+  export nonexistence immediately before `saveAs`, but a malicious same-user
+  process can still race a filesystem path between validation and the
+  application call. Do not run the bridge alongside untrusted local
+  processes.
+
 ## Sensitive data
 
 Audio contents, project paths, transcripts, and metadata may be sensitive.
@@ -36,14 +91,11 @@ policy before opening private recordings.
 
 ## Incident response
 
-If Audacity performs an unexpected action:
+If either editor performs an unexpected action:
 
 1. Stop the controlling MCP client.
 2. Preserve the open project state without blindly saving over the original.
-3. Use Audacity's undo history or a known-good project copy.
-4. Disable `mod-script-pipe` and restart Audacity.
+3. Use the editor's undo history or a known-good project/session copy.
+4. Disable `mod-script-pipe` for Audacity or close the Audition CEP panel.
 5. Record the tool name, arguments, client, package version, and observed
    result without including private audio or credentials.
-
-The Audition bridge has a separate loopback authentication and path-policy
-model; its controls and residual risks are documented in the Audition runbook.
