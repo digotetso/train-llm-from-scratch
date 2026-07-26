@@ -1,2 +1,14 @@
 [mcp_servers.audacity]
 command = "__ABSOLUTE_REPOSITORY_ROOT__/integrations/audio-mcp/.venv-audacity/bin/audacity-mcp"
+
+[mcp_servers.audition]
+command = "uv"
+args = [
+  "run",
+  "--project",
+  "__ABSOLUTE_REPOSITORY_ROOT__/integrations/audio-mcp",
+  "audio-mcp-audition",
+]
+
+[mcp_servers.audition.env]
+AUDIO_MCP_AUDITION_CONFIG = "__USER_APPLICATION_SUPPORT__/audio-mcp/audition.json"
