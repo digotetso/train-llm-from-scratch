@@ -14,6 +14,7 @@ from audio_mcp.audition.protocol import MAX_MESSAGE_BYTES, Request, Response
 
 
 AUTH_TIMEOUT_SECONDS = 2
+MAX_PENDING_REQUESTS = 8
 
 
 class AuditionBridge:
@@ -83,6 +84,12 @@ class AuditionBridge:
             raise AuditionError(
                 ErrorCode.BRIDGE_UNAVAILABLE,
                 "Adobe Audition CEP bridge is not connected.",
+                retryable=True,
+            )
+        if len(self._pending) >= MAX_PENDING_REQUESTS:
+            raise AuditionError(
+                ErrorCode.BRIDGE_UNAVAILABLE,
+                "Adobe Audition CEP bridge is busy; retry after a request completes.",
                 retryable=True,
             )
 

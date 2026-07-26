@@ -159,3 +159,28 @@ def test_audition_installer_rejects_unsafe_home() -> None:
 
     assert result.returncode == 1
     assert "safe HOME" in result.stderr
+
+
+def test_audition_installer_rejects_non_regular_existing_config(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    config_path = (
+        home
+        / "Library"
+        / "Application Support"
+        / "audio-mcp"
+        / "audition.json"
+    )
+    config_path.mkdir(parents=True)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        env=_environment(home),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "regular file" in result.stderr

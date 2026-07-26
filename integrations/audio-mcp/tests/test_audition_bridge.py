@@ -4,7 +4,7 @@ import json
 import pytest
 from websockets.asyncio.client import connect
 
-from audio_mcp.audition.bridge import AuditionBridge
+from audio_mcp.audition.bridge import AuditionBridge, MAX_PENDING_REQUESTS
 from audio_mcp.audition.errors import AuditionError, ErrorCode
 from audio_mcp.audition.protocol import MAX_MESSAGE_BYTES, PROTOCOL
 
@@ -171,6 +171,37 @@ def test_bridge_timeout_removes_pending_and_discards_late_response(config) -> No
                 )
                 assert await current == {"late": False}
         finally:
+            await bridge.close()
+
+    asyncio.run(scenario())
+
+
+def test_bridge_bounds_concurrent_pending_requests(config) -> None:
+    async def scenario() -> None:
+        bridge = AuditionBridge(config)
+        await bridge.start()
+        tasks: list[asyncio.Task[dict[str, object]]] = []
+        try:
+            async with connect(f"ws://127.0.0.1:{config.port}") as socket:
+                await _authenticate(socket, config.secret)
+                for _ in range(MAX_PENDING_REQUESTS):
+                    task = asyncio.create_task(bridge.request("get_status", {}))
+                    tasks.append(task)
+                    await socket.recv()
+
+                with pytest.raises(AuditionError) as caught:
+                    await bridge.request(
+                        "get_status",
+                        {},
+                        timeout_ms=10,
+                    )
+                assert caught.value.code is ErrorCode.BRIDGE_UNAVAILABLE
+                assert caught.value.retryable is True
+                assert bridge.pending_count == MAX_PENDING_REQUESTS
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await bridge.close()
 
     asyncio.run(scenario())

@@ -208,3 +208,12 @@ def test_config_errors_never_include_secret(tmp_path: Path) -> None:
 
     assert secret not in str(caught.value)
     assert secret not in repr(caught.value)
+
+
+def test_load_config_rejects_oversized_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "audition.json"
+    config_path.write_text("x" * 65_537, encoding="utf-8")
+    config_path.chmod(0o600)
+
+    with pytest.raises(ConfigError, match="65536-byte"):
+        load_config(config_path)

@@ -201,6 +201,7 @@ def test_host_uses_only_fixed_audition_commands_and_apis() -> None:
         "app.transport.record()",
         "new DocumentOpenParameter(path)",
         "app.openDocument",
+        "new File(path).exists",
         "saveAs(path, true)",
         "applyFavorite(name)",
     ]
@@ -210,6 +211,9 @@ def test_host_uses_only_fixed_audition_commands_and_apis() -> None:
     assert "app.invokeCommand(command" not in text
     assert "eval(" not in text
     assert "toSource" not in text
+    assert 'case "DESTINATION_EXISTS":' in (
+        ROOT / "js" / "main.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_host_response_encoder_round_trips_control_characters() -> None:

@@ -10,6 +10,7 @@ from typing import Any
 
 
 SECRET_PATTERN = re.compile(r"[0-9a-f]{64}")
+MAX_CONFIG_BYTES = 65_536
 SUPPORTED_EXPORT_EXTENSIONS = frozenset(
     {".wav", ".wave", ".aif", ".aiff", ".mp3", ".flac"}
 )
@@ -83,6 +84,10 @@ def _load_json_object(path: Path) -> dict[str, Any]:
         raise ConfigError("Audition configuration must be owned by the current user.")
     if stat.S_IMODE(metadata.st_mode) != 0o600:
         raise ConfigError("Audition configuration must have mode 0600.")
+    if metadata.st_size > MAX_CONFIG_BYTES:
+        raise ConfigError(
+            "Audition configuration exceeds the 65536-byte size limit."
+        )
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

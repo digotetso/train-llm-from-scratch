@@ -439,6 +439,13 @@ var AudioMcpHost = AudioMcpHost || {};
     if (typeof path !== "string" || path.length === 0) {
       return failure("INVALID_ARGUMENT", "Invalid export path.", false);
     }
+    if (new File(path).exists) {
+      return failure(
+        "DESTINATION_EXISTS",
+        "Export destination already exists.",
+        false
+      );
+    }
     return run(function () {
       document.saveAs(path, true);
       return {exported: true};

@@ -51,7 +51,10 @@ umask 077
 mkdir -p "${config_dir}" "${extensions_dir}"
 chmod 0700 "${config_dir}" "${extensions_dir}"
 
-if [[ ! -e "${config_path}" ]]; then
+if [[ -L "${config_path}" || ( -e "${config_path}" && ! -f "${config_path}" ) ]]; then
+  echo "Existing Audition config must be a regular file: ${config_path}" >&2
+  exit 1
+elif [[ ! -e "${config_path}" ]]; then
   mkdir -p "${read_root}" "${write_root}"
   chmod 0700 "${read_root}" "${write_root}"
   python3 - "${config_path}" "${read_root}" "${write_root}" <<'PY'
