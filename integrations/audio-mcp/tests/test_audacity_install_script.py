@@ -7,6 +7,14 @@ from pathlib import Path
 SCRIPT = Path(__file__).parents[1] / "scripts" / "install-audacity-mcp.sh"
 
 
+def _copy_script(tmp_path: Path) -> tuple[Path, Path]:
+    integration_root = tmp_path / "audio-mcp"
+    script = integration_root / "scripts" / SCRIPT.name
+    script.parent.mkdir(parents=True)
+    shutil.copy2(SCRIPT, script)
+    return integration_root, script
+
+
 def test_install_script_has_valid_shell_syntax() -> None:
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
@@ -18,9 +26,10 @@ def test_install_script_has_valid_shell_syntax() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_dry_run_is_scoped_and_pinned() -> None:
+def test_dry_run_is_scoped_and_pinned(tmp_path: Path) -> None:
+    integration_root, script = _copy_script(tmp_path)
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--dry-run"],
+        ["bash", str(script), "--dry-run"],
         capture_output=True,
         text=True,
         check=True,
@@ -30,12 +39,13 @@ def test_dry_run_is_scoped_and_pinned() -> None:
     assert "audacity-mcp==0.1.8" in result.stdout
     assert "/Applications" not in result.stdout
     assert "Library/Application Support" not in result.stdout
-    assert not (SCRIPT.parents[1] / ".venv-audacity").exists()
+    assert not (integration_root / ".venv-audacity").exists()
 
 
-def test_unknown_argument_fails_without_side_effects() -> None:
+def test_unknown_argument_fails_without_side_effects(tmp_path: Path) -> None:
+    integration_root, script = _copy_script(tmp_path)
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--replace-client-config"],
+        ["bash", str(script), "--replace-client-config"],
         capture_output=True,
         text=True,
         check=False,
@@ -43,14 +53,11 @@ def test_unknown_argument_fails_without_side_effects() -> None:
 
     assert result.returncode == 2
     assert "usage:" in result.stderr
-    assert not (SCRIPT.parents[1] / ".venv-audacity").exists()
+    assert not (integration_root / ".venv-audacity").exists()
 
 
 def test_install_is_idempotent_with_a_scoped_uv_environment(tmp_path: Path) -> None:
-    integration_root = tmp_path / "audio-mcp"
-    script = integration_root / "scripts" / SCRIPT.name
-    script.parent.mkdir(parents=True)
-    shutil.copy2(SCRIPT, script)
+    integration_root, script = _copy_script(tmp_path)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
