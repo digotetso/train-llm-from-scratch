@@ -1,0 +1,2 @@
+[mcp_servers.audacity]
+command = "__ABSOLUTE_REPOSITORY_ROOT__/integrations/audio-mcp/.venv-audacity/bin/audacity-mcp"
