@@ -2,9 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create a script-complete, professionally edited, production-ready
-11:50 narration master in Adobe Audition while preserving the immutable source
-recording and the production script's visual timing.
+**Goal:** Create a source-complete, coherent, professionally edited,
+production-ready 11:50 narration master in Adobe Audition while preserving the
+immutable source recording and using the production script's visual timing as
+a reference.
 
 **Architecture:** Use local Whisper and FFmpeg only for read-only analysis,
 alignment, and independent verification. Use a non-destructive Adobe Audition
@@ -18,8 +19,10 @@ FFmpeg/FFprobe, SHA-256, Markdown.
 
 ## Global Constraints
 
-- Treat `course/video-1-training-example/script.md` as the sole narration and
-  timing authority.
+- Treat the recorded narration as the wording authority. Use
+  `course/video-1-training-example/script.md` as the structural, teaching-flow,
+  and timing reference. Retain intentional coherent changes such as two key
+  points instead of three.
 - Speak only prose under `### Narration`; never include headings, code blocks,
   terminal output, or visual directions.
 - Never overwrite, rename, move, or delete
@@ -31,7 +34,8 @@ FFmpeg/FFprobe, SHA-256, Markdown.
 - Target approximately -16 LUFS integrated and no more than -1.5 dBTP without
   audible processing artifacts.
 - Do not synthesize, rewrite, omit, or phoneme-assemble missing narration.
-- Mark any line without a complete intelligible take as a pickup.
+- Mark any intended source-led teaching idea without a complete intelligible
+  take as a pickup.
 - Keep production work under
   `/Users/digotetsomatema/Desktop/audio/training_examples_production/`.
 - Do not commit WAV, PKF, SESX, transcripts, measurements, or edit logs to the
@@ -377,9 +381,10 @@ Add marker rows with these exact output times:
 11:50.000 Program End
 ```
 
-- [ ] **Step 3: Align every narration sentence to candidate source takes**
+- [ ] **Step 3: Align the intended recorded narration to clean source takes**
 
-For each prose sentence under `### Narration`:
+Use the recorded teaching sequence as the wording authority and the prose under
+`### Narration` as the structural and timing reference:
 
 1. Normalize case, curly quotes, Markdown emphasis, and punctuation for
    comparison only.
@@ -390,7 +395,7 @@ For each prose sentence under `### Narration`:
 6. Record discarded repeats or false starts as `REMOVE` rows.
 7. Record unclear but unavoidable content as `PICKUP-RISK`.
 
-Expected: every narration sentence has exactly one `KEEP` row.
+Expected: every intended source-led narration idea has exactly one `KEEP` row.
 
 - [ ] **Step 4: Place explicit visual and learner holds**
 
@@ -414,7 +419,7 @@ prediction at the end of the range and place narration earlier in that section.
 Check all of the following manually:
 
 ```text
-Every required narration sentence: exactly one KEEP row
+Every intended source-led narration idea: exactly one KEEP row
 Every source range: within 0.000-988.864
 Every output range: monotonic and non-overlapping
 Every section marker: exact to 0.001 seconds
@@ -424,9 +429,9 @@ Every REMOVE row: reason recorded
 Every confidence below 0.80: listening verification recorded
 ```
 
-Stop before Audition assembly if a required sentence has no complete,
-intelligible candidate. Record the source range and pickup need instead of
-inventing or omitting words.
+Stop before Audition assembly if an intended source-led teaching idea has no
+complete, intelligible candidate. Record the source range and pickup need
+instead of inventing or omitting words.
 
 ---
 
@@ -798,7 +803,8 @@ mv \
   "/Users/digotetsomatema/Desktop/audio/training_examples_production/master_transcription.json"
 ```
 
-Expected: the transcript contains all required narration in order. Treat
+Expected: the transcript contains the complete intended source-led narration in
+order. Treat
 Whisper mismatches as listening-review prompts, not automatic proof of an audio
 error.
 
@@ -808,7 +814,7 @@ Listen in Audition from `00:00.000` through `11:50.000` with the script and EDL
 open. Verify:
 
 ```text
-all required narration present exactly once
+all intended source-led narration present exactly once
 no false starts or repeated takes
 no unclear discarded speech
 section starts aligned to markers

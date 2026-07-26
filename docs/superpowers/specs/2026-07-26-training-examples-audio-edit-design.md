@@ -7,9 +7,9 @@ Produce a professional, production-ready narration master for:
 `course/video-1-training-example/script.md`
 
 The edit must remove repeated takes, false starts, accidental dead air, and
-unclear discarded material while retaining every required spoken line in the
-approved order. Intentional pauses required by the visual and animation plan
-must remain synchronized to the script's production timeline.
+unclear discarded material while retaining the recording's complete intended
+teaching sequence. Intentional pauses required by the visual and animation
+plan must remain synchronized to the script's reference production timeline.
 
 ## Source and Safety
 
@@ -28,21 +28,32 @@ renamed, moved, or deleted. Work products will use new names under:
 
 ## Editorial Authority
 
-`course/video-1-training-example/script.md` is the sole content and timing
-authority. Only prose under `### Narration` is spoken. Code blocks, terminal
+`course/video-1-training-example/script.md` is the structural, teaching-flow,
+and timing reference. Only recorded narration is spoken. Code blocks, terminal
 output, headings, and visual directions remain silent.
+
+### Source-led amendment approved 2026-07-26
+
+The recorded narration is now the editorial wording authority. The production
+script remains a structural, teaching-flow, and timing reference rather than
+an exact transcript contract. Intentional recorded changes—including the
+closing's two key points instead of three—must be retained when they are
+complete, coherent, and consistent. False starts, repeated takes, unclear
+abandoned material, and the incomplete restart after the finished sign-off
+remain removable.
 
 The completed narration must:
 
-1. contain every required narration sentence exactly once and in script order;
+1. contain the recording's intended teaching sequence once, using the script
+   as a structural and timing reference;
 2. use the clearest complete recorded take available for each sentence;
 3. remove false starts, repeated takes, abandoned words, coughs, handling
    noise, and accidental long gaps when removal does not damage speech;
 4. preserve natural breaths and phrasing unless they distract or impair timing;
 5. preserve the visual holds, prediction pauses, and demonstration time
    specified by the production script;
-6. identify any line without a usable complete take as a pickup rather than
-   concealing the omission.
+6. identify any source-led teaching idea without a usable complete take as a
+   pickup rather than concealing the omission.
 
 ## Timing Contract
 
@@ -125,8 +136,9 @@ The edit is accepted only if:
 
 1. source WAV and PKF checksums and metadata remain unchanged;
 2. the master opens successfully and reports PCM 24-bit mono at 48 kHz;
-3. every narration sentence can be traced from script to transcript and master;
-4. no narration sentence is duplicated or out of order;
+3. every retained narration idea can be traced from source transcript to EDL
+   and master;
+4. no narration idea is unintentionally duplicated or out of order;
 5. section starts match the timing contract within 100 milliseconds;
 6. prediction and demonstration holds remain present where specified;
 7. edit boundaries contain no audible clicks, clipped words, or abrupt
@@ -138,9 +150,9 @@ The edit is accepted only if:
 
 ## Failure Handling
 
-If the source lacks a complete intelligible take for required narration, the
-editor will preserve the best available take, mark its exact output time, and
-recommend a pickup. Content will not be synthesized, rewritten, silently
+If the source lacks a complete intelligible take for an intended source-led
+teaching idea, the editor will preserve the best available take, mark its exact
+output time, and recommend a pickup. Content will not be synthesized, silently
 omitted, or assembled from phonemes without explicit approval.
 
 If Audition cannot perform a required safe operation through the installed
