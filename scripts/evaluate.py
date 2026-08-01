@@ -28,10 +28,30 @@ def main() -> None:
     parser.add_argument("--config", required=True, help="Path to MatGPT YAML config.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint path.")
     parser.add_argument("--output", help="Path for the evaluation JSON artifact.")
+    parser.add_argument(
+        "--validation-seed",
+        type=int,
+        help="Seed for selecting validation windows (default: run seed + 1).",
+    )
+    parser.add_argument(
+        "--generation-seed",
+        type=int,
+        help="Seed for story generation (default: run seed).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     evaluation_seed = int(cfg["run"]["seed"])
+    validation_seed = (
+        args.validation_seed
+        if args.validation_seed is not None
+        else evaluation_seed + 1
+    )
+    generation_seed = (
+        args.generation_seed
+        if args.generation_seed is not None
+        else evaluation_seed
+    )
     set_seed(evaluation_seed)
     default_output = Path(cfg["run"]["output_dir"]) / "evaluation" / f"{Path(args.checkpoint).stem}.json"
     output_path = Path(args.output) if args.output else default_output
@@ -53,7 +73,7 @@ def main() -> None:
     val_dataset = PackedTokenDataset.from_metadata(
         metadata_path_for_split(cfg["sharding"]["output_dir"], effective_validation_split(cfg["dataset"])),
         context_length=cfg["model"]["context_length"],
-        seed=cfg["run"]["seed"] + 1,
+        seed=validation_seed,
     )
     val_loss = evaluate_loss(
         model,
@@ -63,6 +83,7 @@ def main() -> None:
         device=device,
         precision=cfg["training"]["precision"],
     )
+    set_seed(generation_seed)
     samples = generate_samples(
         model=model,
         tokenizer=tokenizer,
@@ -77,6 +98,8 @@ def main() -> None:
     result = {
         "checkpoint": str(Path(args.checkpoint)),
         "evaluation_seed": evaluation_seed,
+        "validation_seed": validation_seed,
+        "generation_seed": generation_seed,
         "val_loss": val_loss,
         "perplexity": perplexity(val_loss),
         "samples": samples,

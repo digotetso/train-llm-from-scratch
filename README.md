@@ -106,6 +106,78 @@ Each run writes:
 - resumable checkpoints under `runs/<name>/checkpoints/`
 - checkpoint evaluations, `resume_verification.json`, and `run_summary.md`
 
+## Compare Preserved Checkpoints
+
+Use the comparison suite after mounting or downloading the preserved checkpoints,
+the run's config snapshot, tokenizer, and prepared shards. Keep the same validation dataset
+and choose every seed before inspecting the results. The command below
+compares the 100M, 150M, 170M, and 200M checkpoints with ten matched validation
+samples and five matched story-generation runs:
+
+```bash
+python scripts/compare_checkpoints.py \
+  --config /path/to/run/config.snapshot.yaml \
+  --checkpoint 100m=/path/to/checkpoint-100m.pt \
+  --checkpoint 150m=/path/to/checkpoint-150m.pt \
+  --checkpoint 170m=/path/to/checkpoint-170m.pt \
+  --checkpoint 200m=/path/to/checkpoint-200m.pt \
+  --validation-seeds 1001,1002,1003,1004,1005,1006,1007,1008,1009,1010 \
+  --generation-seeds 2001,2002,2003,2004,2005 \
+  --prompts evals/story_prompts.jsonl \
+  --task evals/story_consistency.jsonl \
+  --review-per-checkpoint 50 \
+  --review-seed 3001 \
+  --output-dir /path/to/checkpoint-comparison
+```
+
+The validation seed changes only which windows are sampled from the unchanged
+validation shards. Every checkpoint receives the same seed-matched windows. A
+generation seed changes sampling randomness for all 50 fixed prompts, producing
+250 stories per checkpoint. The suite measures repeated words, phrases, and
+sentences automatically; it also runs 100 fixed character, object/attribute,
+location/state, and cause/effect continuation checks.
+
+The output contains complete evidence in `checkpoints/<label>.json`, paired loss
+and aggregate results in `comparison_summary.json`, and blinded review material
+under `llm_judge/`. Existing output directories are refused so an earlier run
+cannot be overwritten accidentally.
+
+### Blinded LLM Story Review
+
+For qualitative review, this conversation's LLM is the primary judge; no
+external model API or API key is required. The comparison command selects exactly 50 stories per
+checkpoint, mixes them under opaque review IDs, and creates batches of at most
+20 stories. Use this workflow:
+
+1. Give `llm_judge/judge_prompt.md` and one
+   `llm_judge/batches/judge_batch_<NN>.jsonl` file at a time to this
+   conversation's LLM.
+2. Do not provide `llm_judge/review_key.json` until every judgment is complete.
+3. Save each returned JSONL response under `llm_judge/results/`, preserving one
+   result for every review ID.
+4. Score all completed batches together, repeating `--judgments` for each file:
+
+```bash
+python scripts/score_story_judgments.py \
+  --key /path/to/checkpoint-comparison/llm_judge/review_key.json \
+  --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-01.jsonl \
+  --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-02.jsonl \
+  --reviewer llm \
+  --output /path/to/checkpoint-comparison/llm_judge/llm_scores.json
+```
+
+The scoring command rejects missing, duplicate, unknown, malformed, or
+out-of-range judgments before revealing per-checkpoint means, score
+distributions, flags, and row-level evidence. Human review is optional; use the
+same blinded files with `--reviewer human` and a separate output path so human
+and LLM evidence are never silently mixed.
+
+Treat the ten validation seeds as an initial paired sample, not statistical
+certainty. Validation loss remains the main model-quality evidence. Consistency
+tasks, repetition rates, and blinded LLM judgments show different failure modes;
+do not collapse them into one unexplained score or change seeds after seeing
+which checkpoint wins.
+
 ## Tests
 
 The test suite uses synthetic local fixtures and does not download datasets:

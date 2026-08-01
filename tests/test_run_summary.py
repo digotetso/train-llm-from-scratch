@@ -278,12 +278,27 @@ def test_atomic_write_cleans_up_when_replace_fails(tmp_path: Path, monkeypatch: 
     assert not list(tmp_path.glob("*.tmp"))
 
 
-@pytest.mark.parametrize("explicit_output", [False, True])
+@pytest.mark.parametrize(
+    ("explicit_output", "seed_args", "expected_validation_seed", "expected_generation_seed"),
+    [
+        (False, [], 18, 17),
+        (True, [], 18, 17),
+        (
+            False,
+            ["--validation-seed", "1001", "--generation-seed", "2001"],
+            1001,
+            2001,
+        ),
+    ],
+)
 def test_evaluate_cli_persists_default_and_explicit_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     explicit_output: bool,
+    seed_args: list[str],
+    expected_validation_seed: int,
+    expected_generation_seed: int,
 ):
     run_dir = tmp_path / "run"
     checkpoint = tmp_path / "checkpoints" / "best.pt"
@@ -321,9 +336,12 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
         def to(self, device: object) -> "FakeModel":
             return self
 
+    dataset_seeds = []
+
     class FakeDataset:
         @classmethod
         def from_metadata(cls, *args, **kwargs) -> object:
+            dataset_seeds.append(kwargs["seed"])
             return object()
 
     class FakeTokenizer:
@@ -370,6 +388,7 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     )
     monkeypatch.setattr(evaluate_script, "perplexity", lambda loss: 109.9)
     argv = ["evaluate.py", "--config", "config.yaml", "--checkpoint", str(checkpoint)]
+    argv.extend(seed_args)
     if explicit_output:
         argv.extend(["--output", str(requested_output)])
     monkeypatch.setattr(sys, "argv", argv)
@@ -380,11 +399,14 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     assert json.loads(output.read_text(encoding="utf-8")) == {
         "checkpoint": str(checkpoint),
         "evaluation_seed": 17,
+        "generation_seed": expected_generation_seed,
         "perplexity": 109.9,
         "samples": [{"prompt": "Hello", "text": "Hello world"}],
         "val_loss": 4.7,
+        "validation_seed": expected_validation_seed,
     }
-    assert seed_calls == [17]
+    assert dataset_seeds == [expected_validation_seed]
+    assert seed_calls == [17, expected_generation_seed]
     assert json.loads(capsys.readouterr().out) == json.loads(output.read_text(encoding="utf-8"))
 
 
