@@ -1,0 +1,100 @@
+{"id":"character-001","category":"character","prompt":"Mia was a girl. Mia picked up the book because","choices":[" she wanted to read it."," he wanted to read it."],"answer":0}
+{"id":"character-002","category":"character","prompt":"Noah was a boy who loved music. At the concert, the singer thanked","choices":[" her for listening."," him for listening."],"answer":1}
+{"id":"character-003","category":"character","prompt":"Lina gave Jo an apple. Jo smiled at Lina. The child holding the apple was","choices":[" Jo."," Lina."],"answer":0}
+{"id":"character-004","category":"character","prompt":"Omar asked Sela to fix his kite. Sela repaired it carefully. The person who did the repair was","choices":[" Omar."," Sela."],"answer":1}
+{"id":"character-005","category":"character","prompt":"Tara is Kim's older sister. Kim is Tara's younger brother. The older child is","choices":[" Tara."," Kim."],"answer":0}
+{"id":"character-006","category":"character","prompt":"Ava rescued a puppy, and Ben cooked dinner. The one who made the meal was","choices":[" Ava."," Ben."],"answer":1}
+{"id":"character-007","category":"character","prompt":"Pia wore a yellow hat while Rafi wore a green coat. The child wearing the hat was","choices":[" Pia."," Rafi."],"answer":0}
+{"id":"character-008","category":"character","prompt":"Musa could swim, but Dineo could not. When they reached the pool, the swimmer was","choices":[" Dineo."," Musa."],"answer":1}
+{"id":"character-009","category":"character","prompt":"Nia promised her mother that she would feed the cat. After school,","choices":[" Nia filled the cat's bowl."," her mother filled Nia's bowl."],"answer":0}
+{"id":"character-010","category":"character","prompt":"Leo lent his boots to Sam before the hike. During the hike, the boots were worn by","choices":[" Leo."," Sam."],"answer":1}
+{"id":"character-011","category":"character","prompt":"Ivy found a coin and showed it to Max. The person who found the coin was","choices":[" Ivy."," Max."],"answer":0}
+{"id":"character-012","category":"character","prompt":"Zoe taught Eli how to bake. Eli listened to his teacher. The teacher was","choices":[" Eli."," Zoe."],"answer":1}
+{"id":"character-013","category":"character","prompt":"Kofi's aunt Ama visited him on Sunday. Kofi welcomed","choices":[" his aunt."," her nephew."],"answer":0}
+{"id":"character-014","category":"character","prompt":"Rina beat Tom in the race. Tom congratulated the winner, who was","choices":[" Tom."," Rina."],"answer":1}
+{"id":"character-015","category":"character","prompt":"The baker asked Mei to carry a cake. Mei lifted it with both hands. The cake was carried by","choices":[" Mei."," the baker."],"answer":0}
+{"id":"character-016","category":"character","prompt":"Dara drew a lion, while Femi drew a tree. The child who drew the tree was","choices":[" Dara."," Femi."],"answer":1}
+{"id":"character-017","category":"character","prompt":"Grandpa told Lolo a story before she slept. The person listening was","choices":[" Lolo."," Grandpa."],"answer":0}
+{"id":"character-018","category":"character","prompt":"Tebo washed the dishes, and Sara dried them. The person using the towel was","choices":[" Tebo."," Sara."],"answer":1}
+{"id":"character-019","category":"character","prompt":"Ana invited Bo to her birthday party. The party belonged to","choices":[" Ana."," Bo."],"answer":0}
+{"id":"character-020","category":"character","prompt":"Jabu lost his scarf, and Neo found it under a chair. The finder was","choices":[" Jabu."," Neo."],"answer":1}
+{"id":"character-021","category":"character","prompt":"Mara is a doctor, and Pako is a farmer. When the patient arrived, the doctor was","choices":[" Mara."," Pako."],"answer":0}
+{"id":"character-022","category":"character","prompt":"Gabi sang the song while Rudo played the drum. The musician with the drum was","choices":[" Gabi."," Rudo."],"answer":1}
+{"id":"character-023","category":"character","prompt":"Sami gave his grandmother a warm blanket. She thanked","choices":[" her grandson."," his grandmother."],"answer":0}
+{"id":"character-024","category":"character","prompt":"A fox chased a rabbit until the rabbit hid. The animal that hid was","choices":[" the fox."," the rabbit."],"answer":1}
+{"id":"character-025","category":"character","prompt":"Lulu painted the fence after her father bought the paint. The painter was","choices":[" Lulu."," her father."],"answer":0}
+{"id":"object_attribute-001","category":"object_attribute","prompt":"Lily put the red ball in the box. Tom carried a blue kite. Later, Lily opened the box and found the","choices":[" red ball."," blue kite."],"answer":0}
+{"id":"object_attribute-002","category":"object_attribute","prompt":"One cup was made of glass, and one plate was made of wood. The wooden item was the","choices":[" cup."," plate."],"answer":1}
+{"id":"object_attribute-003","category":"object_attribute","prompt":"Mara tied a green ribbon around the gift. The ribbon on the gift was","choices":[" green."," purple."],"answer":0}
+{"id":"object_attribute-004","category":"object_attribute","prompt":"The large basket held apples, while the small basket held pears. The pears were in the","choices":[" large basket."," small basket."],"answer":1}
+{"id":"object_attribute-005","category":"object_attribute","prompt":"Timo's spoon was silver, and his fork was black. The silver utensil was the","choices":[" spoon."," fork."],"answer":0}
+{"id":"object_attribute-006","category":"object_attribute","prompt":"Nia filled the round jar with rice and the square tin with beans. The beans were inside the","choices":[" round jar."," square tin."],"answer":1}
+{"id":"object_attribute-007","category":"object_attribute","prompt":"The old coat had three buttons. After one button fell off, the coat had","choices":[" two buttons."," four buttons."],"answer":0}
+{"id":"object_attribute-008","category":"object_attribute","prompt":"Pia owned the red bicycle, and Jo owned the yellow bicycle. The yellow bicycle belonged to","choices":[" Pia."," Jo."],"answer":1}
+{"id":"object_attribute-009","category":"object_attribute","prompt":"A soft wool blanket lay beside a hard wooden board. The soft object was the","choices":[" blanket."," board."],"answer":0}
+{"id":"object_attribute-010","category":"object_attribute","prompt":"The first bottle was empty, but the second bottle held milk. The bottle with milk was the","choices":[" first bottle."," second bottle."],"answer":1}
+{"id":"object_attribute-011","category":"object_attribute","prompt":"Omar drew a tiny star above a huge moon. The larger shape was the","choices":[" moon."," star."],"answer":0}
+{"id":"object_attribute-012","category":"object_attribute","prompt":"The copper key opened the gate, while the iron key opened the chest. The chest key was","choices":[" copper."," iron."],"answer":1}
+{"id":"object_attribute-013","category":"object_attribute","prompt":"Sela baked a round cake and placed it beside a square loaf. The cake was","choices":[" round."," square."],"answer":0}
+{"id":"object_attribute-014","category":"object_attribute","prompt":"Ravi packed shoes in the brown bag and books in the white bag. The books were in the","choices":[" brown bag."," white bag."],"answer":1}
+{"id":"object_attribute-015","category":"object_attribute","prompt":"The toy car had four wheels. One wheel broke off, leaving","choices":[" three wheels."," five wheels."],"answer":0}
+{"id":"object_attribute-016","category":"object_attribute","prompt":"Ana's scarf was striped, and Bo's scarf had dots. The dotted scarf belonged to","choices":[" Ana."," Bo."],"answer":1}
+{"id":"object_attribute-017","category":"object_attribute","prompt":"A cold glass of water stood next to a hot bowl of soup. The cold item was the","choices":[" water."," soup."],"answer":0}
+{"id":"object_attribute-018","category":"object_attribute","prompt":"The tall candle was blue, and the short candle was orange. The orange candle was","choices":[" tall."," short."],"answer":1}
+{"id":"object_attribute-019","category":"object_attribute","prompt":"Kira wrapped the parcel in plain paper and tied it with a spotted string. The string was","choices":[" spotted."," plain."],"answer":0}
+{"id":"object_attribute-020","category":"object_attribute","prompt":"One chest contained coins, and another chest contained shells. The second chest held","choices":[" coins."," shells."],"answer":1}
+{"id":"object_attribute-021","category":"object_attribute","prompt":"The clean towel hung above the muddy boots. The muddy objects were the","choices":[" boots."," towel."],"answer":0}
+{"id":"object_attribute-022","category":"object_attribute","prompt":"Milo bought a paper crown and a metal bell. The object made of metal was the","choices":[" crown."," bell."],"answer":1}
+{"id":"object_attribute-023","category":"object_attribute","prompt":"The kitten wore a red collar with a tiny gold tag. The tag was","choices":[" gold."," red."],"answer":0}
+{"id":"object_attribute-024","category":"object_attribute","prompt":"Fara poured juice into the wide cup and tea into the narrow cup. The narrow cup held","choices":[" juice."," tea."],"answer":1}
+{"id":"object_attribute-025","category":"object_attribute","prompt":"The new umbrella was smooth, while the old umbrella was torn. The torn umbrella was","choices":[" old."," new."],"answer":0}
+{"id":"location_state-001","category":"location_state","prompt":"Kai left his lunch beside the old tree. When he returned, he looked for it","choices":[" beside the tree."," inside the school."],"answer":0}
+{"id":"location_state-002","category":"location_state","prompt":"The puppy ran from the porch into the garden. It was now","choices":[" on the porch."," in the garden."],"answer":1}
+{"id":"location_state-003","category":"location_state","prompt":"Mina put the key in her pocket and did not move it. The key remained","choices":[" in her pocket."," under the bed."],"answer":0}
+{"id":"location_state-004","category":"location_state","prompt":"A bird flew out of its cage and landed on the roof. The bird ended up","choices":[" in the cage."," on the roof."],"answer":1}
+{"id":"location_state-005","category":"location_state","prompt":"Jo carried the box from the hall to the kitchen. Afterward, the box was","choices":[" in the kitchen."," in the hall."],"answer":0}
+{"id":"location_state-006","category":"location_state","prompt":"The coin rolled off the table and stopped under the chair. The coin was","choices":[" on the table."," under the chair."],"answer":1}
+{"id":"location_state-007","category":"location_state","prompt":"Nora placed the flowers in a vase beside the window. The flowers stood","choices":[" beside the window."," behind the door."],"answer":0}
+{"id":"location_state-008","category":"location_state","prompt":"Tebo moved his boots from the bedroom to the front step. The boots were now","choices":[" in the bedroom."," on the front step."],"answer":1}
+{"id":"location_state-009","category":"location_state","prompt":"The frog jumped from the rock into the pond. It finished","choices":[" in the pond."," on the rock."],"answer":0}
+{"id":"location_state-010","category":"location_state","prompt":"Sara took the cake out of the oven and set it on the counter. The cake was","choices":[" in the oven."," on the counter."],"answer":1}
+{"id":"location_state-011","category":"location_state","prompt":"Lebo hid the note inside a blue book. The note could be found","choices":[" inside the book."," beneath the rug."],"answer":0}
+{"id":"location_state-012","category":"location_state","prompt":"The train left the station and entered a tunnel. It was then","choices":[" at the station."," in the tunnel."],"answer":1}
+{"id":"location_state-013","category":"location_state","prompt":"Ivy put the milk back in the fridge after breakfast. The milk was","choices":[" in the fridge."," on the table."],"answer":0}
+{"id":"location_state-014","category":"location_state","prompt":"Musa climbed down from the tree and stood on the grass. He was","choices":[" in the tree."," on the grass."],"answer":1}
+{"id":"location_state-015","category":"location_state","prompt":"The rabbit entered its burrow before the rain began. During the rain, it stayed","choices":[" in the burrow."," in the field."],"answer":0}
+{"id":"location_state-016","category":"location_state","prompt":"Pia carried the lamp upstairs and placed it in the attic. The lamp ended up","choices":[" downstairs."," in the attic."],"answer":1}
+{"id":"location_state-017","category":"location_state","prompt":"A red scarf hung on the fence all morning. At noon, it was still","choices":[" on the fence."," in the river."],"answer":0}
+{"id":"location_state-018","category":"location_state","prompt":"Omar took the spoon from the drawer and laid it beside his bowl. The spoon was","choices":[" in the drawer."," beside the bowl."],"answer":1}
+{"id":"location_state-019","category":"location_state","prompt":"The boat sailed away from the shore toward the island. It moved","choices":[" toward the island."," into the forest."],"answer":0}
+{"id":"location_state-020","category":"location_state","prompt":"Zara lifted the cat from the floor onto the chair. The cat was now","choices":[" on the floor."," on the chair."],"answer":1}
+{"id":"location_state-021","category":"location_state","prompt":"Rafi buried the seed beneath the garden soil. The seed rested","choices":[" beneath the soil."," above the clouds."],"answer":0}
+{"id":"location_state-022","category":"location_state","prompt":"The wind blew the hat off Ben's head and into the stream. The hat landed","choices":[" on Ben's head."," in the stream."],"answer":1}
+{"id":"location_state-023","category":"location_state","prompt":"Sela stored the flour on the highest pantry shelf. The flour was","choices":[" on the pantry shelf."," under the sink."],"answer":0}
+{"id":"location_state-024","category":"location_state","prompt":"The children walked out of the classroom and into the yard. They were now","choices":[" in the classroom."," in the yard."],"answer":1}
+{"id":"location_state-025","category":"location_state","prompt":"Mara tucked the letter under her pillow before sleeping. The letter remained","choices":[" under the pillow."," inside the mailbox."],"answer":0}
+{"id":"cause_effect-001","category":"cause_effect","prompt":"Theo left the window open during the storm, so the floor near it became","choices":[" wet."," dusty."],"answer":0}
+{"id":"cause_effect-002","category":"cause_effect","prompt":"The ice cream sat in the hot sun for an hour. By then, it had","choices":[" frozen harder."," melted."],"answer":1}
+{"id":"cause_effect-003","category":"cause_effect","prompt":"Jules watered the dry plant every day. A week later, the plant began to","choices":[" grow."," turn into stone."],"answer":0}
+{"id":"cause_effect-004","category":"cause_effect","prompt":"The drum sounded very loudly in the quiet hall, so the sleeping baby","choices":[" slept more deeply."," woke up."],"answer":1}
+{"id":"cause_effect-005","category":"cause_effect","prompt":"Nora shared her umbrella with Bo during the rain. As a result, both children stayed","choices":[" dry."," sunburned."],"answer":0}
+{"id":"cause_effect-006","category":"cause_effect","prompt":"The kitten stepped in blue paint and then crossed the white floor. It left","choices":[" no marks."," blue paw prints."],"answer":1}
+{"id":"cause_effect-007","category":"cause_effect","prompt":"Mina dropped a glass cup onto the stone path. The cup","choices":[" broke."," grew taller."],"answer":0}
+{"id":"cause_effect-008","category":"cause_effect","prompt":"Omar forgot to feed the dog all morning. By noon, the dog was","choices":[" full."," hungry."],"answer":1}
+{"id":"cause_effect-009","category":"cause_effect","prompt":"A strong wind pushed the empty cart down the hill. The cart began to","choices":[" roll."," sink."],"answer":0}
+{"id":"cause_effect-010","category":"cause_effect","prompt":"Lina switched off the lamp in the windowless room. The room became","choices":[" brighter."," dark."],"answer":1}
+{"id":"cause_effect-011","category":"cause_effect","prompt":"Rafi put bread in the toaster and waited. Soon the bread became","choices":[" toasted."," frozen."],"answer":0}
+{"id":"cause_effect-012","category":"cause_effect","prompt":"The bucket had a hole in its bottom. When Pia filled it, the water","choices":[" stayed forever."," leaked out."],"answer":1}
+{"id":"cause_effect-013","category":"cause_effect","prompt":"Ben studied the map before the hike. Because of that, he knew which path to","choices":[" follow."," erase."],"answer":0}
+{"id":"cause_effect-014","category":"cause_effect","prompt":"The fire was very hot, so the nearby snow","choices":[" became colder."," melted."],"answer":1}
+{"id":"cause_effect-015","category":"cause_effect","prompt":"Ana pulled the door handle toward herself. The door","choices":[" opened."," disappeared."],"answer":0}
+{"id":"cause_effect-016","category":"cause_effect","prompt":"Milo did not charge the small robot. After its battery ran out, the robot","choices":[" ran faster."," stopped moving."],"answer":1}
+{"id":"cause_effect-017","category":"cause_effect","prompt":"The baker added yeast to the dough and left it somewhere warm. The dough","choices":[" rose."," turned to ice."],"answer":0}
+{"id":"cause_effect-018","category":"cause_effect","prompt":"Sela wore thin sandals in deep mud. Her feet became","choices":[" clean and dry."," muddy."],"answer":1}
+{"id":"cause_effect-019","category":"cause_effect","prompt":"The rain filled the empty pond throughout the night. In the morning, the pond was","choices":[" full of water."," full of sand."],"answer":0}
+{"id":"cause_effect-020","category":"cause_effect","prompt":"Tebo rang the dinner bell outside. The family heard it and","choices":[" went to bed."," came to eat."],"answer":1}
+{"id":"cause_effect-021","category":"cause_effect","prompt":"Ivy put the wet shirt on a sunny clothesline. After several hours, it was","choices":[" dry."," frozen."],"answer":0}
+{"id":"cause_effect-022","category":"cause_effect","prompt":"Kai kicked the ball toward an open gate. The ball rolled","choices":[" away from the gate."," through the gate."],"answer":1}
+{"id":"cause_effect-023","category":"cause_effect","prompt":"The hungry rabbit found a fresh carrot and ate it. Afterward, the rabbit was less","choices":[" hungry."," visible."],"answer":0}
+{"id":"cause_effect-024","category":"cause_effect","prompt":"Zoe placed an ice cube in warm tea. A little later, the ice cube had","choices":[" grown larger."," melted."],"answer":1}
+{"id":"cause_effect-025","category":"cause_effect","prompt":"Jo tied the loose parcel with strong string. Now the parcel stayed","choices":[" closed."," invisible."],"answer":0}
