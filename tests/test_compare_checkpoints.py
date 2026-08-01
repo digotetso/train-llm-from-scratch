@@ -154,9 +154,12 @@ def test_compare_checkpoints_runs_tiny_protocol_and_writes_blinded_bundle(
             assert token == "<|eos|>"
             return 2
 
+    dataset_seed_calls: list[int] = []
+
     class FakeDataset:
         @classmethod
         def from_metadata(cls, *args, **kwargs) -> dict[str, int]:
+            dataset_seed_calls.append(kwargs["seed"])
             return {"seed": kwargs["seed"]}
 
     def fake_apply(payload: dict[str, object], model: FakeModel, **kwargs) -> None:
@@ -234,3 +237,5 @@ def test_compare_checkpoints_runs_tiny_protocol_and_writes_blinded_bundle(
         (output / "checkpoints" / f"{label}.json").is_file()
         for label in ("170m", "200m")
     )
+    assert dataset_seed_calls == [1001, 1002, 1001, 1002]
+    assert seed_calls == [17, 2001, 2002, 17, 2001, 2002]
