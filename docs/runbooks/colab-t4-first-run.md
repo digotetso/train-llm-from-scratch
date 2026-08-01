@@ -1,7 +1,8 @@
-# Colab T4 First-Run Runbook
+# Colab GPU First-Run Runbook
 
 Use this runbook with `notebooks/train_matgpt_t4_base_colab.ipynb`. It is for a
-beginner operating the stage-gated base-pretraining workflow on Google Colab.
+beginner operating the stage-gated base-pretraining workflow on Google Colab
+with a T4, A100 80GB, or full RTX PRO 6000 Blackwell 96GB GPU.
 
 ## Evidence Status
 
@@ -107,8 +108,9 @@ does not shorten or restart the learning-rate schedule.
 
 - A Google account with enough Drive capacity for synchronized prepared data,
   checkpoints, metrics, evaluations, and samples.
-- A Colab runtime manually set to an NVIDIA T4 for `prepare`, `smoke`, `pilot`, and `full`.
-  T4 allocation is not guaranteed.
+- A Colab runtime manually set to a supported NVIDIA T4, A100 80GB, or full
+  RTX PRO 6000 Blackwell 96GB for `prepare`, `smoke`, `pilot`, and `full`.
+  Accelerator allocation is not guaranteed.
 - At least 20 GiB free under `/content` before preparation or training.
 - This repository available through `REPO_URL`, or already checked out at
   `PROJECT_DIR` under `/content`.
@@ -183,7 +185,7 @@ active training. Do not move the local root between sessions.
 ## Exact Stage Order
 
 1. Select `RUN_STAGE = "prepare"` and run the notebook top to bottom. This
-   prepares and validates the artifacts, runs strict T4 preflight, runs the
+   prepares and validates the artifacts, runs strict supported-GPU preflight, runs the
    temporary five-step batch benchmark, and persists `preflight.json` and
    `benchmark.json`. It does not run the pretraining command or create a
    training checkpoint. Stop and review both reports before selecting `smoke`.
@@ -204,8 +206,8 @@ active training. Do not move the local root between sessions.
 6. Select `RUN_STAGE = "evaluate"` again after full training.
 
 Changing the stage requires rerunning the notebook top to bottom in the same or
-a new Colab session. Keep `MODEL`, Drive root, and config inputs unchanged for a
-single run lineage.
+a new Colab session. Keep `MODEL`, Drive root, GPU performance profile, and
+config inputs unchanged for a single run lineage.
 
 ## Commands The Notebook Runs
 
@@ -228,7 +230,7 @@ synchronized measured steps:
 ```bash
 python scripts/preflight_t4.py \
   --config "$CONFIG" \
-  --require-t4 \
+  --require-supported-gpu \
   --min-free-disk-gb 20
 
 python scripts/benchmark_t4.py \
@@ -237,7 +239,10 @@ python scripts/benchmark_t4.py \
   --steps 5
 ```
 
-The 59M picker uses benchmark sizes `2,4,6,8`. Treat all resulting T4 numbers
+On a T4, the 59M picker uses benchmark sizes `2,4,6,8`. On an A100 80GB or
+full RTX PRO 6000, it uses `16,32,48,64` and selects micro-batch 64 with one
+accumulation step, preserving the original 32,768 tokens per optimizer update.
+Treat all resulting GPU numbers
 as expected until `benchmark.json` records them.
 
 Smoke and resume check:
@@ -274,7 +279,7 @@ Evaluation requires and runs once for both `latest.pt` and `best.pt`, verifies
 complete resume state without an update, persists that verification as
 `resume_verification.json`, and then writes the summary:
 
-Keep the T4 runtime active for this stage. A checkpoint containing CUDA RNG
+Keep the selected GPU runtime active for this stage. A checkpoint containing CUDA RNG
 state cannot pass complete resume verification on CPU because CPU cannot
 restore that CUDA state.
 
@@ -292,7 +297,7 @@ python scripts/summarize_run.py --run-dir "$RUN_DIR"
 | Gate | Pass criteria | Evidence |
 | --- | --- | --- |
 | 0. Scope | The operator has selected the intended model and stage, accepts unobserved time/cost, and understands that `full` requires manual approval. | Settings cell and operator confirmation. |
-| 1. Storage and device | `/content` and Drive usage print successfully; local free space is at least 20 GiB. `prepare` and training stages observe CUDA and a GPU name containing `T4`. | Storage/GPU cell output. |
+| 1. Storage and device | `/content` and Drive usage print successfully; local free space is at least 20 GiB. `prepare` and training stages classify a supported full GPU profile. | Storage/GPU cell output. |
 | 2. Preparation | Manifest and split counts validate; tokenizer JSON matches its metadata hash; combined/split shard metadata validate; every referenced shard payload has the expected size and hash. Each Drive artifact is published through a validated temporary replacement snapshot. | Preparation output and Drive directories. |
 | 3. Preflight | Process exits zero, top-level status is `pass`, all ten checks pass, and the JSON is persisted. For Mini, confirm preflight training math reports the configured 32,768 tokens/update and 6,104 steps. | `run/preflight.json`. |
 | 4. Benchmark | Loss, pre-clip gradient norm, throughput, peak memory, total memory, and memory fraction are finite; throughput is positive. On CUDA, total memory is positive, peak memory and fraction are nonnegative, and fraction equals peak/total before the below-0.90 gate. CPU-only tests retain exact zero-memory fields. | `run/benchmark.json`. |
@@ -312,7 +317,7 @@ Stop without promoting when any of these occurs:
 
 - local free space is below 20 GiB, Drive is not writable, or synchronization
   does not include `normalized`, `tokenizer`, and `shards`;
-- `prepare` or a training stage does not observe CUDA on a T4;
+- `prepare` or a training stage does not observe a supported CUDA GPU profile;
 - preflight exits nonzero, reports any failed check, or does not persist valid
   JSON;
 - the configured benchmark batch fails, loss or gradient norm is non-finite,

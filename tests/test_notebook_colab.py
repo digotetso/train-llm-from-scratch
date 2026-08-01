@@ -217,8 +217,47 @@ def test_colab_uses_full_schedule_and_structured_stage_branches():
     assert "PILOT_STOP_STEP = 306" in settings
     assert 'cfg["training"]["max_tokens"] = 200_000' not in settings
     assert "scripts/preflight_t4.py" in gate_source
-    assert "--require-t4" in gate_source
+    assert "--require-supported-gpu" in gate_source
+    assert "--require-t4" not in gate_source
     assert stage_values == ["smoke", "pilot", "full"]
+
+
+def test_colab_fast_gpu_profile_preserves_effective_batch_size():
+    source = code_source_after_heading("## 7. Build the fixed-path Colab config")
+    apply_gpu_training_profile = notebook_function(source, "apply_gpu_training_profile")
+    cfg = {
+        "model": {"context_length": 512},
+        "training": {
+            "micro_batch_size": 4,
+            "gradient_accumulation_steps": 16,
+        },
+    }
+
+    original_tokens_per_update = 4 * 16 * 512
+    apply_gpu_training_profile(
+        cfg,
+        model_name="tiny_59m",
+        high_throughput_gpu=True,
+    )
+
+    assert cfg["training"]["micro_batch_size"] == 64
+    assert cfg["training"]["gradient_accumulation_steps"] == 1
+    assert (
+        cfg["training"]["micro_batch_size"]
+        * cfg["training"]["gradient_accumulation_steps"]
+        * cfg["model"]["context_length"]
+        == original_tokens_per_update
+    )
+
+
+def test_colab_fast_gpu_benchmark_includes_configured_micro_batch():
+    source = code_source_after_heading(
+        "## 9. Gate training with preflight and benchmark evidence"
+    )
+    benchmark_batch_sizes = notebook_function(source, "benchmark_batch_sizes")
+
+    assert benchmark_batch_sizes("tiny_59m", high_throughput_gpu=True) == "16,32,48,64"
+    assert benchmark_batch_sizes("tiny_59m", high_throughput_gpu=False) == "2,4,6,8"
 
 
 def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
@@ -324,6 +363,11 @@ def test_colab_prepare_produces_t4_gate_evidence_without_pretraining(
         "scripts/preflight_t4.py",
         "scripts/benchmark_t4.py",
     ]
+    preflight_command = next(
+        command for command in commands if "scripts/preflight_t4.py" in command
+    )
+    assert "--require-supported-gpu" in preflight_command
+    assert "--require-t4" not in preflight_command
     assert lifecycle == ["validate", "validate", "validate", "validate_all", "sync"]
     assert json.loads((run_dir / "preflight.json").read_text()) == {"status": "pass"}
     assert json.loads((run_dir / "benchmark.json").read_text()) == benchmark_payload
