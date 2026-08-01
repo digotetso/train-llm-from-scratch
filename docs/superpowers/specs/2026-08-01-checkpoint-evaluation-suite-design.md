@@ -2,7 +2,7 @@
 
 Date: 2026-08-01
 
-Status: Approved conversational design, awaiting written-spec review
+Status: Approved
 
 ## 1. Purpose
 
@@ -77,16 +77,23 @@ The feature is complete when:
   the score.
 - The task report includes overall accuracy, per-category accuracy, and the
   choice losses for every example.
-- A deterministic blinded-review export selects 50 generations per checkpoint,
-  removes checkpoint labels from the review sheet, shuffles rows, and writes a
-  separate answer key.
-- The review rubric accepts only `0`, `1`, or `2`: major contradiction, minor
-  confusion, or consistent story.
-- A scoring command validates the completed review sheet and reports mean score
-  and score counts for each checkpoint after joining it to the answer key.
+- A deterministic blinded LLM-judge export selects 50 generations per
+  checkpoint, removes checkpoint labels, shuffles the stories, splits them into
+  bounded judge batches, and writes a separate answer key.
+- This conversation's LLM is the primary qualitative judge. No external API is
+  required: the repository exports judge-ready JSONL and imports the structured
+  judgments produced here after the real checkpoint run.
+- The judge rubric scores character consistency, object/location consistency,
+  causal coherence, and overall consistency on `0..2`, with cited story
+  evidence and a short reason required for every judgment.
+- A scoring command validates completed LLM-judgment JSONL and reports means,
+  score counts, and flagged-error counts for each checkpoint after joining it
+  to the blinded answer key.
+- Human review is optional and may use the same blinded batches and result
+  schema as an audit of the LLM judge.
 - Unit and integration tests cover deterministic seeding, paired comparisons,
-  metric edge cases, task categories, asset counts, blind export, invalid human
-  scores, CLI parsing, and backward-compatible single-checkpoint evaluation.
+  metric edge cases, task categories, asset counts, blind export, malformed LLM
+  judgments, CLI parsing, and backward-compatible single-checkpoint evaluation.
 - The README documents the commands, output artifacts, interpretation limits,
   and the rule that seeds must be selected before inspecting results.
 
@@ -100,7 +107,10 @@ This increment will not:
 - Continue pretraining or launch the 59M experiment.
 - Download checkpoints from Google Drive automatically.
 - Treat generated-text metrics as a substitute for validation loss.
-- Use a language model as the sole judge of story consistency.
+- Treat LLM judgment as a replacement for validation loss, deterministic
+  consistency tasks, or automatic repetition metrics. The LLM is the primary
+  qualitative judge, but its scores remain one evidence source among several.
+- Call an external LLM API, require API credentials, or incur model-API cost.
 - Claim statistical certainty from ten seeds; ten paired runs are the initial
   evidence set and may be extended when results remain close.
 - Add an exhaustive sequential sweep over every validation-token position in
@@ -119,7 +129,7 @@ would be easy to apply inconsistently.
 ### 5.2 Reusable Evaluation Modules Plus One Comparison Command
 
 This is the selected approach. Small pure functions handle repetition,
-aggregation, and blind-review preparation. A comparison command owns the
+aggregation, and blinded LLM-judge preparation. A comparison command owns the
 experiment protocol and calls existing model, validation, generation, and task
 scoring code. This adds more code than a shell loop but makes the protocol
 testable, reviewable, and repeatable.
@@ -213,20 +223,54 @@ After all checkpoints finish, the command will write:
 
 - `comparison_summary.json` with aggregate and paired results;
 - `checkpoints/<label>.json` with complete evidence;
-- `human_review/blind_review.csv` with checkpoint identity removed;
-- `human_review/review_key.json` with the identity mapping;
-- `human_review/rubric.md` with the scoring instructions.
+- `llm_judge/batches/judge_batch_<NN>.jsonl` with checkpoint identity removed;
+- `llm_judge/review_key.json` with the identity mapping;
+- `llm_judge/judge_prompt.md` with the fixed rubric, instructions, and result
+  schema;
+- `llm_judge/results/` as the target directory for this LLM's completed JSONL
+  judgments.
 
 Checkpoint labels, seeds, IDs, and output paths will be validated before model
 loading so malformed invocations fail early without partial evidence.
 
-### 6.6 Human Review Scoring
+### 6.6 Blinded LLM Judgment And Scoring
 
-`scripts/score_human_review.py` will accept the filled review CSV and its key.
-It will reject missing, duplicate, unknown, or non-integer scores and scores
-outside `0..2`. It will write a JSON summary containing per-checkpoint counts,
-mean score, and the joined row-level evidence. Notes remain optional and are
-preserved.
+The comparison command will select exactly 50 generations per checkpoint with
+a fixed review seed, anonymize them with opaque review IDs, shuffle them, and
+split the combined set into JSONL batches of at most 20 stories. Checkpoint
+label, checkpoint path, training-token count, validation score, and generation
+seed will not appear in judge-visible batches.
+
+`judge_prompt.md` will instruct this conversation's LLM to evaluate each story
+independently and return one JSON object per review ID with:
+
+```json
+{
+  "review_id": "review-0001",
+  "character_consistency": 0,
+  "object_location_consistency": 1,
+  "causal_coherence": 1,
+  "overall_consistency": 1,
+  "flags": ["character_swap"],
+  "evidence": "The dog is later called a cat.",
+  "reason": "The story is understandable but changes the main animal."
+}
+```
+
+All four scores must be integers from `0` to `2`. `flags` must contain only
+documented labels such as `character_swap`, `object_swap`, `location_conflict`,
+`state_reversal`, `causal_break`, `ending_break`, or `none`. Evidence and reason
+must be non-empty and bounded in length.
+
+`scripts/score_story_judgments.py` will accept one or more completed judgment
+JSONL files and the private review key. It will reject missing, duplicate,
+unknown, malformed, or out-of-range judgments. It will write a JSON summary
+containing per-checkpoint score means, score distributions, flag counts, and
+joined row-level evidence.
+
+A human reviewer may optionally judge the same blinded batches with the same
+schema. Human results are stored and reported separately; they do not silently
+overwrite the LLM results.
 
 ## 7. Data Flow
 
@@ -240,8 +284,9 @@ fixed prompts + predeclared generation seeds
   -> generated stories
   -> repetition metrics
   -> aggregate repetition summary
-  -> deterministic blinded review sample
-  -> completed human scores joined through private key
+  -> deterministic blinded LLM-judge batches
+  -> this LLM returns structured judgments
+  -> validated judgments joined through private key
 
 fixed consistency JSONL
   -> continuation losses
@@ -261,7 +306,9 @@ must be reproducible from those artifacts.
   replacement option is added in a later design.
 - A partial model-evaluation failure leaves completed detailed files for
   diagnosis but does not write a successful comparison summary.
-- Human-review scoring never guesses missing scores or silently drops rows.
+- LLM-judgment scoring never guesses missing scores or silently drops rows.
+- Judge-visible batches fail validation if they expose checkpoint labels,
+  checkpoint paths, token counts, validation scores, or generation seeds.
 
 ## 9. Test Strategy
 
@@ -276,8 +323,9 @@ Implementation will follow red-green-refactor in small increments.
    per-category aggregation.
 4. Asset-contract tests for the 50 prompts and 100 categorized consistency
    examples.
-5. Unit tests for deterministic blind selection, identity removal, answer-key
-   completeness, and human-score validation.
+5. Unit tests for deterministic blind selection, batch-size limits, identity
+   removal, answer-key completeness, judgment-schema validation, allowed flags,
+   and aggregate LLM score reporting.
 6. CLI tests with tiny synthetic model/data fixtures where feasible; model
    arithmetic will not be mocked when the existing small real components can
    run cheaply.
@@ -296,13 +344,15 @@ report will show:
 - seed-by-seed paired wins;
 - consistency accuracy overall and by category;
 - repetition rates and generated-length distribution;
-- blinded human-review results once completed.
+- blinded LLM-judge results once completed;
+- optional human-audit results when supplied.
 
 A checkpoint is a strong stopping-point candidate only when its lower validation
 loss repeats across matched seeds and its consistency or repetition results do
 not materially regress. When different measurements favor different
 checkpoints, the report will state the trade-off rather than manufacture a
-winner.
+winner. LLM judgments remain auditable because every score retains the opaque
+review ID, evidence sentence, reason, and post-review checkpoint mapping.
 
 ## 11. Rollback And Operational Impact
 
