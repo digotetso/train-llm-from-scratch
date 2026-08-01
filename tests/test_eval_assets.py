@@ -73,3 +73,16 @@ def test_consistency_asset_rejects_blank_prompt_or_choice(
 
     with pytest.raises(ValueError, match=expected_error):
         validate_consistency_asset(path)
+
+
+def test_readme_documents_checkpoint_comparison_and_llm_judging():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for required in (
+        "scripts/compare_checkpoints.py",
+        "1001,1002,1003,1004,1005,1006,1007,1008,1009,1010",
+        "scripts/score_story_judgments.py",
+        "this conversation's LLM",
+        "same validation dataset",
+        "Human review is optional",
+    ):
+        assert required in text
