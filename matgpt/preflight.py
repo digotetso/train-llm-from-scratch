@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import platform
 import re
 import shutil
@@ -34,6 +35,12 @@ CHECK_IDS = (
     "device",
     "training_math",
     "checkpoint",
+)
+
+SUPPORTED_TRAINING_GPUS = (
+    ("rtx_pro_6000_blackwell", "RTX PRO 6000 Blackwell", 90.0, True),
+    ("a100_80gb", "A100", 75.0, True),
+    ("t4", "T4", 14.0, False),
 )
 
 
@@ -317,7 +324,38 @@ def _check_output_storage(cfg: dict[str, Any], min_free_disk_gb: float) -> dict[
     return {"output_dir": str(output_dir), "free_disk_gb": free_gb}
 
 
-def _check_device(require_t4: bool) -> dict[str, Any]:
+def classify_training_gpu(device_name: str, total_memory_gb: float) -> dict[str, Any]:
+    if not isinstance(device_name, str) or not device_name.strip():
+        raise ValueError("CUDA device name must be a non-empty string")
+    memory_gb = float(total_memory_gb)
+    if not math.isfinite(memory_gb) or memory_gb <= 0:
+        raise ValueError(f"CUDA GPU memory must be positive; observed {memory_gb!r} GiB")
+
+    for profile, name_fragment, minimum_memory_gb, high_throughput in SUPPORTED_TRAINING_GPUS:
+        if name_fragment not in device_name:
+            continue
+        if memory_gb < minimum_memory_gb:
+            raise ValueError(
+                f"{device_name} requires at least {minimum_memory_gb:.1f} GiB for the "
+                f"{profile} training profile; observed {memory_gb:.2f} GiB"
+            )
+        return {
+            "profile": profile,
+            "device_name": device_name,
+            "total_memory_gb": memory_gb,
+            "high_throughput": high_throughput,
+        }
+
+    supported = ", ".join(spec[1] for spec in SUPPORTED_TRAINING_GPUS)
+    raise ValueError(f"Unsupported CUDA GPU {device_name!r}; supported GPUs: {supported}")
+
+
+def _check_device(
+    require_t4: bool,
+    require_supported_gpu: bool = False,
+) -> dict[str, Any]:
+    if require_t4 and require_supported_gpu:
+        raise ValueError("require_t4 and require_supported_gpu are mutually exclusive")
     cuda = torch.cuda.is_available()
     device_name = torch.cuda.get_device_name(0) if cuda else "cpu"
     total_memory_gb = (
@@ -328,11 +366,16 @@ def _check_device(require_t4: bool) -> dict[str, Any]:
             f"Google Colab T4 required: cuda={cuda} device={device_name!r} "
             f"total_memory_gb={total_memory_gb:.2f}"
         )
-    return {
+    details = {
         "cuda_available": cuda,
         "device_name": device_name,
         "total_memory_gb": total_memory_gb,
     }
+    if require_supported_gpu:
+        if not cuda:
+            raise ValueError("A supported CUDA GPU is required; CUDA is unavailable")
+        details.update(classify_training_gpu(device_name, total_memory_gb))
+    return details
 
 
 def _check_training_math(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -424,6 +467,7 @@ def build_preflight_report(
     cfg: dict[str, Any],
     require_t4: bool,
     min_free_disk_gb: float,
+    require_supported_gpu: bool = False,
 ) -> dict[str, Any]:
     check_functions = dict(
         config=lambda: _check_config(cfg),
@@ -433,7 +477,7 @@ def build_preflight_report(
         tokenizer=lambda: _check_tokenizer(cfg),
         shards=lambda: _check_shards(cfg),
         output_storage=lambda: _check_output_storage(cfg, min_free_disk_gb),
-        device=lambda: _check_device(require_t4),
+        device=lambda: _check_device(require_t4, require_supported_gpu),
         training_math=lambda: _check_training_math(cfg),
         checkpoint=lambda: _check_checkpoint(cfg),
     )
@@ -451,8 +495,14 @@ def run_preflight(
     report_path: str | Path,
     require_t4: bool = False,
     min_free_disk_gb: float = 0.0,
+    require_supported_gpu: bool = False,
 ) -> dict[str, Any]:
-    report = build_preflight_report(cfg, require_t4, min_free_disk_gb)
+    report = build_preflight_report(
+        cfg,
+        require_t4,
+        min_free_disk_gb,
+        require_supported_gpu=require_supported_gpu,
+    )
     write_preflight_report(report, report_path)
     if report["status"] != "pass":
         failures = [check for check in report["checks"] if check["status"] == "fail"]

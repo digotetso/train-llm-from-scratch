@@ -1,11 +1,11 @@
-# MatGPT T4 Base Training Framework
+# MatGPT GPU Base Training Framework
 
 This repository contains the base-pretraining framework for validating the MatGPT course models before recording the course:
 
 - `MatGPT-Mini 8M` on `roneneldan/TinyStories`
 - `MatGPT-Tiny 59M` on `BabyLM-community/BabyLM-2026-Strict`
 
-The goal is not a toy training loop. The framework is built around quality-critical small-model decisions: deterministic data preparation, exact deduplication and contamination hooks, training-tokenizer-only fitting, packed token streams, FP16 T4 training, gradient accumulation, warmup/cosine scheduling, checkpoint resume, validation loss, perplexity, task evaluation, and fixed prompt samples.
+The goal is not a toy training loop. The framework is built around quality-critical small-model decisions: deterministic data preparation, exact deduplication and contamination hooks, training-tokenizer-only fitting, packed token streams, mixed-precision NVIDIA GPU training, gradient accumulation, warmup/cosine scheduling, checkpoint resume, validation loss, perplexity, task evaluation, and fixed prompt samples.
 
 ## Big-Lab Discipline In This Repo
 
@@ -30,7 +30,7 @@ python scripts/model_report.py --config configs/matgpt_tiny_59m.yaml
 python -m pip install -e ".[test]"
 ```
 
-For Colab T4 with optional 8-bit AdamW support:
+For a Colab GPU runtime with optional 8-bit AdamW support:
 
 ```bash
 python -m pip install -e ".[test,colab]"
@@ -39,7 +39,7 @@ python -m pip install -e ".[test,colab]"
 ## Recommended Colab Notebook
 
 Use [the Colab notebook](notebooks/train_matgpt_t4_base_colab.ipynb) together
-with the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md). The
+with the [first-run GPU runbook](docs/runbooks/colab-t4-first-run.md). The
 notebook is stage-gated; it never promotes a pilot to the full run by itself.
 
 The notebook walks through:
@@ -61,7 +61,7 @@ The strict preflight command used during `prepare` and before each training stag
 ```bash
 python scripts/preflight_t4.py \
   --config /content/matgpt_work/<run-name>/config/<model>.yaml \
-  --require-t4 \
+  --require-supported-gpu \
   --min-free-disk-gb 20
 ```
 
@@ -78,15 +78,15 @@ For W&B logging, set `ENABLE_WANDB = True` in the notebook. The YAML configs kee
 
 The 8M config pins `roneneldan/TinyStories` to commit `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`. The byte-level tokenizer starts with the complete byte alphabet; configuration rejects a vocabulary that cannot hold that alphabet and the configured special tokens.
 
-For a first real run, use only [the stage-gated Colab notebook](notebooks/train_matgpt_t4_base_colab.ipynb) with the [first-run T4 runbook](docs/runbooks/colab-t4-first-run.md). Do not begin a first run from standalone CLI commands in this README.
+For a first real run, use only [the stage-gated Colab notebook](notebooks/train_matgpt_t4_base_colab.ipynb) with the [first-run GPU runbook](docs/runbooks/colab-t4-first-run.md). Do not begin a first run from standalone CLI commands in this README.
 
-The required notebook order is: `prepare` validates the normalized data, tokenizer, and shards, then runs T4 preflight and the configured-batch benchmark; stop and review both JSON reports before selecting `smoke`. The benchmark uses a temporary model, while `prepare` runs no pretraining command and creates no checkpoint. `smoke` runs 20 updates followed by a five-update resume check; `pilot` stops at global step 306; `evaluate` requires both checkpoints, evaluates them, and verifies complete resume state without taking an update; and `full` is manually selected only after explicit user and Codex pilot approval. The full stage must finish at configured step 6,104. `--max-steps` means additional successful updates in the current invocation and does not rewrite the configured full learning-rate schedule.
+The required notebook order is: `prepare` validates the normalized data, tokenizer, and shards, then runs supported-GPU preflight and the configured-batch benchmark; stop and review both JSON reports before selecting `smoke`. The benchmark uses a temporary model, while `prepare` runs no pretraining command and creates no checkpoint. `smoke` runs 20 updates followed by a five-update resume check; `pilot` stops at global step 306; `evaluate` requires both checkpoints, evaluates them, and verifies complete resume state without taking an update; and `full` is manually selected only after explicit user and Codex pilot approval. The full stage must finish at its configured schedule step. `--max-steps` means additional successful updates in the current invocation and does not rewrite the configured full learning-rate schedule.
 
-The notebook runs evaluation, read-only resume verification, and summary generation: `scripts/evaluate.py` writes evaluation JSON artifacts, `scripts/pretrain.py --verify-only` loads complete resume state without an optimizer update, the notebook persists the result as `resume_verification.json`, and `scripts/summarize_run.py` writes `run_summary.md`. Local tests use synthetic fixtures and cannot, by themselves, prove T4 allocation, prepared-artifact integrity, benchmark results, or training quality.
+The notebook runs evaluation, read-only resume verification, and summary generation: `scripts/evaluate.py` writes evaluation JSON artifacts, `scripts/pretrain.py --verify-only` loads complete resume state without an optimizer update, the notebook persists the result as `resume_verification.json`, and `scripts/summarize_run.py` writes `run_summary.md`. Local tests use synthetic fixtures and cannot, by themselves, prove GPU allocation, prepared-artifact integrity, benchmark results, or training quality.
 
 ## Configured Training Runs
 
-The Mini configuration targets `200M` training tokens, and the Tiny configuration targets `1B`. These are configured schedule targets, not observed runtime results. The stage-gated notebook and runbook are the only documented procedure for a first real T4 run; its commands preserve the schedule and prevent a pilot from promoting itself.
+The Mini configuration targets `200M` training tokens, and the Tiny configuration targets `1B`. These are configured schedule targets, not observed runtime results. The stage-gated notebook and runbook are the only documented procedure for a first real GPU run; its commands preserve the schedule and prevent a pilot from promoting itself.
 
 The Mini configuration is the first real-run model. The Tiny configuration remains a later, separate experiment; the BabyLM deterministic validation split is configured by `validation_fraction: 0.01` in `configs/matgpt_tiny_59m.yaml`.
 

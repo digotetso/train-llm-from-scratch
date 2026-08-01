@@ -32,7 +32,7 @@ def _default_report_path(cfg: dict) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate MatGPT artifacts and T4 readiness.")
+    parser = argparse.ArgumentParser(description="Validate MatGPT artifacts and GPU readiness.")
     parser.add_argument("--config", required=True)
     parser.add_argument(
         "--report-path",
@@ -44,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
             "<run.output_dir>/preflight.json and invalid configs use ./preflight.json."
         ),
     )
-    parser.add_argument("--require-t4", action="store_true")
+    gpu_requirement = parser.add_mutually_exclusive_group()
+    gpu_requirement.add_argument("--require-t4", action="store_true")
+    gpu_requirement.add_argument("--require-supported-gpu", action="store_true")
     parser.add_argument("--min-free-disk-gb", type=float, default=0.0)
     args = parser.parse_args(argv)
 
@@ -66,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
             report_path,
             require_t4=args.require_t4,
             min_free_disk_gb=args.min_free_disk_gb,
+            require_supported_gpu=args.require_supported_gpu,
         )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)

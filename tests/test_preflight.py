@@ -42,6 +42,76 @@ def _check(report, name):
     return next(item for item in report["checks"] if item["name"] == name)
 
 
+@pytest.mark.parametrize(
+    ("device_name", "total_memory_gb", "expected_profile", "high_throughput"),
+    [
+        ("Tesla T4", 14.75, "t4", False),
+        ("NVIDIA A100-SXM4-80GB", 79.2, "a100_80gb", True),
+        (
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            95.6,
+            "rtx_pro_6000_blackwell",
+            True,
+        ),
+    ],
+)
+def test_classify_training_gpu_accepts_supported_full_gpu_profiles(
+    device_name,
+    total_memory_gb,
+    expected_profile,
+    high_throughput,
+):
+    profile = preflight_module.classify_training_gpu(device_name, total_memory_gb)
+
+    assert profile == {
+        "profile": expected_profile,
+        "device_name": device_name,
+        "total_memory_gb": total_memory_gb,
+        "high_throughput": high_throughput,
+    }
+
+
+def test_classify_training_gpu_rejects_fractional_rtx_pro_6000():
+    with pytest.raises(ValueError, match="at least 90.0 GiB"):
+        preflight_module.classify_training_gpu(
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            48.0,
+        )
+
+
+def test_cli_supported_gpu_gate_records_full_rtx_profile(
+    synthetic_preflight_cfg,
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "rtx-preflight.yaml"
+    config_path.write_text(config_to_yaml(synthetic_preflight_cfg), encoding="utf-8")
+    report_path = tmp_path / "rtx-preflight.json"
+    properties = type("DeviceProperties", (), {"total_memory": 97887 * 1024**2})()
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_name",
+        lambda _index: "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    )
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _index: properties)
+
+    exit_code = preflight_main(
+        [
+            "--config",
+            str(config_path),
+            "--report-path",
+            str(report_path),
+            "--require-supported-gpu",
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert _check(report, "device")["details"]["profile"] == "rtx_pro_6000_blackwell"
+    assert _check(report, "device")["details"]["high_throughput"] is True
+
+
 def _write_hashed_json(path: Path, payload: dict, hash_field: str) -> None:
     payload = dict(payload)
     payload.pop(hash_field, None)
