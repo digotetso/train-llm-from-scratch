@@ -44,6 +44,25 @@ def test_load_multiple_choice_examples_accepts_letters_and_indexes(tmp_path: Pat
     assert examples[1].choices == ["x", "y"]
 
 
+def test_load_multiple_choice_examples_preserves_category(tmp_path: Path):
+    path = tmp_path / "mc.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "id": "character-001",
+                "category": "character",
+                "prompt": "Mia was a girl. Mia said",
+                "choices": [" she", " he"],
+                "answer": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert load_multiple_choice_examples(path)[0].category == "character"
+
+
 def test_score_multiple_choice_examples_reports_accuracy_from_model_losses():
     model = PreferenceModel(preferred_token_id=2)
     examples = [
@@ -71,6 +90,43 @@ def test_score_multiple_choice_examples_reports_accuracy_from_model_losses():
     assert result["accuracy"] == 0.5
     assert result["examples"][0]["prediction_index"] == 1
     assert result["examples"][1]["prediction_index"] == 0
+
+
+def test_score_multiple_choice_examples_reports_category_accuracy():
+    model = PreferenceModel(preferred_token_id=2)
+    result = score_multiple_choice_examples(
+        model=model,
+        encoded_examples=[
+            {
+                "id": "a",
+                "category": "character",
+                "prompt_ids": [1],
+                "choice_ids": [[2], [3]],
+                "answer_index": 0,
+            },
+            {
+                "id": "b",
+                "category": "character",
+                "prompt_ids": [1],
+                "choice_ids": [[2], [3]],
+                "answer_index": 1,
+            },
+            {
+                "id": "c",
+                "category": "object",
+                "prompt_ids": [1],
+                "choice_ids": [[2], [3]],
+                "answer_index": 0,
+            },
+        ],
+        device=torch.device("cpu"),
+        precision="fp32",
+    )
+
+    assert result["categories"] == {
+        "character": {"total": 2, "correct": 1, "accuracy": 0.5},
+        "object": {"total": 1, "correct": 1, "accuracy": 1.0},
+    }
 
 
 def test_score_choice_ids_masks_prompt_tokens_and_scores_choice_only():

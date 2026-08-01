@@ -18,6 +18,7 @@ class MultipleChoiceExample:
     prompt: str
     choices: list[str]
     answer_index: int
+    category: str = "uncategorized"
 
 
 def _answer_to_index(answer: str | int, choices: list[str]) -> int:
@@ -51,12 +52,16 @@ def load_multiple_choice_examples(path: str | Path) -> list[MultipleChoiceExampl
             choices = list(row["choices"])
             if len(choices) < 2:
                 raise ValueError(f"Line {line_number} must contain at least two choices.")
+            category = str(row.get("category", "uncategorized")).strip()
+            if not category:
+                raise ValueError(f"Line {line_number} must contain a non-empty category.")
             examples.append(
                 MultipleChoiceExample(
                     id=str(row.get("id", line_number)),
                     prompt=str(row["prompt"]),
                     choices=[str(choice) for choice in choices],
                     answer_index=_answer_to_index(row["answer"], choices),
+                    category=category,
                 )
             )
     return examples
@@ -68,6 +73,7 @@ def encode_multiple_choice_examples(examples: Iterable[MultipleChoiceExample], t
         encoded.append(
             {
                 "id": example.id,
+                "category": example.category,
                 "prompt": example.prompt,
                 "choices": example.choices,
                 "answer_index": example.answer_index,
@@ -127,6 +133,7 @@ def score_multiple_choice_examples(
     precision: str,
 ) -> dict[str, Any]:
     rows = []
+    category_totals: dict[str, dict[str, int]] = {}
     correct = 0
     total = 0
     for example in encoded_examples:
@@ -142,11 +149,18 @@ def score_multiple_choice_examples(
         ]
         prediction_index = min(range(len(losses)), key=lambda index: losses[index])
         is_correct = prediction_index == example["answer_index"]
+        category = str(example.get("category", "uncategorized"))
         correct += int(is_correct)
         total += 1
+        category_result = category_totals.setdefault(
+            category, {"total": 0, "correct": 0}
+        )
+        category_result["total"] += 1
+        category_result["correct"] += int(is_correct)
         rows.append(
             {
                 "id": example["id"],
+                "category": category,
                 "answer_index": example["answer_index"],
                 "prediction_index": prediction_index,
                 "correct": is_correct,
@@ -154,11 +168,23 @@ def score_multiple_choice_examples(
             }
         )
 
+    categories = {
+        category: {
+            **category_totals[category],
+            "accuracy": (
+                category_totals[category]["correct"]
+                / category_totals[category]["total"]
+            ),
+        }
+        for category in sorted(category_totals)
+    }
+
     return {
         "task_type": "multiple_choice",
         "total": total,
         "correct": correct,
         "accuracy": correct / total if total else 0.0,
+        "categories": categories,
         "examples": rows,
     }
 
