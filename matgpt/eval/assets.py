@@ -69,6 +69,12 @@ def validate_consistency_asset(path: str | Path) -> dict[str, int]:
     counts: Counter[str] = Counter()
 
     for example in examples:
+        if not example.prompt.strip():
+            raise ValueError(f"Example {example.id!r} must contain a non-empty prompt.")
+        if any(not choice.strip() for choice in example.choices):
+            raise ValueError(
+                f"Example {example.id!r} must contain non-empty choices."
+            )
         if example.category not in CONSISTENCY_CATEGORIES:
             raise ValueError(f"Unsupported consistency category: {example.category!r}")
         if not example.id.startswith(f"{example.category}-"):

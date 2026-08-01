@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from matgpt.eval.assets import load_story_prompts, validate_consistency_asset
 
@@ -38,3 +41,35 @@ def test_judge_prompt_defines_blinding_scores_flags_and_jsonl_contract():
         "Return exactly one JSON object per input line",
     ):
         assert required in text
+
+
+@pytest.mark.parametrize(
+    ("prompt", "choices", "expected_error"),
+    [
+        ("", [" yes", " no"], "non-empty prompt"),
+        ("The answer is", [" yes", "   "], "non-empty choices"),
+    ],
+)
+def test_consistency_asset_rejects_blank_prompt_or_choice(
+    tmp_path: Path,
+    prompt: str,
+    choices: list[str],
+    expected_error: str,
+):
+    path = tmp_path / "invalid.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "id": "character-001",
+                "category": "character",
+                "prompt": prompt,
+                "choices": choices,
+                "answer": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        validate_consistency_asset(path)
