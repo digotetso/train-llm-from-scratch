@@ -88,6 +88,36 @@ def test_telco_config_uses_bf16_and_full_token_schedule():
     ]
 
 
+@pytest.mark.parametrize(
+    ("phases", "message"),
+    [
+        (
+                [
+                    {"name": "main", "split": "main", "until_tokens": 600},
+                    {"name": "cooldown", "split": "cooldown", "until_tokens": 500},
+            ],
+            "strictly increasing",
+        ),
+        (
+            [{"name": "main", "split": "missing", "until_tokens": 1024}],
+            "unknown training split",
+        ),
+        (
+            [{"name": "main", "split": "main", "until_tokens": 1000}],
+            "training.max_tokens",
+        ),
+    ],
+)
+def test_config_rejects_invalid_data_phases(phases, message):
+    cfg = load_config("configs/matgpt_mini_8m.yaml")
+    cfg["dataset"]["training_splits"] = {"main": "main", "cooldown": "cooldown"}
+    cfg["training"]["max_tokens"] = 1024
+    cfg["training"]["data_phases"] = phases
+
+    with pytest.raises(ValueError, match=message):
+        validate_config(cfg)
+
+
 def test_hash_helpers_are_stable(tmp_path: Path):
     path = tmp_path / "sample.txt"
     path.write_text("same text\n", encoding="utf-8")

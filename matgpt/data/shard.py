@@ -140,7 +140,14 @@ def tokenize_splits_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
     results = {}
     validation_split = effective_validation_split(ds_cfg)
-    for split in (ds_cfg["train_split"], validation_split):
+    training_splits = ds_cfg.get("training_splits")
+    if training_splits:
+        splits = list(dict.fromkeys(training_splits.values()))
+    else:
+        splits = [ds_cfg["train_split"]]
+    if validation_split not in splits:
+        splits.append(validation_split)
+    for split in splits:
         results[split] = tokenize_jsonl_to_shards(
             input_path=normalized_dir / f"{split}.jsonl",
             tokenizer_dir=tokenizer_dir,
