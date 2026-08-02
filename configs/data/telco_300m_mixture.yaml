@@ -1,0 +1,38 @@
+version: 1
+seed: 42
+quota_tolerance: 0.03
+buffer_size: 2048
+
+stages:
+  pilot:
+    total_tokens: 20000000
+    role_weights:
+      pretrain_general: 77
+      pretrain_telecom: 37
+      pretrain_structured: 6
+    source_weights:
+      common_pile_general: 1
+      telco_common_corpus: 1
+      common_pile_structured: 1
+
+  main:
+    total_tokens: 10000000000
+    role_weights:
+      pretrain_general: 65
+      pretrain_telecom: 30
+      pretrain_structured: 5
+    source_weights:
+      common_pile_general: 1
+      telco_common_corpus: 1
+      common_pile_structured: 1
+
+  cooldown:
+    total_tokens: 2000000000
+    role_weights:
+      pretrain_general: 60
+      pretrain_telecom: 35
+      pretrain_structured: 5
+    source_weights:
+      common_pile_general: 1
+      telco_common_corpus: 1
+      common_pile_structured: 1
