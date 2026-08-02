@@ -1,0 +1,930 @@
+# Video 1 — Before AI Can Learn: How Computers Represent and Prepare Text
+
+**Subtitle:** How to inspect source text, understand character identities, and prepare consistent text before later AI work
+
+---
+
+## 00:00 The Text Looks Simple
+
+[On screen: Show the sample exactly as it would normally appear. Do not reveal the stored version yet.]
+
+```text
+  Lesson ①: Ａ cat ﬀ
+
+  second line
+```
+
+You have probably seen AI improve an email, rewrite a paragraph, summarize a document, or suggest a piece of code.
+
+You type some text, and the AI gives you new text.
+
+In this course, we are going to build and train that AI from scratch, step by step. This type of is called Large Language Model or LLM in short
+
+LLM It's a AI system trained on huge amounts of text (books, websites, articles) to learn patterns in how language works — which words tend to follow other words, how ideas connect, how questions get answered, and so on
+
+
+
+Since LLMs learns from....
+
+We are going to ask:
+
+> **How can a computer learn from written text?**
+
+And more specifically:
+
+> **How can we take a collection of text and use it to train a large language model, or LLM, from scratch?**
+
+For now, you can think of an LLM as the AI system we are building. We will explain exactly what the name means later in the course.
+
+Look at the text on the screen.
+
+At first, it looks simple. It appears to contain two short lines with an empty line between them.
+
+But is that really everything stored inside it?
+
+There may be extra spaces at the beginning or end. There may be a tab instead of ordinary spaces. The empty line may contain hidden characters. Some letters and symbols may also look familiar while being stored as completely different characters.
+
+These details are easy for us to miss because we usually focus on what the text means.
+
+A computer, however, must work with exactly what is stored.
+
+That gives us the main question for this lesson:
+
+> **How can we find out exactly what a piece of text contains and then prepare it consistently for later AI work?**
+
+Before answering that question, let us look at where this lesson fits into the full course.
+
+To train an LLM, we need many examples of written text. One sentence or one document is not enough.
+
+We collect many examples and organize them into what we call a **training dataset**.
+
+The full journey will look something like this:
+
+```text
+collect text
+→ organize the training dataset
+→ inspect and prepare the text
+→ split the text into smaller pieces
+→ represent those pieces with numbers
+→ create training examples
+→ build the model
+→ train the model
+→ test the model
+```
+
+Each step prepares the material for the next step.
+
+Eventually, the text must be represented using numbers because the model is a mathematical system. Its calculations work with numbers, not directly with words and sentences.
+
+But turning text into numbers is not one simple step.
+
+Before we split the text into pieces or give those pieces numbers, we first need to understand the text we collected.
+
+Real-world text can contain many inconsistencies:
+
+- extra spaces;
+- tabs;
+- repeated empty lines;
+- different types of line endings;
+- hidden characters;
+- full-width letters;
+- joined characters;
+- different symbols used for a similar purpose.
+
+However, we should not assume that every difference is a mistake.
+
+In one dataset, extra spacing may be accidental. In another dataset, spacing may carry important meaning.
+
+A special symbol may be unnecessary for one project but essential for another.
+
+So we should not change the text blindly.
+
+We first inspect it. Then we choose which differences to preserve and which ones to change.
+
+---
+
+## 02:20 Reveal What Is Really There
+
+Let us begin with the exact text stored by the program.
+
+We will keep the starting text unchanged while we inspect it.
+
+We call this unchanged starting value the **source text**, or simply the **source**.
+
+```python
+source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
+```
+
+There is more inside this value than normal printing may show clearly.
+
+The quotation marks tell Python where the text starts and ends. The quotation marks themselves are not part of the stored text.
+
+Python calls a stored piece of text like this a **string**.
+
+Inside the string:
+
+- `\t` represents a tab;
+- `\r\n` represents a line boundary;
+- two `\r\n` boundaries in a row create an empty line;
+- the spaces at the beginning and end are also stored.
+
+The equals sign stores the value on the right under the name `source`.
+
+```python
+source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
+```
+
+Before we run the program, think about this question:
+
+> What might normal printing hide about the beginning, the end, and the space between the two lines?
+
+To make hidden details easier to see, we can use Python’s `repr` function.
+
+```python
+print(repr(source))
+```
+
+Python displays:
+
+```text
+'  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
+```
+
+Now we can see the stored structure more clearly.
+
+There are:
+
+- two spaces before `Lesson`;
+- two spaces after `ﬀ`;
+- two `\r\n` line boundaries;
+- a tab before `second`;
+- two spaces after `line`.
+
+The outer quotation marks were added by `repr` to show us the boundaries of the string. They are not part of the stored value.
+
+Spaces, tabs, and line boundaries all create gaps in text.
+
+Together, we call them **whitespace**.
+
+Using tools such as `repr` to reveal what the source contains is called **inspection**.
+
+Inspection does not change the source. It only helps us see what is already there.
+
+We have now revealed some hidden whitespace.
+
+But there is another question.
+
+Could some of the visible characters also be different from what they first appear to be?
+
+---
+
+## 03:45 Similar-Looking Text Can Still Be Different
+
+Look at these three pairs:
+
+```text
+①    1
+Ａ    A
+ﬀ    ff
+```
+
+The two sides of each pair may look similar or appear to serve a similar purpose.
+
+The circled `①` and the ordinary `1` may both be read as the number one.
+
+The full-width `Ａ` and the ordinary `A` may both be read as the letter A.
+
+The joined `ﬀ` and the two letters `ff` may appear almost identical in a word.
+
+But here is the important question:
+
+> Does looking similar mean that the computer stores them as the same character?
+
+We should not guess based only on appearance.
+
+We can test the first pair using Python’s `ord` function.
+
+`ord` gives us the agreed number used to identify one character.
+
+```python
+print(ord("①"))
+print(ord("1"))
+```
+
+Python displays:
+
+```text
+9312
+49
+```
+
+The circled `①` gives us `9312`.
+
+The ordinary `1` gives us `49`.
+
+The numbers are different, which means these are two different stored characters.
+
+A stored written symbol such as `①`, `1`, `Ａ`, or `A` is called a **character**.
+
+This test proves that `①` and `1` have different character identities.
+
+It does not tell us that one is correct and the other is wrong.
+
+It also does not tell us that the two symbols always have exactly the same meaning.
+
+It only tells us that the computer stores them as different characters.
+
+We can make the same comparison for the other examples.
+
+But for different programs to agree about these character identities, they need a shared standard.
+
+That standard is Unicode.
+
+---
+
+## 05:00 The Numbers Identify Characters
+
+Imagine that every program created its own numbers for characters.
+
+One program might use the number `65` for the letter `A`, while another program might use `65` for a completely different character.
+
+When text moved between those programs, the receiving program could misunderstand it.
+
+To avoid this problem, software uses a shared character system called **Unicode**.
+
+Unicode gives each character a fixed identifying number.
+
+That number is called a **code point**.
+
+A code point tells software which character is present.
+
+It does not contain the character’s meaning.
+
+It also does not tell us whether we should keep, remove, or replace that character.
+
+Using Unicode code points, we can compare our examples:
+
+```text
+① -> 9312
+1 -> 49
+
+Ａ -> 65313
+A -> 65
+
+ﬀ -> [64256]
+ff -> [102, 102]
+```
+
+The first pair contains two different characters:
+
+```text
+① -> 9312
+1 -> 49
+```
+
+The second pair also contains two different characters:
+
+```text
+Ａ -> 65313
+A -> 65
+```
+
+The final comparison has an extra detail:
+
+```text
+ﬀ -> [64256]
+ff -> [102, 102]
+```
+
+The joined `ﬀ` is one character, so it has one code point.
+
+The text `ff` contains two separate characters, so it has two code points.
+
+That is why we write its result as a list containing two numbers.
+
+The `ord` function accepts one character at a time. We would therefore need to call it separately for each `f` in `ff`.
+
+These code points identify the characters.
+
+They are not the numbers that we will later feed into the LLM.
+
+Later, we will split text into pieces called tokens and give those tokens token IDs.
+
+For now, we are only identifying which characters are present in the source.
+
+Character identification gives us facts.
+
+It still does not decide what we should change.
+
+That decision depends on the purpose of our dataset.
+
+---
+
+## 06:25 Choose Which Differences to Change
+
+For this lesson, we want the following forms to become more consistent:
+
+```text
+① -> 1
+Ａ -> A
+ﬀ -> ff
+```
+
+We are choosing to use:
+
+- the ordinary digit `1`;
+- the basic letter `A`;
+- two separate letters, `ff`.
+
+This does not mean that the original characters are wrong.
+
+They may be important in another type of text.
+
+For example, a dataset containing historical documents, mathematical notation, poetry, or source code may need to preserve distinctions that we choose to remove here.
+
+Our choices always depend on what we are preparing the text for.
+
+A repeatable process that converts selected character forms into a consistent form is called **normalization**.
+
+For this example, we will use a Unicode normalization rule called **NFKC**.
+
+NFKC can make changes such as:
+
+```text
+① -> 1
+Ａ -> A
+ﬀ -> ff
+```
+
+Notice that normalization does not always keep the same number of characters.
+
+For example:
+
+```text
+① -> 1
+length 1 -> 1
+```
+
+The circled `①` begins as one character and becomes the ordinary `1`, which is also one character.
+
+But look at this example:
+
+```text
+ﬀ -> ff
+length 1 -> 2
+```
+
+The joined `ﬀ` begins as one character.
+
+After NFKC normalization, it becomes two separate characters: `f` and `f`.
+
+This is one reason we must choose normalization rules carefully.
+
+NFKC can remove differences that may matter in some datasets.
+
+It is not a universal rule for making text correct.
+
+It is simply one rule we can choose when its changes fit our purpose.
+
+For this example, we will also make some choices about lines and whitespace.
+
+We will:
+
+```text
+normalize selected character forms
+→ remove whitespace from the beginning and end of each line
+→ remove empty lines
+→ use one consistent line separator
+```
+
+Together, we will call these operations **text preparation**.
+
+Now let us see exactly how each preparation step works.
+
+---
+
+## 08:00 Put the Preparation Steps Together
+
+We will begin by applying NFKC normalization.
+
+After normalization, our source will behave like this:
+
+```text
+  Lesson ①: Ａ cat ﬀ
+```
+
+becoming:
+
+```text
+  Lesson 1: A cat ff
+```
+
+The selected character forms have changed, but the surrounding whitespace is still present.
+
+Next, we split the text wherever Python finds a line boundary.
+
+Python provides a method called `splitlines` for this.
+
+After normalization and line splitting, we get:
+
+```text
+['  Lesson 1: A cat ff  ', '', '\tsecond line  ']
+```
+
+Python calls an ordered group of values like this a **list**.
+
+The list contains three strings:
+
+```text
+first line
+empty middle line
+second line
+```
+
+The order has not changed.
+
+Now we want to apply the same instructions to every line.
+
+When we repeat instructions for a group of values, we can use a **loop**.
+
+In Python, we can write:
+
+```python
+for line in lines:
+```
+
+This means:
+
+> Take one value from `lines` at a time and temporarily call that value `line`.
+
+We also create a new empty list:
+
+```python
+prepared_lines = []
+```
+
+This list will hold the lines we decide to keep.
+
+For each line, we first remove whitespace from both ends.
+
+Python calls this operation `strip`.
+
+```python
+line = line.strip()
+```
+
+For example:
+
+```text
+'  Lesson 1: A cat ff  '
+```
+
+becomes:
+
+```text
+'Lesson 1: A cat ff'
+```
+
+And:
+
+```text
+'\tsecond line  '
+```
+
+becomes:
+
+```text
+'second line'
+```
+
+The empty middle line stays empty:
+
+```text
+''
+```
+
+After trimming, we only want to keep lines that contain something.
+
+We can test that with:
+
+```python
+if line != "":
+```
+
+The symbols `!=` mean:
+
+> is not equal to
+
+So this line means:
+
+> Continue only when `line` is not equal to an empty string.
+
+When a line is not empty, we add it to `prepared_lines`.
+
+Python calls this operation `append`.
+
+```python
+prepared_lines.append(line)
+```
+
+After the loop finishes, `prepared_lines` contains:
+
+```text
+['Lesson 1: A cat ff', 'second line']
+```
+
+The empty middle line was not added.
+
+The two lines containing text were kept.
+
+Now we need to rebuild the final string.
+
+We want one newline between the two remaining lines.
+
+Python represents a newline using:
+
+```python
+"\n"
+```
+
+We can use the `join` method to place that newline between the retained lines:
+
+```python
+"\n".join(prepared_lines)
+```
+
+This produces:
+
+```text
+Lesson 1: A cat ff
+second line
+```
+
+We will need to apply these instructions to more than one source.
+
+Instead of rewriting the same instructions every time, we place them inside a **function**.
+
+A function is a named, reusable group of instructions.
+
+Here is the complete program:
+
+```python
+import unicodedata
+
+
+def prepare_text(text):
+    text = unicodedata.normalize("NFKC", text)
+    lines = text.splitlines()
+    prepared_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if line != "":
+            prepared_lines.append(line)
+
+    return "\n".join(prepared_lines)
+
+
+source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
+
+print("Source text:", repr(source))
+print("Prepared text:", repr(prepare_text(source)))
+```
+
+Let us walk through the program from the top.
+
+```python
+import unicodedata
+```
+
+This makes Python’s Unicode tools available to our program.
+
+Next, we define the function:
+
+```python
+def prepare_text(text):
+```
+
+The word `def` tells Python that we are defining a function.
+
+The function is called `prepare_text`.
+
+The name `text` represents the value that will be given to the function.
+
+A name like `text`, which receives an input value, is called a **parameter**.
+
+Inside the function, we first apply NFKC normalization:
+
+```python
+text = unicodedata.normalize("NFKC", text)
+```
+
+Next, we split the normalized text into lines:
+
+```python
+lines = text.splitlines()
+```
+
+Then we create an empty list for the lines we decide to keep:
+
+```python
+prepared_lines = []
+```
+
+The loop processes one line at a time:
+
+```python
+for line in lines:
+```
+
+We remove whitespace from both ends:
+
+```python
+line = line.strip()
+```
+
+We check whether anything remains:
+
+```python
+if line != "":
+```
+
+When the line is not empty, we add it to the new list:
+
+```python
+prepared_lines.append(line)
+```
+
+Finally, we join the retained lines using one newline:
+
+```python
+return "\n".join(prepared_lines)
+```
+
+The word `return` sends the finished value back to the part of the program that called the function.
+
+At the bottom of the program, we store our original source:
+
+```python
+source = "  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  "
+```
+
+Then we display the original source:
+
+```python
+print("Source text:", repr(source))
+```
+
+Finally, we pass `source` into the function and display the result:
+
+```python
+print("Prepared text:", repr(prepare_text(source)))
+```
+
+When Python sees:
+
+```python
+prepare_text(source)
+```
+
+the value stored in `source` is given to the function.
+
+Inside the function, that value is temporarily called `text`.
+
+The function prepares it and returns the finished string.
+
+We can summarize the full process like this:
+
+```text
+source
+→ apply NFKC normalization
+→ split the text into three lines
+→ remove whitespace from the ends of each line
+→ reject the empty line
+→ keep the two lines containing text
+→ join them using one \n
+→ return the prepared string
+```
+
+There is one detail worth noticing.
+
+The original source used `\r\n` for its line boundaries.
+
+When `splitlines` separated the text, it removed those line-boundary characters.
+
+Later, `join` inserted our chosen separator, `\n`, between the two retained lines.
+
+NFKC did not create the new line separator.
+
+Each operation made a different change.
+
+Understanding which operation caused each change will help us predict the result.
+
+---
+
+## 10:20 Predict, Run, and Change the Source
+
+Save the complete program in a file called:
+
+```text
+inspect_and_prepare_text.py
+```
+
+Before running it, predict the result.
+
+Ask yourself:
+
+- Which characters will NFKC change?
+- Which whitespace will `strip` remove?
+- Which line will the `if` statement reject?
+- What will `join` place between the remaining lines?
+
+Try to write the complete prepared string before you run the program.
+
+Then open your terminal in the folder where you saved the file and run:
+
+```bash
+python inspect_and_prepare_text.py
+```
+
+You should see:
+
+```text
+Source text: '  Lesson ①: Ａ cat ﬀ  \r\n\r\n\tsecond line  '
+Prepared text: 'Lesson 1: A cat ff\nsecond line'
+```
+
+Let us explain every change.
+
+First, NFKC changed:
+
+```text
+① -> 1
+Ａ -> A
+ﬀ -> ff
+```
+
+Next, `splitlines` divided the text into three values:
+
+```text
+'  Lesson 1: A cat ff  '
+''
+'\tsecond line  '
+```
+
+Then `strip` removed whitespace from the beginning and end of each value.
+
+That gave us:
+
+```text
+'Lesson 1: A cat ff'
+''
+'second line'
+```
+
+The `if` statement rejected the empty string.
+
+`append` added the other two lines to `prepared_lines`.
+
+Finally, `join` placed one `\n` between them.
+
+The function returned:
+
+```text
+'Lesson 1: A cat ff\nsecond line'
+```
+
+Now let us test whether we understand the process rather than simply memorizing one answer.
+
+Keep the function exactly the same.
+
+Change only the source:
+
+```python
+source = "  Chapter ②: Ｂig oﬀice  \n\n  final line  "
+```
+
+Before running the program again, predict the exact result.
+
+Ask yourself:
+
+- What will happen to `②`?
+- What will happen to `Ｂ`?
+- What will happen to the joined `ﬀ` inside `oﬀice`?
+- What will happen to the empty line?
+- Which whitespace will be removed?
+- Which line separator will appear in the final result?
+
+The prepared output will be:
+
+```text
+'Chapter 2: Big office\nfinal line'
+```
+
+Let us trace it.
+
+NFKC changes:
+
+```text
+② -> 2
+Ｂ -> B
+ﬀ -> ff
+```
+
+That changes:
+
+```text
+oﬀice
+```
+
+into:
+
+```text
+office
+```
+
+`splitlines` again creates three line values, including an empty middle value.
+
+`strip` removes the surrounding whitespace.
+
+The `if` statement rejects the empty line.
+
+`append` keeps the two lines containing text.
+
+`join` places one newline between them.
+
+The function returns:
+
+```text
+'Chapter 2: Big office\nfinal line'
+```
+
+Only the source changed.
+
+The preparation function stayed exactly the same.
+
+This helps us test whether our explanation works with new text.
+
+When your prediction is different from the program’s result, do not simply replace your answer.
+
+Find the first step where your prediction became different.
+
+Ask:
+
+> Did I misunderstand normalization, line splitting, trimming, empty-line removal, or joining?
+
+That is how we build an explanation that can transfer to new examples.
+
+---
+
+## 12:10 Carry the Explanation Forward
+
+We can now answer the main question from the beginning of the lesson.
+
+> **How can we find out exactly what a piece of text contains and then prepare it consistently for later AI work?**
+
+We begin with the unchanged source.
+
+We inspect it to reveal hidden whitespace and stored character identities.
+
+We then decide which differences matter for our purpose.
+
+After choosing the rules, we apply them consistently and test the result with more than one example.
+
+The overall process is:
+
+```text
+source text
+→ inspect what is stored
+→ identify important differences
+→ choose rules that fit the purpose
+→ apply the rules
+→ test the result
+→ prepared text
+```
+
+The most important distinction is this:
+
+> **Identification tells us what is present. Preparation decides what to do with it.**
+
+A code point can prove that two characters are different.
+
+It cannot tell us whether we should make them the same.
+
+That decision depends on the purpose of the dataset.
+
+Do not make the mistake of assuming that every real difference should be removed.
+
+Some differences may carry useful information.
+
+Others may be accidental inconsistencies.
+
+We inspect first so that our choices are deliberate.
+
+At this point, we have not trained an LLM.
+
+We have not created tokens, token IDs, or embeddings
+
+We have prepared a more consistent piece of source text that later stages can work with.
+
+That prepared text becomes a dependable starting point for the next lesson, where we will begin moving from complete text towards the smaller pieces that an LLM can process.

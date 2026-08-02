@@ -1,0 +1,1806 @@
+/*
+ * Complete visual provenance checks shared by the Video 001 animation
+ * builder and audit. The trusted Figma package is SHA-256 pinned by each
+ * caller before this library receives it.
+ */
+
+var Video001MotionProvenance = (function () {
+    var fileHashCache = {};
+
+    function isArrayValue(value) {
+        return (
+            value instanceof Array ||
+            Object.prototype.toString.call(value) === "[object Array]"
+        );
+    }
+
+    function canonicalJson(value) {
+        var keys = [];
+        var parts = [];
+        var key;
+        var index;
+        var serialized;
+        if (value === null || typeof value !== "object") {
+            serialized = JSON.stringify(value);
+            if (serialized === undefined) {
+                throw new Error("Cannot canonicalize visual provenance");
+            }
+            return serialized;
+        }
+        if (isArrayValue(value)) {
+            for (index = 0; index < value.length; index += 1) {
+                parts[parts.length] = canonicalJson(value[index]);
+            }
+            return "[" + parts.join(",") + "]";
+        }
+        for (key in value) {
+            if (Object.prototype.hasOwnProperty.call(value, key)) {
+                keys[keys.length] = key;
+            }
+        }
+        keys.sort();
+        for (index = 0; index < keys.length; index += 1) {
+            parts[parts.length] =
+                JSON.stringify(keys[index]) + ":" +
+                canonicalJson(value[keys[index]]);
+        }
+        return "{" + parts.join(",") + "}";
+    }
+
+    function approximately(left, right) {
+        return (
+            typeof left === "number" &&
+            typeof right === "number" &&
+            Math.abs(left - right) <= 0.000001
+        );
+    }
+
+    function assertNumber(value, expected, label) {
+        if (!approximately(value, expected)) {
+            throw new Error(label + " does not match the trusted package");
+        }
+    }
+
+    function copyArray(value) {
+        var result = [];
+        var index;
+        if (!isArrayValue(value)) {
+            return value;
+        }
+        for (index = 0; index < value.length; index += 1) {
+            result[result.length] = value[index];
+        }
+        return result;
+    }
+
+    function assertArray(value, expected, label) {
+        var index;
+        if (
+            !isArrayValue(value) ||
+            value.length !== expected.length
+        ) {
+            throw new Error(label + " does not match the trusted package");
+        }
+        for (index = 0; index < expected.length; index += 1) {
+            assertNumber(value[index], expected[index], label);
+        }
+    }
+
+    function hexToRgb(value) {
+        var clean = String(value).replace("#", "");
+        return [
+            parseInt(clean.substring(0, 2), 16) / 255,
+            parseInt(clean.substring(2, 4), 16) / 255,
+            parseInt(clean.substring(4, 6), 16) / 255
+        ];
+    }
+
+    function clamp(value, low, high) {
+        return Math.max(low, Math.min(high, value));
+    }
+
+    function expectedPosition(node) {
+        var radians = node.rotation * Math.PI / 180;
+        return [
+            node.x +
+                Math.cos(radians) * node.width / 2 -
+                Math.sin(radians) * node.height / 2,
+            node.y +
+                Math.sin(radians) * node.width / 2 +
+                Math.cos(radians) * node.height / 2
+        ];
+    }
+
+    function sanitizeAeName(name) {
+        var segments = String(name).replace(new RegExp("\\\\", "g"), "/").split("/");
+        var safeName = "";
+        var index;
+        for (index = 0; index < segments.length; index += 1) {
+            if (
+                segments[index] !== "" &&
+                segments[index] !== "." &&
+                segments[index] !== ".."
+            ) {
+                safeName = segments[index];
+            }
+        }
+        safeName = safeName.replace(
+            /[\u0000-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u2028-\u202E\u2060\u2066-\u2069\uFEFF]/g,
+            ""
+        );
+        safeName = safeName.replace(
+            /[^A-Za-z0-9 _.\-\u00A0-\uFFFF]/g,
+            "_"
+        );
+        if (safeName === "" || safeName === "." || safeName === "..") {
+            safeName = "Untitled";
+        }
+        return safeName.substring(0, 120);
+    }
+
+    function requireProperty(group, matchName, label) {
+        var property = group === null || group === undefined
+            ? null
+            : group.property(matchName);
+        if (property === null || property === undefined) {
+            throw new Error(label + " is missing");
+        }
+        return property;
+    }
+
+    function directPropertiesByMatchName(group, matchName) {
+        var result = [];
+        var index;
+        var property;
+        if (
+            group === null ||
+            group === undefined ||
+            typeof group.numProperties !== "number"
+        ) {
+            return result;
+        }
+        for (index = 1; index <= group.numProperties; index += 1) {
+            property = group.property(index);
+            if (
+                property !== null &&
+                property !== undefined &&
+                property.matchName === matchName
+            ) {
+                result[result.length] = property;
+            }
+        }
+        return result;
+    }
+
+    function optionalUniqueProperty(group, matchName, label) {
+        var values = directPropertiesByMatchName(group, matchName);
+        if (values.length > 1) {
+            throw new Error(label + " is duplicated");
+        }
+        return values.length === 1 ? values[0] : null;
+    }
+
+    function propertyBaseValue(property, motionEntry, kind) {
+        if (motionEntry === null || motionEntry === undefined) {
+            if (property.numKeys !== 0) {
+                throw new Error(
+                    "Trusted source contains unexpected transform keyframes"
+                );
+            }
+            return copyArray(property.value);
+        }
+        if (kind === "opacity") {
+            return motionEntry.opacityBase;
+        }
+        if (
+            kind === "position" &&
+            motionEntry.mode === "position"
+        ) {
+            return copyArray(motionEntry.position.base);
+        }
+        if (
+            kind === "scale" &&
+            motionEntry.mode === "scale"
+        ) {
+            return copyArray(motionEntry.scale.base);
+        }
+        if (property.numKeys !== 0) {
+            throw new Error(
+                "Animated layer has unreported transform keyframes"
+            );
+        }
+        return copyArray(property.value);
+    }
+
+    function normalizeTextDocument(value) {
+        var properties = [
+            "text",
+            "font",
+            "fontSize",
+            "fauxBold",
+            "fauxItalic",
+            "allCaps",
+            "smallCaps",
+            "superscript",
+            "subscript",
+            "applyFill",
+            "fillColor",
+            "applyStroke",
+            "strokeColor",
+            "strokeWidth",
+            "strokeOverFill",
+            "justification",
+            "leading",
+            "autoLeading",
+            "tracking",
+            "baselineShift",
+            "horizontalScale",
+            "verticalScale",
+            "tsume",
+            "noBreak",
+            "autoHyphenate",
+            "hangingRoman",
+            "startIndent",
+            "endIndent",
+            "firstLineIndent",
+            "spaceBefore",
+            "spaceAfter",
+            "boxText",
+            "boxTextSize",
+            "boxTextPos",
+            "pointText"
+        ];
+        var result = {};
+        var index;
+        var propertyName;
+        for (index = 0; index < properties.length; index += 1) {
+            propertyName = properties[index];
+            try {
+                if (value[propertyName] !== undefined) {
+                    result[propertyName] = isArrayValue(value[propertyName])
+                        ? copyArray(value[propertyName])
+                        : value[propertyName];
+                }
+            } catch (ignoredTextProperty) {
+                result[propertyName] = "[unavailable]";
+            }
+        }
+        return result;
+    }
+
+    function assertDefaultTextDocumentState(value, label) {
+        var expectedFalse = [
+            "fauxItalic",
+            "allCaps",
+            "smallCaps",
+            "superscript",
+            "subscript",
+            "noBreak",
+            "autoHyphenate",
+            "hangingRoman"
+        ];
+        var expectedNumbers = {
+            baselineShift: 0,
+            horizontalScale: 100,
+            verticalScale: 100,
+            tsume: 0,
+            startIndent: 0,
+            endIndent: 0,
+            firstLineIndent: 0,
+            spaceBefore: 0,
+            spaceAfter: 0
+        };
+        var index;
+        var propertyName;
+        for (index = 0; index < expectedFalse.length; index += 1) {
+            propertyName = expectedFalse[index];
+            if (value[propertyName] !== false) {
+                throw new Error(
+                    label + " default text style is not deterministic: " +
+                    propertyName
+                );
+            }
+        }
+        for (propertyName in expectedNumbers) {
+            if (
+                expectedNumbers.hasOwnProperty(propertyName) &&
+                !approximately(
+                    value[propertyName],
+                    expectedNumbers[propertyName]
+                )
+            ) {
+                throw new Error(
+                    label + " default text style is not deterministic: " +
+                    propertyName
+                );
+            }
+        }
+    }
+
+    function fontCandidates(run) {
+        var family = String(run.fontFamily || "Inter");
+        var style = String(run.fontStyle || "Regular");
+        var compactFamily = family.replace(/ /g, "");
+        return [
+            family + "-" + style,
+            compactFamily + "-" + style,
+            family + " " + style,
+            "Inter-Regular"
+        ];
+    }
+
+    function textFont(value) {
+        if (typeof value.font === "string" && value.font.length > 0) {
+            return value.font;
+        }
+        if (
+            value.fontObject !== null &&
+            value.fontObject !== undefined &&
+            typeof value.fontObject.postScriptName === "string"
+        ) {
+            return value.fontObject.postScriptName;
+        }
+        return "";
+    }
+
+    function fontHasGlyphs(fontObject, runText) {
+        try {
+            return runText.length === 0 ||
+                fontObject.hasGlyphsFor(runText);
+        } catch (glyphError) {
+            return false;
+        }
+    }
+
+    function fontObjectHasBoldStyle(fontObject) {
+        return new RegExp("(?:bold|black|heavy|demi)", "i").test(
+            String(fontObject.styleName || "") + " " +
+            String(fontObject.postScriptName || "")
+        );
+    }
+
+    function resolveExpectedRunFont(run, runText) {
+        var candidates = fontCandidates(run);
+        var matches;
+        var fontObject = null;
+        var intendedAlias = false;
+        var groups;
+        var installed = [];
+        var familyIndex;
+        var styleIndex;
+        var index;
+        if (
+            !app.fonts ||
+            !app.fonts.getFontsByPostScriptName ||
+            !app.fonts.allFonts
+        ) {
+            throw new Error("After Effects font lookup is unavailable");
+        }
+        for (index = 0; index < candidates.length; index += 1) {
+            try {
+                matches = app.fonts.getFontsByPostScriptName(
+                    candidates[index]
+                );
+            } catch (fontLookupError) {
+                matches = [];
+            }
+            if (matches) {
+                for (
+                    familyIndex = 0;
+                    familyIndex < matches.length;
+                    familyIndex += 1
+                ) {
+                    if (
+                        !matches[familyIndex].isSubstitute &&
+                        fontHasGlyphs(matches[familyIndex], runText)
+                    ) {
+                        fontObject = matches[familyIndex];
+                        intendedAlias = index < candidates.length - 1;
+                        break;
+                    }
+                }
+            }
+            if (fontObject !== null) {
+                break;
+            }
+        }
+        if (fontObject === null) {
+            groups = app.fonts.allFonts;
+            for (
+                familyIndex = 0;
+                familyIndex < groups.length;
+                familyIndex += 1
+            ) {
+                for (
+                    styleIndex = 0;
+                    styleIndex < groups[familyIndex].length;
+                    styleIndex += 1
+                ) {
+                    if (
+                        !groups[familyIndex][styleIndex].isSubstitute &&
+                        String(
+                            groups[familyIndex][styleIndex]
+                                .postScriptName || ""
+                        ).length > 0
+                    ) {
+                        installed[installed.length] =
+                            groups[familyIndex][styleIndex];
+                    }
+                }
+            }
+            installed.sort(function (left, right) {
+                var leftName = String(left.postScriptName);
+                var rightName = String(right.postScriptName);
+                return leftName < rightName
+                    ? -1
+                    : leftName > rightName
+                        ? 1
+                        : 0;
+            });
+            for (index = 0; index < installed.length; index += 1) {
+                if (fontHasGlyphs(installed[index], runText)) {
+                    fontObject = installed[index];
+                    break;
+                }
+            }
+        }
+        if (fontObject === null) {
+            throw new Error("No installed font can render trusted text");
+        }
+        return {
+            postScriptName: String(fontObject.postScriptName),
+            fauxBold:
+                !intendedAlias &&
+                new RegExp(
+                    "(?:bold|black|heavy|demi)",
+                    "i"
+                ).test(String(run.fontStyle || "")) &&
+                !fontObjectHasBoldStyle(fontObject)
+        };
+    }
+
+    function assertRunFont(value, run, runText, label) {
+        var actual = textFont(value);
+        var expected = resolveExpectedRunFont(run, runText);
+        if (
+            actual !== expected.postScriptName ||
+            value.fauxBold !== expected.fauxBold
+        ) {
+            throw new Error(
+                label + " font does not match deterministic import"
+            );
+        }
+        return actual;
+    }
+
+    function sameColor(left, right) {
+        var expected = hexToRgb(right);
+        return (
+            approximately(left[0], expected[0]) &&
+            approximately(left[1], expected[1]) &&
+            approximately(left[2], expected[2])
+        );
+    }
+
+    function validateTextRuns(
+        textProperties,
+        documentValue,
+        runs,
+        dominantIndex,
+        dominantRun,
+        dominantFont,
+        nodeText,
+        layerName
+    ) {
+        var expectedAnimators = [];
+        var animators = requireProperty(
+            textProperties,
+            "ADBE Text Animators",
+            layerName + " text animators"
+        );
+        var index;
+        var run;
+        var range;
+        var rangeFont;
+        var differs;
+        var animator;
+        var animatorProperties;
+        var selectors;
+        var selector;
+        var advanced;
+        var fill;
+        var fontSize;
+        if (runs.length > 1 && typeof documentValue.characterRange !== "function") {
+            throw new Error(
+                layerName + " character ranges are unavailable"
+            );
+        }
+        for (index = 0; index < runs.length; index += 1) {
+            run = runs[index];
+            range = runs.length > 1
+                ? documentValue.characterRange(run.start, run.end)
+                : documentValue;
+            rangeFont = assertRunFont(
+                range,
+                run,
+                nodeText.substring(run.start, run.end).replace(
+                    new RegExp("[\\r\\n]", "g"),
+                    ""
+                ),
+                layerName + " run " + String(index)
+            );
+            differs = (
+                index !== dominantIndex &&
+                (
+                    rangeFont !== dominantFont ||
+                    range.fauxBold !== documentValue.fauxBold ||
+                    run.fontSize !== dominantRun.fontSize ||
+                    !sameColor(
+                        hexToRgb(run.color),
+                        dominantRun.color
+                    )
+                )
+            );
+            if (differs) {
+                expectedAnimators[expectedAnimators.length] = {
+                    run: run,
+                    rangeFont: rangeFont
+                };
+            }
+        }
+        if (animators.numProperties !== expectedAnimators.length) {
+            throw new Error(
+                layerName +
+                " mixed-run animator count does not match the trusted package"
+            );
+        }
+        for (index = 0; index < expectedAnimators.length; index += 1) {
+            run = expectedAnimators[index].run;
+            animator = animators.property(index + 1);
+            if (
+                String(animator.name) !==
+                "Video001 mixed run " + run.start + "-" + run.end
+            ) {
+                throw new Error(
+                    layerName + " mixed-run animator identity is invalid"
+                );
+            }
+            animatorProperties = requireProperty(
+                animator,
+                "ADBE Text Animator Properties",
+                layerName + " animator properties"
+            );
+            fill = requireProperty(
+                animatorProperties,
+                "ADBE Text Fill Color",
+                layerName + " animator fill"
+            );
+            assertArray(
+                fill.value,
+                hexToRgb(run.color),
+                layerName + " animator fill"
+            );
+            fontSize = optionalUniqueProperty(
+                animatorProperties,
+                "ADBE Text Font Size",
+                layerName + " animator font size"
+            );
+            if ((run.fontSize !== dominantRun.fontSize) !== (fontSize !== null)) {
+                throw new Error(
+                    layerName + " animator font-size presence is invalid"
+                );
+            }
+            if (fontSize !== null) {
+                assertNumber(
+                    fontSize.value,
+                    run.fontSize - dominantRun.fontSize,
+                    layerName + " animator font size"
+                );
+            }
+            selectors = requireProperty(
+                animator,
+                "ADBE Text Selectors",
+                layerName + " animator selectors"
+            );
+            if (selectors.numProperties !== 1) {
+                throw new Error(
+                    layerName + " animator selector count is invalid"
+                );
+            }
+            selector = selectors.property(1);
+            advanced = requireProperty(
+                selector,
+                "ADBE Text Range Advanced",
+                layerName + " animator range advanced"
+            );
+            assertNumber(
+                requireProperty(
+                    advanced,
+                    "ADBE Text Range Units",
+                    layerName + " animator units"
+                ).value,
+                2,
+                layerName + " animator units"
+            );
+            assertNumber(
+                requireProperty(
+                    selector,
+                    "ADBE Text Index Start",
+                    layerName + " animator start"
+                ).value,
+                run.start,
+                layerName + " animator start"
+            );
+            assertNumber(
+                requireProperty(
+                    selector,
+                    "ADBE Text Index End",
+                    layerName + " animator end"
+                ).value,
+                run.end,
+                layerName + " animator end"
+            );
+        }
+    }
+
+    function normalizePropertyValue(value) {
+        if (
+            value === null ||
+            typeof value === "string" ||
+            typeof value === "number" ||
+            typeof value === "boolean"
+        ) {
+            return value;
+        }
+        if (isArrayValue(value)) {
+            return copyArray(value);
+        }
+        if (
+            isArrayValue(value.vertices) &&
+            isArrayValue(value.inTangents) &&
+            isArrayValue(value.outTangents)
+        ) {
+            return {
+                vertices: value.vertices,
+                inTangents: value.inTangents,
+                outTangents: value.outTangents,
+                closed: value.closed
+            };
+        }
+        if (typeof value.text === "string") {
+            return normalizeTextDocument(value);
+        }
+        return String(value);
+    }
+
+    function propertyTreeFingerprint(
+        property,
+        motionEntry,
+        transformDepth
+    ) {
+        var children = [];
+        var keys = [];
+        var index;
+        var normalizedMotion = null;
+        var child;
+        var matchName = String(property.matchName || "");
+        if (transformDepth === 1) {
+            if (matchName === "ADBE Opacity") {
+                normalizedMotion = "opacity";
+            } else if (
+                matchName === "ADBE Position" ||
+                matchName === "ADBE Position_0" ||
+                matchName === "ADBE Position_1" ||
+                matchName === "ADBE Position_2"
+            ) {
+                normalizedMotion = "position";
+            } else if (matchName === "ADBE Scale") {
+                normalizedMotion = "scale";
+            }
+        }
+        if (
+            typeof property.numProperties === "number" &&
+            property.numProperties > 0
+        ) {
+            for (index = 1; index <= property.numProperties; index += 1) {
+                child = property.property(index);
+                children[children.length] = propertyTreeFingerprint(
+                    child,
+                    motionEntry,
+                    matchName === "ADBE Transform Group"
+                        ? 1
+                        : transformDepth + 1
+                );
+            }
+        } else if (normalizedMotion !== null) {
+            keys = [];
+        } else if (
+            typeof property.numKeys === "number" &&
+            property.numKeys > 0
+        ) {
+            for (index = 1; index <= property.numKeys; index += 1) {
+                keys[keys.length] = {
+                    time: property.keyTime(index),
+                    value: normalizePropertyValue(
+                        property.keyValue(index)
+                    )
+                };
+            }
+        }
+        return {
+            name: String(property.name || ""),
+            matchName: matchName,
+            expression: property.canSetExpression
+                ? String(property.expression || "")
+                : "",
+            value: normalizedMotion === null
+                ? (
+                    children.length === 0
+                        ? (
+                            typeof property.property === "function" &&
+                            property.value === undefined
+                                ? null
+                                : normalizePropertyValue(property.value)
+                        )
+                        : null
+                )
+                : normalizePropertyValue(
+                    propertyBaseValue(
+                        property,
+                        motionEntry,
+                        normalizedMotion
+                    )
+                ),
+            keys: keys,
+            children: children
+        };
+    }
+
+    function assertNoAddedVisualGroups(layer) {
+        var effects = layer.property("ADBE Effect Parade");
+        var masks = layer.property("ADBE Mask Parade");
+        if (
+            effects !== null &&
+            effects !== undefined &&
+            effects.numProperties !== 0
+        ) {
+            throw new Error(
+                "Layer contains an effect absent from the trusted package"
+            );
+        }
+        if (
+            masks !== null &&
+            masks !== undefined &&
+            masks.numProperties !== 0
+        ) {
+            throw new Error(
+                "Layer contains a mask absent from the trusted package"
+            );
+        }
+    }
+
+    function assertDefaultLayerState(layer, frame) {
+        var falseProperties = [
+            "solo",
+            "shy",
+            "guideLayer",
+            "adjustmentLayer",
+            "threeDLayer",
+            "motionBlur",
+            "collapseTransformation",
+            "timeRemapEnabled",
+            "preserveTransparency"
+        ];
+        var index;
+        if (layer.enabled !== true) {
+            throw new Error(
+                layer.name + " is disabled but the trusted package is visible"
+            );
+        }
+        for (index = 0; index < falseProperties.length; index += 1) {
+            if (
+                layer[falseProperties[index]] !== undefined &&
+                layer[falseProperties[index]] !== false
+            ) {
+                throw new Error(
+                    layer.name + " has unexpected visual layer state " +
+                    falseProperties[index]
+                );
+            }
+        }
+        if (
+            layer.parent !== undefined &&
+            layer.parent !== null
+        ) {
+            throw new Error(
+                layer.name + " has unexpected parented visual state"
+            );
+        }
+        if (
+            layer.startTime !== undefined &&
+            !approximately(layer.startTime, 0)
+        ) {
+            throw new Error(
+                layer.name + " has unexpected source start time"
+            );
+        }
+        if (
+            layer.inPoint !== undefined &&
+            !approximately(layer.inPoint, 0)
+        ) {
+            throw new Error(
+                layer.name + " has unexpected source in point"
+            );
+        }
+        if (
+            layer.outPoint !== undefined &&
+            !approximately(layer.outPoint, frame.duration)
+        ) {
+            throw new Error(
+                layer.name + " has unexpected source out point"
+            );
+        }
+        if (
+            layer.stretch !== undefined &&
+            !approximately(layer.stretch, 100)
+        ) {
+            throw new Error(
+                layer.name + " has unexpected time stretch"
+            );
+        }
+        if (
+            typeof BlendingMode !== "undefined" &&
+            layer.blendingMode !== undefined &&
+            layer.blendingMode !== BlendingMode.NORMAL
+        ) {
+            throw new Error(
+                layer.name + " has unexpected blending mode"
+            );
+        }
+        if (
+            typeof TrackMatteType !== "undefined" &&
+            layer.trackMatteType !== undefined &&
+            layer.trackMatteType !== TrackMatteType.NO_TRACK_MATTE
+        ) {
+            throw new Error(
+                layer.name + " has unexpected track matte"
+            );
+        }
+    }
+
+    function assertTransformMatchesNode(layer, node, motionEntry, documentValue) {
+        var transform = requireProperty(
+            layer,
+            "ADBE Transform Group",
+            layer.name + " transform"
+        );
+        var anchor = requireProperty(
+            transform,
+            "ADBE Anchor Point",
+            layer.name + " anchor"
+        );
+        var position = requireProperty(
+            transform,
+            "ADBE Position",
+            layer.name + " position"
+        );
+        var scale = requireProperty(
+            transform,
+            "ADBE Scale",
+            layer.name + " scale"
+        );
+        var rotation = requireProperty(
+            transform,
+            "ADBE Rotate Z",
+            layer.name + " rotation"
+        );
+        var opacity = requireProperty(
+            transform,
+            "ADBE Opacity",
+            layer.name + " opacity"
+        );
+        var expectedAnchor = [0, 0];
+        var expectedScale = [100, 100];
+        var expectedRotation = node.rotation;
+        var expectedLayerPosition = expectedPosition(node);
+        if (node.kind === "text") {
+            expectedAnchor = [
+                documentValue.boxTextPos[0] + node.textBox.width / 2,
+                documentValue.boxTextPos[1] + node.textBox.height / 2
+            ];
+        } else if (node.kind === "raster") {
+            expectedAnchor = [
+                layer.source.width / 2,
+                layer.source.height / 2
+            ];
+            expectedScale = [
+                node.width * 100 / layer.source.width,
+                node.height * 100 / layer.source.height
+            ];
+        } else if (node.kind === "group") {
+            expectedAnchor = [960, 540];
+            expectedLayerPosition = [960, 540];
+            expectedRotation = 0;
+        }
+        assertArray(anchor.value, expectedAnchor, layer.name + " anchor");
+        assertArray(
+            propertyBaseValue(position, motionEntry, "position"),
+            expectedLayerPosition,
+            layer.name + " static position"
+        );
+        assertArray(
+            propertyBaseValue(scale, motionEntry, "scale"),
+            expectedScale,
+            layer.name + " static scale"
+        );
+        assertNumber(
+            rotation.value,
+            expectedRotation,
+            layer.name + " rotation"
+        );
+        assertNumber(
+            propertyBaseValue(opacity, motionEntry, "opacity"),
+            clamp(Math.round(node.opacity * 100), 0, 100),
+            layer.name + " static opacity"
+        );
+    }
+
+    function assertTextMatchesNode(layer, node, motionEntry) {
+        var textProperties = requireProperty(
+            layer,
+            "ADBE Text Properties",
+            layer.name + " text properties"
+        );
+        var sourceText = requireProperty(
+            textProperties,
+            "ADBE Text Document",
+            layer.name + " Source Text"
+        );
+        var documentValue = sourceText.value;
+        var dominantRun = node.runs.length === 0
+            ? {
+                fontSize: Math.max(1, node.paragraph.lineHeightPx),
+                color: "#FFFFFF"
+            }
+            : node.runs[0];
+        var index;
+        var length;
+        var dominantLength = node.runs.length === 0 ? 0 : -1;
+        var dominantIndex = 0;
+        var dominantFont;
+        var expectedJustification;
+        if (node.runs.length > 1) {
+            for (index = 0; index < node.runs.length; index += 1) {
+                length = node.runs[index].end - node.runs[index].start;
+                if (length > dominantLength) {
+                    dominantRun = node.runs[index];
+                    dominantIndex = index;
+                    dominantLength = length;
+                }
+            }
+        }
+        if (documentValue.text !== node.text) {
+            throw new Error(
+                layer.name + " Source Text does not match the trusted package"
+            );
+        }
+        assertArray(
+            documentValue.boxTextSize,
+            [node.textBox.width, node.textBox.height],
+            layer.name + " text box"
+        );
+        assertNumber(
+            documentValue.fontSize,
+            dominantRun.fontSize,
+            layer.name + " font size"
+        );
+        assertArray(
+            documentValue.fillColor,
+            hexToRgb(dominantRun.color),
+            layer.name + " fill color"
+        );
+        assertNumber(
+            documentValue.leading,
+            node.paragraph.lineHeightPx,
+            layer.name + " leading"
+        );
+        assertNumber(
+            documentValue.tracking,
+            dominantRun.fontSize === 0
+                ? 0
+                : node.paragraph.letterSpacingPx * 1000 /
+                    dominantRun.fontSize,
+            layer.name + " tracking"
+        );
+        if (
+            documentValue.applyFill !== true ||
+            documentValue.applyStroke !== false ||
+            documentValue.autoLeading !== false
+        ) {
+            throw new Error(
+                layer.name + " text paint does not match the trusted package"
+            );
+        }
+        assertDefaultTextDocumentState(documentValue, layer.name);
+        expectedJustification =
+            node.paragraph.align === "CENTER"
+                ? ParagraphJustification.CENTER_JUSTIFY
+                : node.paragraph.align === "RIGHT"
+                    ? ParagraphJustification.RIGHT_JUSTIFY
+                    : ParagraphJustification.LEFT_JUSTIFY;
+        if (documentValue.justification !== expectedJustification) {
+            throw new Error(
+                layer.name +
+                " paragraph alignment does not match the trusted package"
+            );
+        }
+        dominantFont = assertRunFont(
+            documentValue,
+            dominantRun,
+            node.text.substring(
+                dominantRun.start === undefined
+                    ? 0
+                    : dominantRun.start,
+                dominantRun.end === undefined
+                    ? node.text.length
+                    : dominantRun.end
+            ).replace(new RegExp("[\\r\\n]", "g"), ""),
+            layer.name + " dominant run"
+        );
+        validateTextRuns(
+            textProperties,
+            documentValue,
+            node.runs,
+            dominantIndex,
+            dominantRun,
+            dominantFont,
+            node.text,
+            layer.name
+        );
+        assertTransformMatchesNode(
+            layer,
+            node,
+            motionEntry,
+            documentValue
+        );
+        return normalizeTextDocument(documentValue);
+    }
+
+    function assertShapeMatchesNode(layer, node, motionEntry) {
+        var contents = requireProperty(
+            layer,
+            "ADBE Root Vectors Group",
+            layer.name + " vector contents"
+        );
+        var shape;
+        var fill;
+        var stroke;
+        var expectedContentCount = 1 +
+            (node.fill === null ? 0 : 1) +
+            (
+                node.stroke !== null && node.strokeWidth > 0
+                    ? 1
+                    : 0
+            );
+        if (contents.numProperties !== expectedContentCount) {
+            throw new Error(
+                layer.name +
+                " vector content count does not match the trusted package"
+            );
+        }
+        if (node.kind === "ellipse") {
+            shape = optionalUniqueProperty(
+                contents,
+                "ADBE Vector Shape - Ellipse",
+                layer.name + " ellipse"
+            );
+            if (shape === null) {
+                throw new Error(layer.name + " ellipse geometry is missing");
+            }
+            assertArray(
+                requireProperty(
+                    shape,
+                    "ADBE Vector Ellipse Size",
+                    layer.name + " ellipse size"
+                ).value,
+                [node.width, node.height],
+                layer.name + " ellipse geometry"
+            );
+            assertArray(
+                requireProperty(
+                    shape,
+                    "ADBE Vector Ellipse Position",
+                    layer.name + " ellipse position"
+                ).value,
+                [0, 0],
+                layer.name + " ellipse internal position"
+            );
+        } else {
+            shape = optionalUniqueProperty(
+                contents,
+                "ADBE Vector Shape - Rect",
+                layer.name + " rectangle"
+            );
+            if (shape === null) {
+                throw new Error(layer.name + " rectangle geometry is missing");
+            }
+            assertArray(
+                requireProperty(
+                    shape,
+                    "ADBE Vector Rect Size",
+                    layer.name + " rectangle size"
+                ).value,
+                [node.width, node.height],
+                layer.name + " rectangle geometry"
+            );
+            assertArray(
+                requireProperty(
+                    shape,
+                    "ADBE Vector Rect Position",
+                    layer.name + " rectangle position"
+                ).value,
+                [0, 0],
+                layer.name + " rectangle internal position"
+            );
+            assertNumber(
+                requireProperty(
+                    shape,
+                    "ADBE Vector Rect Roundness",
+                    layer.name + " rectangle roundness"
+                ).value,
+                node.radius,
+                layer.name + " rectangle roundness"
+            );
+        }
+        fill = optionalUniqueProperty(
+            contents,
+            "ADBE Vector Graphic - Fill",
+            layer.name + " fill"
+        );
+        if ((node.fill === null) !== (fill === null)) {
+            throw new Error(
+                layer.name + " vector fill presence is invalid"
+            );
+        }
+        if (fill !== null) {
+            assertArray(
+                requireProperty(
+                    fill,
+                    "ADBE Vector Fill Color",
+                    layer.name + " fill color"
+                ).value,
+                hexToRgb(node.fill),
+                layer.name + " vector fill"
+            );
+            assertNumber(
+                requireProperty(
+                    fill,
+                    "ADBE Vector Fill Opacity",
+                    layer.name + " fill opacity"
+                ).value,
+                100,
+                layer.name + " fill opacity"
+            );
+        }
+        stroke = optionalUniqueProperty(
+            contents,
+            "ADBE Vector Graphic - Stroke",
+            layer.name + " stroke"
+        );
+        if (
+            (node.stroke !== null && node.strokeWidth > 0) !==
+            (stroke !== null)
+        ) {
+            throw new Error(
+                layer.name + " vector stroke presence is invalid"
+            );
+        }
+        if (stroke !== null) {
+            assertArray(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Color",
+                    layer.name + " stroke color"
+                ).value,
+                hexToRgb(node.stroke),
+                layer.name + " vector stroke"
+            );
+            assertNumber(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Width",
+                    layer.name + " stroke width"
+                ).value,
+                node.strokeWidth,
+                layer.name + " stroke width"
+            );
+            assertNumber(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Opacity",
+                    layer.name + " stroke opacity"
+                ).value,
+                100,
+                layer.name + " stroke opacity"
+            );
+            assertNumber(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Line Cap",
+                    layer.name + " stroke line cap"
+                ).value,
+                1,
+                layer.name + " stroke line cap"
+            );
+            assertNumber(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Line Join",
+                    layer.name + " stroke line join"
+                ).value,
+                1,
+                layer.name + " stroke line join"
+            );
+            assertNumber(
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Miter Limit",
+                    layer.name + " stroke miter limit"
+                ).value,
+                4,
+                layer.name + " stroke miter limit"
+            );
+            if (
+                requireProperty(
+                    stroke,
+                    "ADBE Vector Stroke Dashes",
+                    layer.name + " stroke dashes"
+                ).numProperties !== 0
+            ) {
+                throw new Error(
+                    layer.name + " stroke dashes are not empty"
+                );
+            }
+        }
+        assertTransformMatchesNode(layer, node, motionEntry, null);
+        return {
+            shape: propertyTreeFingerprint(shape, null, 0),
+            fill: fill === null
+                ? null
+                : propertyTreeFingerprint(fill, null, 0),
+            stroke: stroke === null
+                ? null
+                : propertyTreeFingerprint(stroke, null, 0)
+        };
+    }
+
+    function quoteShellArgument(value) {
+        return "'" + String(value).replace(/'/g, "'\\''") + "'";
+    }
+
+    function sha256File(file) {
+        var output;
+        var match;
+        if (!file.exists || file.alias === true) {
+            throw new Error("Raster source is unavailable or aliased");
+        }
+        if (fileHashCache[file.fsName] !== undefined) {
+            return fileHashCache[file.fsName];
+        }
+        output = system.callSystem(
+            "/usr/bin/shasum -a 256 " +
+            quoteShellArgument(file.fsName)
+        );
+        match = /^([0-9a-f]{64})\b/.exec(String(output));
+        if (match === null) {
+            throw new Error("Cannot verify raster source SHA-256");
+        }
+        fileHashCache[file.fsName] = match[1];
+        return match[1];
+    }
+
+    function rasterFile(layer) {
+        try {
+            return layer.source.mainSource.file;
+        } catch (sourceError) {
+            return null;
+        }
+    }
+
+    function assertRasterInterpretation(footage) {
+        var source = footage.mainSource;
+        if (
+            source === null ||
+            source === undefined ||
+            source.isStill !== true ||
+            !approximately(footage.pixelAspect, 1)
+        ) {
+            throw new Error(
+                "Raster interpretation is not the deterministic still-image profile"
+            );
+        }
+        if (
+            source.hasAlpha === true &&
+            (
+                source.alphaMode !== AlphaMode.STRAIGHT ||
+                source.invertAlpha !== false
+            )
+        ) {
+            throw new Error(
+                "Raster interpretation is not straight, non-inverted alpha"
+            );
+        }
+        return {
+            pixelAspect: footage.pixelAspect,
+            isStill: source.isStill,
+            hasAlpha: source.hasAlpha === true,
+            alphaMode: source.hasAlpha === true
+                ? source.alphaMode
+                : null,
+            invertAlpha: source.hasAlpha === true
+                ? source.invertAlpha
+                : null
+        };
+    }
+
+    function sourceIdentity(layer) {
+        var file;
+        var interpretation;
+        if (layer.source === null || layer.source === undefined) {
+            return null;
+        }
+        if (layer.source instanceof CompItem) {
+            return {
+                type: "comp",
+                name: String(layer.source.name),
+                comment: String(layer.source.comment || "")
+            };
+        }
+        file = rasterFile(layer);
+        interpretation = assertRasterInterpretation(layer.source);
+        return {
+            type: "footage",
+            name: String(layer.source.name),
+            width: layer.source.width,
+            height: layer.source.height,
+            fileSha256: file === null ? null : sha256File(file),
+            interpretation: interpretation
+        };
+    }
+
+    function expectedComment(node) {
+        if (node.kind === "text") {
+            return "Figma native text " + node.id;
+        }
+        if (node.kind === "rect" || node.kind === "ellipse") {
+            return "Figma native vector " + node.id + " " + node.kind;
+        }
+        if (node.kind === "group") {
+            return "Figma group precomp " + node.id;
+        }
+        return "Figma raster fallback " + node.id +
+            " sha256:" + node.assetHash;
+    }
+
+    function motionEntriesByLayer(report) {
+        var result = {};
+        var values;
+        var index;
+        if (report === null || report === undefined) {
+            return result;
+        }
+        values = report.animatedLayers;
+        if (!isArrayValue(values)) {
+            throw new Error("Animated shot report has no layer inventory");
+        }
+        for (index = 0; index < values.length; index += 1) {
+            if (result[String(values[index].layerIndex)] !== undefined) {
+                throw new Error("Animated shot report duplicates a layer");
+            }
+            result[String(values[index].layerIndex)] = values[index];
+        }
+        return result;
+    }
+
+    function assertSameSourceIdentity(layer, sourceLayer) {
+        if (
+            sourceLayer !== null &&
+            sourceLayer !== undefined &&
+            layer.source !== sourceLayer.source
+        ) {
+            throw new Error(
+                "Animated-layer source differs from its trusted source comp"
+            );
+        }
+    }
+
+    function snapshotNodeLayer(
+        layer,
+        node,
+        frame,
+        motionEntry,
+        sourceLayer
+    ) {
+        var kind = node.kind === "raster" ? "raster" : node.kind;
+        var nodeSnapshot;
+        var childSource = null;
+        assertDefaultLayerState(layer, frame);
+        assertNoAddedVisualGroups(layer);
+        if (
+            String(layer.name) !== sanitizeAeName(node.name) ||
+            String(layer.comment || "") !== expectedComment(node)
+        ) {
+            throw new Error(
+                "Layer identity does not match trusted node " + node.id
+            );
+        }
+        assertSameSourceIdentity(layer, sourceLayer);
+        if (node.kind === "text") {
+            nodeSnapshot = assertTextMatchesNode(
+                layer,
+                node,
+                motionEntry
+            );
+        } else if (
+            node.kind === "rect" ||
+            node.kind === "ellipse"
+        ) {
+            nodeSnapshot = assertShapeMatchesNode(
+                layer,
+                node,
+                motionEntry
+            );
+        } else if (node.kind === "group") {
+            if (
+                !(layer instanceof AVLayer) ||
+                !(layer.source instanceof CompItem) ||
+                String(layer.source.comment || "") !==
+                    "Figma recursive precomp " + node.id
+            ) {
+                throw new Error(
+                    "Group source does not match trusted node " + node.id
+                );
+            }
+            if (
+                sourceLayer !== null &&
+                sourceLayer !== undefined
+            ) {
+                childSource = sourceLayer.source;
+            }
+            nodeSnapshot = snapshotNodeLayers(
+                layer.source,
+                node.children,
+                frame,
+                null,
+                childSource
+            );
+            assertTransformMatchesNode(
+                layer,
+                node,
+                motionEntry,
+                null
+            );
+        } else {
+            if (
+                !(layer instanceof AVLayer) ||
+                layer.source instanceof CompItem ||
+                sourceIdentity(layer).fileSha256 !== node.assetHash
+            ) {
+                throw new Error(
+                    "Raster source does not match trusted asset " +
+                    node.assetHash
+                );
+            }
+            assertTransformMatchesNode(
+                layer,
+                node,
+                motionEntry,
+                null
+            );
+            nodeSnapshot = sourceIdentity(layer);
+        }
+        return {
+            nodeId: node.id,
+            kind: kind,
+            name: String(layer.name),
+            comment: String(layer.comment || ""),
+            enabled: layer.enabled,
+            source: sourceIdentity(layer),
+            expectedNode: node,
+            observed: nodeSnapshot,
+            propertyTree: propertyTreeFingerprint(
+                layer,
+                motionEntry,
+                0
+            )
+        };
+    }
+
+    function snapshotNodeLayers(
+        comp,
+        nodes,
+        frame,
+        motionReport,
+        sourceComp
+    ) {
+        var values = [];
+        var entries = motionEntriesByLayer(motionReport);
+        var index;
+        var node;
+        var layer;
+        var sourceLayer;
+        if (comp.numLayers !== nodes.length) {
+            throw new Error(
+                "Composition layer count does not match trusted Figma nodes"
+            );
+        }
+        if (
+            sourceComp !== null &&
+            sourceComp !== undefined &&
+            sourceComp.numLayers !== comp.numLayers
+        ) {
+            throw new Error(
+                "Animated comp layer count differs from its source comp"
+            );
+        }
+        for (index = 1; index <= comp.numLayers; index += 1) {
+            node = nodes[nodes.length - index];
+            layer = comp.layer(index);
+            sourceLayer = sourceComp === null || sourceComp === undefined
+                ? null
+                : sourceComp.layer(index);
+            values[values.length] = snapshotNodeLayer(
+                layer,
+                node,
+                frame,
+                entries[String(index)] || null,
+                sourceLayer
+            );
+        }
+        return values;
+    }
+
+    function assertCompMatchesFrame(
+        comp,
+        frame,
+        packageValue,
+        motionReport,
+        sourceComp
+    ) {
+        var snapshot;
+        if (
+            frame.name + "_v001" !==
+                (
+                    sourceComp === null || sourceComp === undefined
+                        ? comp.name
+                        : sourceComp.name
+                ) ||
+            comp.width !== packageValue.target.width ||
+            comp.height !== packageValue.target.height ||
+            comp.frameRate !== packageValue.target.fps ||
+            !approximately(comp.duration, frame.duration)
+        ) {
+            throw new Error(
+                "Composition geometry or trusted frame identity is invalid"
+            );
+        }
+        snapshot = {
+            frameNodeId: frame.nodeId,
+            expectedFrame: frame,
+            width: comp.width,
+            height: comp.height,
+            frameRate: comp.frameRate,
+            duration: comp.duration,
+            layers: snapshotNodeLayers(
+                comp,
+                frame.children,
+                frame,
+                motionReport,
+                sourceComp
+            )
+        };
+        return snapshot;
+    }
+
+    function utf8Bytes(value) {
+        var bytes = [];
+        var index;
+        var code;
+        var next;
+        for (index = 0; index < value.length; index += 1) {
+            code = value.charCodeAt(index);
+            if (
+                code >= 55296 &&
+                code <= 56319 &&
+                index + 1 < value.length
+            ) {
+                next = value.charCodeAt(index + 1);
+                if (next >= 56320 && next <= 57343) {
+                    code = 65536 +
+                        ((code - 55296) << 10) +
+                        (next - 56320);
+                    index += 1;
+                }
+            }
+            if (code <= 127) {
+                bytes[bytes.length] = code;
+            } else if (code <= 2047) {
+                bytes[bytes.length] = 192 | (code >>> 6);
+                bytes[bytes.length] = 128 | (code & 63);
+            } else if (code <= 65535) {
+                bytes[bytes.length] = 224 | (code >>> 12);
+                bytes[bytes.length] = 128 | ((code >>> 6) & 63);
+                bytes[bytes.length] = 128 | (code & 63);
+            } else {
+                bytes[bytes.length] = 240 | (code >>> 18);
+                bytes[bytes.length] = 128 | ((code >>> 12) & 63);
+                bytes[bytes.length] = 128 | ((code >>> 6) & 63);
+                bytes[bytes.length] = 128 | (code & 63);
+            }
+        }
+        return bytes;
+    }
+
+    function rotateRight(value, count) {
+        return (value >>> count) | (value << (32 - count));
+    }
+
+    function paddedHex(value) {
+        var result = (value >>> 0).toString(16);
+        while (result.length < 8) {
+            result = "0" + result;
+        }
+        return result;
+    }
+
+    function sha256Utf8(value) {
+        var initialState = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+        ];
+        var constants = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+            0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+            0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+            0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+            0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+            0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+            0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+            0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+        ];
+        var bytes = utf8Bytes(String(value));
+        var paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+        var padded = [];
+        var words = [];
+        var state = initialState.slice(0);
+        var bitLength = bytes.length * 8;
+        var high = Math.floor(bitLength / 4294967296);
+        var low = bitLength >>> 0;
+        var index;
+        var offset;
+        var chunk;
+        var previous15;
+        var previous2;
+        var sigma0;
+        var sigma1;
+        var a;
+        var b;
+        var c;
+        var d;
+        var e;
+        var f;
+        var g;
+        var h;
+        var sum0;
+        var sum1;
+        var choose;
+        var majority;
+        var temporary1;
+        var temporary2;
+        var result = "";
+        for (index = 0; index < paddedLength; index += 1) {
+            padded[index] = 0;
+        }
+        for (index = 0; index < bytes.length; index += 1) {
+            padded[index] = bytes[index];
+        }
+        padded[bytes.length] = 128;
+        for (index = 0; index < 4; index += 1) {
+            padded[paddedLength - 8 + index] =
+                (high >>> (24 - index * 8)) & 255;
+            padded[paddedLength - 4 + index] =
+                (low >>> (24 - index * 8)) & 255;
+        }
+        for (chunk = 0; chunk < padded.length; chunk += 64) {
+            for (index = 0; index < 16; index += 1) {
+                offset = chunk + index * 4;
+                words[index] = (
+                    (padded[offset] << 24) |
+                    (padded[offset + 1] << 16) |
+                    (padded[offset + 2] << 8) |
+                    padded[offset + 3]
+                ) >>> 0;
+            }
+            for (index = 16; index < 64; index += 1) {
+                previous15 = words[index - 15];
+                previous2 = words[index - 2];
+                sigma0 =
+                    rotateRight(previous15, 7) ^
+                    rotateRight(previous15, 18) ^
+                    (previous15 >>> 3);
+                sigma1 =
+                    rotateRight(previous2, 17) ^
+                    rotateRight(previous2, 19) ^
+                    (previous2 >>> 10);
+                words[index] = (
+                    words[index - 16] +
+                    sigma0 +
+                    words[index - 7] +
+                    sigma1
+                ) >>> 0;
+            }
+            a = state[0];
+            b = state[1];
+            c = state[2];
+            d = state[3];
+            e = state[4];
+            f = state[5];
+            g = state[6];
+            h = state[7];
+            for (index = 0; index < 64; index += 1) {
+                sum1 =
+                    rotateRight(e, 6) ^
+                    rotateRight(e, 11) ^
+                    rotateRight(e, 25);
+                choose = (e & f) ^ (~e & g);
+                temporary1 = (
+                    h +
+                    sum1 +
+                    choose +
+                    constants[index] +
+                    words[index]
+                ) >>> 0;
+                sum0 =
+                    rotateRight(a, 2) ^
+                    rotateRight(a, 13) ^
+                    rotateRight(a, 22);
+                majority = (a & b) ^ (a & c) ^ (b & c);
+                temporary2 = (sum0 + majority) >>> 0;
+                h = g;
+                g = f;
+                f = e;
+                e = (d + temporary1) >>> 0;
+                d = c;
+                c = b;
+                b = a;
+                a = (temporary1 + temporary2) >>> 0;
+            }
+            state[0] = (state[0] + a) >>> 0;
+            state[1] = (state[1] + b) >>> 0;
+            state[2] = (state[2] + c) >>> 0;
+            state[3] = (state[3] + d) >>> 0;
+            state[4] = (state[4] + e) >>> 0;
+            state[5] = (state[5] + f) >>> 0;
+            state[6] = (state[6] + g) >>> 0;
+            state[7] = (state[7] + h) >>> 0;
+        }
+        for (index = 0; index < state.length; index += 1) {
+            result += paddedHex(state[index]);
+        }
+        return result;
+    }
+
+    return {
+        assertCompMatchesFrame: assertCompMatchesFrame,
+        canonicalJson: canonicalJson,
+        sha256Utf8: sha256Utf8
+    };
+}());
