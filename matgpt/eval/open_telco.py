@@ -151,12 +151,24 @@ def prepare_open_telco_evals(
             )
             path = staging / f"{config}.jsonl"
             count = 0
+            source_count = 0
+            skipped_rows: list[dict[str, Any]] = []
             with path.open("w", encoding="utf-8") as handle:
                 for index, row in enumerate(dataset):
+                    source_count += 1
                     if not isinstance(row, Mapping):
                         raise ValueError(
                             f"Open Telco {config!r} row {index} must be a mapping."
                         )
+                    question = row.get("question")
+                    if not isinstance(question, str) or not question.strip():
+                        skipped_rows.append(
+                            {
+                                "source_index": index,
+                                "reason": "missing_question",
+                            }
+                        )
+                        continue
                     converted = convert_open_telco_row(
                         source.hf_name,
                         config,
@@ -177,7 +189,10 @@ def prepare_open_telco_evals(
                 )
             config_stats[config] = {
                 "path": path.name,
+                "source_examples": source_count,
                 "examples": count,
+                "skipped_examples": len(skipped_rows),
+                "skipped_rows": skipped_rows,
                 "raw_bytes": path.stat().st_size,
                 "sha256": sha256_file(path),
             }

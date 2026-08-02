@@ -122,6 +122,11 @@ training tree. Their questions become contamination patterns. It then writes
 the 20M-token mixture plan and streams the role-approved pilot corpus. It does
 not import or start pretraining.
 
+The pinned Open Telco Full `oranbench` config contains 1,500 source rows, but
+three rows have empty questions and cannot be evaluated. Preparation keeps the
+1,497 usable rows and records the skipped source indices and reason in the
+evaluation manifest. Other malformed row types remain fatal.
+
 Stop and inspect:
 
 - `evidence/pilot/mixture_plan_pilot.json`;
