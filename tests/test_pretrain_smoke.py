@@ -11,7 +11,11 @@ from matgpt.training.amp import ScalerStepResult
 from matgpt.training.metrics import METRIC_FIELDS
 from matgpt.training.optim import build_optimizer
 from matgpt.training import pretrain as pretrain_module
-from matgpt.training.pretrain import run_pretraining, train_on_fixed_batch
+from matgpt.training.pretrain import (
+    run_pretraining,
+    train_on_fixed_batch,
+    training_split_for_tokens,
+)
 
 
 SPECIAL_TOKENS = ["<|pad|>", "<|bos|>", "<|eos|>", "<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
@@ -84,6 +88,110 @@ def synthetic_pretraining_config(tmp_path):
             "top_k": None,
             "top_p": None,
         },
+    }
+
+
+def synthetic_staged_pretraining_config(tmp_path):
+    cfg = synthetic_pretraining_config(tmp_path)
+    normalized = tmp_path / "normalized"
+    tokenizer_dir = tmp_path / "tokenizer"
+    shard_dir = tmp_path / "shards"
+    main_jsonl = normalized / "main.jsonl"
+    cooldown_jsonl = normalized / "cooldown.jsonl"
+    main_jsonl.write_text(
+        '{"text": "Main phase routing text repeated for training."}\n' * 20,
+        encoding="utf-8",
+    )
+    cooldown_jsonl.write_text(
+        '{"text": "Cooldown telecom text with gNodeB and RRC."}\n' * 20,
+        encoding="utf-8",
+    )
+    tokenize_jsonl_to_shards(
+        main_jsonl, tokenizer_dir, shard_dir, "main", shard_size_tokens=2048
+    )
+    tokenize_jsonl_to_shards(
+        cooldown_jsonl,
+        tokenizer_dir,
+        shard_dir,
+        "cooldown",
+        shard_size_tokens=2048,
+    )
+    cfg["dataset"].update(
+        {
+            "train_split": "main",
+            "training_splits": {"main": "main", "cooldown": "cooldown"},
+        }
+    )
+    cfg["training"].update(
+        {
+            "max_tokens": 32,
+            "data_phases": [
+                {"name": "main", "split": "main", "until_tokens": 16},
+                {"name": "cooldown", "split": "cooldown", "until_tokens": 32},
+            ],
+        }
+    )
+    return cfg
+
+
+def test_training_split_selection_switches_at_main_budget():
+    cfg = {
+        "dataset": {"train_split": "train"},
+        "training": {
+            "data_phases": [
+                {"name": "main", "split": "main", "until_tokens": 10_000_000_000},
+                {
+                    "name": "cooldown",
+                    "split": "cooldown",
+                    "until_tokens": 12_000_000_000,
+                },
+            ]
+        },
+    }
+
+    assert training_split_for_tokens(cfg, 9_999_999_999) == "main"
+    assert training_split_for_tokens(cfg, 10_000_000_000) == "cooldown"
+    assert training_split_for_tokens(cfg, 11_999_999_999) == "cooldown"
+
+
+def test_training_split_selection_keeps_legacy_train_split():
+    cfg = {"dataset": {"train_split": "train"}, "training": {}}
+
+    assert training_split_for_tokens(cfg, 0) == "train"
+
+
+def test_staged_resume_switches_dataset_and_restores_all_phase_rng_states(
+    tmp_path,
+    monkeypatch,
+):
+    cfg = synthetic_staged_pretraining_config(tmp_path)
+    sampled_splits = []
+    real_sample_batch = pretrain_module.PackedTokenDataset.sample_batch
+
+    def sample_batch_probe(dataset, batch_size, device):
+        shard_name = dataset.shards[0].path.name
+        if shard_name.startswith(("main_", "cooldown_")):
+            sampled_splits.append(shard_name.split("_", maxsplit=1)[0])
+        return real_sample_batch(dataset, batch_size, device)
+
+    monkeypatch.setattr(
+        pretrain_module.PackedTokenDataset,
+        "sample_batch",
+        sample_batch_probe,
+    )
+
+    first = run_pretraining(cfg, max_steps_override=1)
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.pt"
+    payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    second = run_pretraining(cfg, resume_from=checkpoint, max_steps_override=1)
+
+    assert first["state"]["tokens_processed"] == 16
+    assert second["state"]["tokens_processed"] == 32
+    assert sampled_splits == ["main", "cooldown"]
+    assert set(payload["state"]["dataset_rng_state"]) == {
+        "main",
+        "cooldown",
+        "validation",
     }
 
 

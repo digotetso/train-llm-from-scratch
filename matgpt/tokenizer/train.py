@@ -7,6 +7,7 @@ from typing import Iterable
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
 from matgpt.utils.hashing import sha256_file
+from matgpt.tokenizer.fertility import load_probe_sets, measure_tokenizer_fertility
 
 
 def _iter_texts(input_paths: Iterable[str | Path]):
@@ -44,6 +45,7 @@ def train_tokenizer_from_jsonl(
     vocab_size: int,
     min_frequency: int,
     special_tokens: list[str],
+    probe_sets_path: str | Path | None = None,
 ) -> dict[str, object]:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -116,6 +118,11 @@ def train_tokenizer_from_jsonl(
         "avg_tokens_per_document": total_tokens / num_documents,
         "input_paths": [str(Path(path)) for path in input_paths],
     }
+    if probe_sets_path is not None:
+        report["fertility"] = measure_tokenizer_fertility(
+            tokenizer,
+            load_probe_sets(probe_sets_path),
+        )
     (out / "tokenizer_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -125,15 +132,23 @@ def train_tokenizer_from_jsonl(
 
 def train_tokenizer_from_config(cfg: dict) -> dict[str, object]:
 
-    # The repo uses only the prepared training split:
-    train_split = cfg["dataset"]["train_split"]
-    input_path = Path(cfg["dataset"]["normalized_dir"]) / f"{train_split}.jsonl"
+    ds_cfg = cfg["dataset"]
+    normalized_dir = Path(ds_cfg["normalized_dir"])
+    training_splits = ds_cfg.get("training_splits")
+    if training_splits:
+        input_paths = [
+            normalized_dir / f"{split}.jsonl"
+            for split in dict.fromkeys(training_splits.values())
+        ]
+    else:
+        input_paths = [normalized_dir / f"{ds_cfg['train_split']}.jsonl"]
 
     tokenizer_cfg = cfg["tokenizer"]
     return train_tokenizer_from_jsonl(
-        input_paths=[input_path],
+        input_paths=input_paths,
         output_dir=tokenizer_cfg["output_dir"],
         vocab_size=tokenizer_cfg["vocab_size"],
         min_frequency=tokenizer_cfg["min_frequency"],
         special_tokens=tokenizer_cfg["special_tokens"],
+        probe_sets_path=tokenizer_cfg.get("probe_sets_path"),
     )

@@ -30,6 +30,11 @@ def test_loads_mini_config_and_validates():
             "BabyLM-community/BabyLM-2026-Strict",
             "9e57baaaa91ac3c638746be14d1d5fa6c789f4cf",
         ),
+        (
+            "configs/matgpt_telco_300m.yaml",
+            "public-role-safe-telco-mixture",
+            "registry:configs/data/telco_300m_sources.yaml",
+        ),
     ],
 )
 def test_configs_pin_verified_dataset_revisions(config_path, dataset_name, revision):
@@ -61,6 +66,55 @@ def test_config_rejects_nonpositive_skipped_update_limit():
     cfg = load_config("configs/matgpt_mini_8m.yaml")
     cfg["training"]["max_consecutive_skipped_updates"] = 0
     with pytest.raises(ValueError, match="max_consecutive_skipped_updates"):
+        validate_config(cfg)
+
+
+def test_telco_config_uses_bf16_and_full_token_schedule():
+    cfg = load_config("configs/matgpt_telco_300m.yaml")
+
+    assert cfg["training"]["precision"] == "bf16"
+    assert cfg["training"]["max_tokens"] == 12_000_000_000
+    assert cfg["dataset"]["training_splits"] == {
+        "main": "main",
+        "cooldown": "cooldown",
+    }
+    assert cfg["training"]["data_phases"] == [
+        {"name": "main", "split": "main", "until_tokens": 10_000_000_000},
+        {
+            "name": "cooldown",
+            "split": "cooldown",
+            "until_tokens": 12_000_000_000,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("phases", "message"),
+    [
+        (
+                [
+                    {"name": "main", "split": "main", "until_tokens": 600},
+                    {"name": "cooldown", "split": "cooldown", "until_tokens": 500},
+            ],
+            "strictly increasing",
+        ),
+        (
+            [{"name": "main", "split": "missing", "until_tokens": 1024}],
+            "unknown training split",
+        ),
+        (
+            [{"name": "main", "split": "main", "until_tokens": 1000}],
+            "training.max_tokens",
+        ),
+    ],
+)
+def test_config_rejects_invalid_data_phases(phases, message):
+    cfg = load_config("configs/matgpt_mini_8m.yaml")
+    cfg["dataset"]["training_splits"] = {"main": "main", "cooldown": "cooldown"}
+    cfg["training"]["max_tokens"] = 1024
+    cfg["training"]["data_phases"] = phases
+
+    with pytest.raises(ValueError, match=message):
         validate_config(cfg)
 
 

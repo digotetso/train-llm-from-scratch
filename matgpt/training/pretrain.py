@@ -14,7 +14,7 @@ import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import torch
 
@@ -105,6 +105,7 @@ def validate_checkpoint_compatibility(payload: dict[str, Any], expected_extra: d
 def validate_complete_resume_checkpoint(
     payload: dict[str, Any],
     device: torch.device,
+    required_training_splits: tuple[str, ...] = ("train",),
 ) -> None:
     """Fail before restoration when a checkpoint cannot reproduce training state."""
     missing = []
@@ -149,7 +150,7 @@ def validate_complete_resume_checkpoint(
         if not isinstance(dataset_rng_state, dict):
             missing.append("state.dataset_rng_state")
         else:
-            for split in ("train", "validation"):
+            for split in (*required_training_splits, "validation"):
                 if split not in dataset_rng_state:
                     missing.append(f"state.dataset_rng_state.{split}")
                 else:
@@ -227,16 +228,20 @@ def validate_complete_resume_checkpoint(
 
 def _checkpoint_state(
     state: dict[str, Any],
-    train_dataset: PackedTokenDataset,
+    train_dataset: PackedTokenDataset | Mapping[str, PackedTokenDataset],
     val_dataset: PackedTokenDataset,
 ) -> dict[str, Any]:
     checkpoint_state = dict(state)
 
+    if isinstance(train_dataset, Mapping):
+        training_rng_state = {
+            split: dataset.get_rng_state()
+            for split, dataset in train_dataset.items()
+        }
+    else:
+        training_rng_state = {"train": train_dataset.get_rng_state()}
     checkpoint_state["dataset_rng_state"] = {
-        # Save random sampling progress for training data.
-        "train": train_dataset.get_rng_state(),
-
-        # Save random sampling progress for validation data.
+        **training_rng_state,
         "validation": val_dataset.get_rng_state(),
     }
     return checkpoint_state
@@ -244,14 +249,37 @@ def _checkpoint_state(
 
 def _restore_dataset_rng_state(
     checkpoint_state: dict[str, Any],
-    train_dataset: PackedTokenDataset,
+    train_dataset: PackedTokenDataset | Mapping[str, PackedTokenDataset],
     val_dataset: PackedTokenDataset,
 ) -> None:
     dataset_rng_state = checkpoint_state.get("dataset_rng_state") or {}
-    if "train" in dataset_rng_state:
+    if isinstance(train_dataset, Mapping):
+        for split, dataset in train_dataset.items():
+            if split in dataset_rng_state:
+                dataset.set_rng_state(dataset_rng_state[split])
+    elif "train" in dataset_rng_state:
         train_dataset.set_rng_state(dataset_rng_state["train"])
     if "validation" in dataset_rng_state:
         val_dataset.set_rng_state(dataset_rng_state["validation"])
+
+
+def training_split_for_tokens(cfg: Mapping[str, Any], tokens_processed: int) -> str:
+    """Select the configured data split at an exact processed-token boundary."""
+
+    phases = cfg["training"].get("data_phases")
+    if not phases:
+        return str(cfg["dataset"]["train_split"])
+    for phase in phases:
+        if tokens_processed < int(phase["until_tokens"]):
+            return str(phase["split"])
+    return str(phases[-1]["split"])
+
+
+def _training_split_names(cfg: Mapping[str, Any]) -> tuple[str, ...]:
+    phases = cfg["training"].get("data_phases")
+    if not phases:
+        return (str(cfg["dataset"]["train_split"]),)
+    return tuple(dict.fromkeys(str(phase["split"]) for phase in phases))
 
 
 def run_pretraining(
@@ -292,11 +320,15 @@ def run_pretraining(
     tokenizer_metadata = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])
     eos_id = tokenizer.token_to_id("<|eos|>")
 
-    train_dataset = PackedTokenDataset.from_metadata(
-        metadata_path_for_split(cfg["sharding"]["output_dir"], cfg["dataset"]["train_split"]),
-        context_length=cfg["model"]["context_length"],
-        seed=cfg["run"]["seed"],
-    )
+    training_splits = _training_split_names(cfg)
+    train_datasets = {
+        split: PackedTokenDataset.from_metadata(
+            metadata_path_for_split(cfg["sharding"]["output_dir"], split),
+            context_length=cfg["model"]["context_length"],
+            seed=cfg["run"]["seed"] + index,
+        )
+        for index, split in enumerate(training_splits)
+    }
     val_dataset = PackedTokenDataset.from_metadata(
         metadata_path_for_split(cfg["sharding"]["output_dir"], effective_validation_split(cfg["dataset"])),
         context_length=cfg["model"]["context_length"],
@@ -319,7 +351,11 @@ def run_pretraining(
     payload = None
     if resume_from is not None:
         payload = load_checkpoint(resume_from, map_location="cpu")
-        validate_complete_resume_checkpoint(payload, device)
+        validate_complete_resume_checkpoint(
+            payload,
+            device,
+            required_training_splits=training_splits,
+        )
         if not cfg["training"].get("allow_artifact_mismatch", False):
             validate_checkpoint_compatibility(payload, extra)
     validate_run_artifacts(run_dir, cfg, extra)
@@ -331,7 +367,7 @@ def run_pretraining(
             scaler=scaler,
             restore_rng=True,
         )
-        _restore_dataset_rng_state(payload["state"], train_dataset, val_dataset)
+        _restore_dataset_rng_state(payload["state"], train_datasets, val_dataset)
         state.update({key: value for key, value in payload["state"].items() if key != "dataset_rng_state"})
 
     state.setdefault("attempted_steps", state["global_step"])
@@ -399,6 +435,10 @@ def run_pretraining(
             state["global_step"] < schedule.stop_step
             and state["tokens_processed"] < cfg["training"]["max_tokens"]
         ):
+            active_training_split = training_split_for_tokens(
+                cfg, state["tokens_processed"]
+            )
+            train_dataset = train_datasets[active_training_split]
             # Put model in training mode.
             # train_model.train()
 
@@ -571,7 +611,7 @@ def run_pretraining(
                             model,
                             optimizer,
                             scaler,
-                            _checkpoint_state(state, train_dataset, val_dataset),
+                            _checkpoint_state(state, train_datasets, val_dataset),
                             cfg,
                             extra,
                         )
@@ -608,7 +648,7 @@ def run_pretraining(
                     model,
                     optimizer,
                     scaler,
-                    _checkpoint_state(state, train_dataset, val_dataset),
+                    _checkpoint_state(state, train_datasets, val_dataset),
                     cfg,
                     extra,
                 )
@@ -618,7 +658,7 @@ def run_pretraining(
                         model,
                         optimizer,
                         scaler,
-                        _checkpoint_state(state, train_dataset, val_dataset),
+                        _checkpoint_state(state, train_datasets, val_dataset),
                         cfg,
                         extra,
                     )
@@ -628,7 +668,7 @@ def run_pretraining(
             model,
             optimizer,
             scaler,
-            _checkpoint_state(state, train_dataset, val_dataset),
+            _checkpoint_state(state, train_datasets, val_dataset),
             cfg,
             extra,
         )

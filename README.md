@@ -74,6 +74,24 @@ evaluations, `run/resume_verification.json`, samples, and
 
 For W&B logging, set `ENABLE_WANDB = True` in the notebook. The YAML configs keep W&B disabled by default so local runs do not require an account.
 
+## Telco 300M Training Track
+
+The dedicated [Telco 300M Colab notebook](notebooks/train_matgpt_telco_300m_colab.ipynb)
+and [operator runbook](docs/runbooks/colab-telco-300m.md) implement the guarded
+from-scratch `306,226,176`-parameter English + telecom track. It uses an
+immutable source registry, separates pretraining/post-training/RAG/evaluation
+roles, plans a 10B-token main phase plus 2B-token cooldown, audits actual
+tokenizer quotas before sharding, and isolates Open Telco Lite/Full from
+training.
+
+Start with the notebook defaults (`RUN_STAGE = "prepare_data"`,
+`DATA_PLAN = "pilot"`). The 20M-token pilot, resume check, evidence review, full
+data authorization, and full training authorization are separate manual gates.
+Evaluation creates 50 blinded LLM reviews per checkpoint for this Codex task;
+human review remains optional. The runbook includes data-rights cautions,
+storage sizing, throughput-based time estimates, exact Drive paths, resume, and
+rollback instructions.
+
 ## Operator Semantics And Gates
 
 The 8M config pins `roneneldan/TinyStories` to commit `f54c09fd23315a6f9c86f9dc80f725de7d8f9c64`. The byte-level tokenizer starts with the complete byte alphabet; configuration rejects a vocabulary that cannot hold that alphabet and the configured special tokens.

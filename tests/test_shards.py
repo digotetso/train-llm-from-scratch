@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from matgpt.data.shard import tokenize_jsonl_to_shards
+from matgpt.data.shard import tokenize_jsonl_to_shards, tokenize_splits_from_config
 from matgpt.tokenizer.io import load_tokenizer
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
 
@@ -48,3 +48,46 @@ def test_tokenize_jsonl_to_uint16_shards_with_eos(tmp_path: Path):
     assert all_tokens.count(eos_id) == 2
     assert len(tokens) <= 8
     assert len(metadata["shards"][0]["sha256"]) == 64
+
+
+def test_tokenize_config_supports_named_training_phase_splits(tmp_path: Path):
+    normalized = tmp_path / "normalized"
+    normalized.mkdir()
+    for split, text in {
+        "main": "Main phase text.",
+        "cooldown": "Cooldown phase text.",
+        "validation": "Held-out validation text.",
+    }.items():
+        (normalized / f"{split}.jsonl").write_text(
+            json.dumps({"text": text}) + "\n",
+            encoding="utf-8",
+        )
+    tokenizer_dir = tmp_path / "tokenizer"
+    train_tokenizer_from_jsonl(
+        [normalized / "main.jsonl", normalized / "cooldown.jsonl"],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    cfg = {
+        "dataset": {
+            "train_split": "main",
+            "validation_split": "validation",
+            "training_splits": {"main": "main", "cooldown": "cooldown"},
+            "normalized_dir": str(normalized),
+        },
+        "tokenizer": {"output_dir": str(tokenizer_dir)},
+        "sharding": {
+            "output_dir": str(tmp_path / "shards"),
+            "shard_size_tokens": 8,
+            "dtype": "uint16",
+            "append_eos": True,
+        },
+    }
+
+    metadata = tokenize_splits_from_config(cfg)
+
+    assert set(metadata["splits"]) == {"main", "cooldown", "validation"}
+    for split in metadata["splits"]:
+        assert (tmp_path / "shards" / f"{split}_metadata.json").exists()

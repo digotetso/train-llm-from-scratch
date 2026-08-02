@@ -1,0 +1,154 @@
+version: 1
+
+sources:
+  - id: common_pile_general
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: common-pile-general
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files:
+      - arxiv_abstracts/*.jsonl.gz
+      - doab/*.jsonl.gz
+      - libretexts/*.jsonl.gz
+      - oercommons/*.jsonl.gz
+      - peS2o/*.jsonl.gz
+      - pre_1929_books/*.jsonl.gz
+      - pressbooks/*.jsonl.gz
+      - project_gutenberg/*.jsonl.gz
+      - public_domain_review/*.jsonl.gz
+      - pubmed/*.jsonl.gz
+      - stackexchange/*.jsonl.gz
+      - wikimedia/*.jsonl.gz
+    buckets: []
+
+  - id: telco_common_corpus
+    hf_name: GSMA/Telco-Common-Corpus
+    hf_config: null
+    split: train
+    revision: c590e4e6224d2cd50cc9403537cff7656d1535ea
+    role: pretrain_telecom
+    license: document-level-open-license
+    license_review: required
+    text_field: text
+    document_id_field: identifier
+    collection: null
+    collection_field: collection
+    license_field: license
+    token_count_field: token_count
+    data_files: []
+    buckets:
+      - id: three_gpp
+        collections:
+          - 3GPP-TSG
+        weight: 0.35
+      - id: rfc
+        collections:
+          - IETF-RFCs
+          - IETF-Drafts
+          - IETF-Proceedings
+          - IETF-Mail-Daily
+        weight: 0.30
+      - id: research
+        collections:
+          - IEEE-Access
+          - OpenAlex
+        weight: 0.25
+      - id: patents
+        collections:
+          - USPTO
+          - EPO
+        weight: 0.08
+      - id: semantic
+        collections:
+          - Wikipedia-Telecom
+          - Wikidata-Telecom
+        weight: 0.02
+
+  - id: common_pile_structured
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_structured
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: common-pile-structured
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files:
+      - github_archive/*.jsonl.gz
+      - python_enhancement_proposals/*.jsonl.gz
+      - stackv2_edu/*.jsonl.gz
+    buckets: []
+
+  - id: smol_smoltalk
+    hf_name: HuggingFaceTB/smol-smoltalk
+    hf_config: all
+    split: train
+    revision: f73fe857d519ff6ac5af2ea67c4d3834da7b8bcc
+    role: posttrain
+    license: Apache-2.0
+    license_review: required
+    text_field: messages
+
+  - id: otel_llm
+    hf_name: farbodtavakkoli/OTel-LLM
+    hf_config: null
+    split: train
+    revision: c022a1b0b9a9046831a3b4e78d165e5e46ba9dc3
+    role: posttrain
+    license: Apache-2.0
+    license_review: required
+    text_field: completion
+
+  - id: otel_safety
+    hf_name: farbodtavakkoli/OTel-Safety
+    hf_config: null
+    split: train
+    revision: 7ddcfb288c233b9f42c0ba01116338f3c816ba4c
+    role: posttrain
+    license: Apache-2.0
+    license_review: required
+    text_field: completion
+
+  - id: gsma_3gpp_mirror
+    hf_name: GSMA/3GPP
+    hf_config: null
+    split: files
+    revision: a056f6018a7e8e67052aa68a702e272d0ae95d75
+    role: rag_only
+    license: 3GPP-organizational-partner-terms
+    license_review: required
+    text_field: null
+
+  - id: open_telco_lite
+    hf_name: GSMA/ot-lite
+    hf_config: null
+    split: test
+    revision: 1c0f2eac3ad0baa29704b147a95fea283b2906c7
+    role: evaluation_only
+    license: MIT
+    license_review: cleared
+    text_field: question
+
+  - id: open_telco_full
+    hf_name: GSMA/ot-full
+    hf_config: null
+    split: test
+    revision: 6319806f04783eafe04d9facf755d379c66b7664
+    role: evaluation_only
+    license: MIT
+    license_review: cleared
+    text_field: question
