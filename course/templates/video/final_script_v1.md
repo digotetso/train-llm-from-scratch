@@ -2,7 +2,7 @@
 
 *Script 4*
 
-**Subtitle:** How character numbers, UTF-8 bytes, and simple cleanup prepare written text for later AI work
+**Subtitle:** How software identifies characters, stores text, and applies consistent cleanup before later AI work
 
 ## 00:00 The Big Question and Today’s First Step
 
@@ -12,9 +12,9 @@ That familiar experience gives us the larger question for this course:
 
 > **How can AI learn from written examples?**
 
-We cannot answer that question by jumping straight from the text box to learning. First, we need to understand what software receives and what must happen to the written text.
+We cannot jump from the text box straight to learning. First, we need to understand what software receives.
 
-Software needs to tell written characters apart. It needs a form that can be stored or sent. It may also need to apply the same chosen cleanup steps to every example.
+Software must tell characters apart and represent text in a form that can be stored or sent. We may also choose to apply the same cleanup steps to every example.
 
 So today we will answer one smaller question:
 
@@ -23,78 +23,58 @@ So today we will answer one smaller question:
 By the end, you will be able to explain:
 
 1. how a fixed number can identify each example character;
-2. how the same text becomes a sequence of small storage numbers;
+2. how the same text becomes a sequence of small storage units;
 3. how a short function applies fixed cleanup steps to an example string; and
-4. why character numbers, storage numbers, and prepared text have different jobs.
+4. why character numbers, storage sequences, and prepared text serve different purposes.
 
-We will check each job by hand, then test it with two Python files.
+We will reason through each question by hand, then test our explanations with two Python files.
 
-## 01:00 Where This Video Fits
+## 01:20 Three Foundations We Need First
 
-These three jobs begin a longer route. Each supplies something a later step needs.
+Before we study how AI learns from written text, we need three foundations.
 
-Text is split into reusable pieces. Each piece is called a **token**.
+We need a dependable way to identify characters, a representation that can be stored or sent, and explicit choices about which source differences to preserve or change.
 
-Each token receives a number. That number is called a **token ID**.
+Each foundation answers a different question about the same text. They are related, but they do not form one fixed sequence. Different programs use them in different ways.
 
-That token ID is linked to an **embedding**—a learned list of numbers used to represent useful features of the token during later processing.
+Later lessons will show how prepared text becomes input for AI training. We will explain each new mechanism when we reach it.
 
-An embedding is not a dictionary definition of the token.
-
-These are names for later steps. We have not explained how they work yet, so we will leave them for later and focus on the three jobs in front of us.
-
-Now compress the route:
+For today, keep these three questions in view:
 
 ```text
 Written text
--> identify each example character with a number
--> represent the text as an ordered sequence of small storage units
--> apply fixed cleanup steps
--> prepared text
--> later text and AI-learning steps [closed]
+├── Which characters are present?
+├── How can the text be stored or sent?
+└── Which source differences should we preserve or change?
 ```
 
-## 03:00 Three Jobs Before Text Can Be Split into Pieces
+We will answer them one at a time. Each answer becomes a building block we can reuse.
 
-### Job 1: Identify an example character
+## 02:20 Three Questions About Written Text
 
-Software needs a dependable answer when it sees `C`, `a`, or `🐱`:
+Let’s make those questions concrete.
+
+When software sees `C`, `a`, or `🐱`, it needs a dependable answer:
 
 > Which written character is this?
 
-A fixed character number identifies it without explaining what it means in a sentence.
+A fixed character number answers that first question without explaining what the character means in a sentence.
 
-### Job 2: Represent the text for storage or transmission
+Once we understand character identity, our next teaching question appears: how can a file store or send the text? A file needs an ordered sequence of small units.
 
-Character identity does not tell us how a file stores the text. Storage needs an ordered sequence of small units.
+We must also decide which spaces, line endings, and alternate character forms to preserve or change.
 
-### Job 3: Apply explicit cleanup steps
+The three answers serve different purposes. We begin with character identity because it creates the storage question.
 
-Written text can arrive with extra spaces, empty lines, different line-ending marks, or special-looking character forms. We must choose which differences to keep and which to change.
-
-The jobs connect in this order:
-
-```text
-character number -> identifies an example character
-storage sequence -> stores or sends the text
-fixed cleanup steps -> produce the chosen prepared text
-```
-
-These numbers are not interchangeable.
-
-The character number becomes our first building block. Then we can ask how the same character is stored.
-
-## 04:20 Identifying Characters with Code-Point Numbers
+## 03:10 How Can Software Identify a Character?
 
 Look at `A`. You and I recognize it immediately, but software still needs a dependable way to tell it apart from `B`, `a`, or `🐱`.
 
-Before we name the rule, make a prediction: does Python invent a new number for `A`, or follow a fixed number?
+Before we name the rule, make a prediction: does Python invent a new number for `A`, or follow a number fixed by an agreed standard?
 
-[On screen: If Python is not installed, visit https://www.python.org/downloads/]
+Unicode is a character-numbering standard. In our examples, each character has a fixed number called a **code point**.
 
-Unicode is a character-numbering standard. For each single character in today’s examples, it assigns a code-point number.
-
-Python already includes a function named `ord`. It reports the code-point number for one character.
+Python already has a function that reports the code point for a one-character string. It is named `ord`.
 
 ```python
 ord("A")
@@ -106,7 +86,7 @@ Python reports:
 65
 ```
 
-The number `65` identifies `A`. It does not explain what `A` means.
+The number `65` identifies `A` in Unicode. It does not explain what `A` means.
 
 `A` could be a grade, a musical note, or part of a name. Its code-point number stays the same.
 
@@ -124,17 +104,17 @@ So the three code-point numbers are:
 [67, 97, 116]
 ```
 
-Some visible symbols are built from several code points. We will leave that case for a later lesson.
+`ord` works with one code point at a time. Some visible symbols contain several code points, but today’s examples each use one. We will return to multi-code-point text later.
 
 We can now identify the example characters. But identification creates the next question: how can software store or send those characters?
 
-## 05:50 Representing Text with UTF-8 Bytes
+## 04:45 How Can Software Store or Send Text?
 
-Before we name the storage method, predict: will every single character always need exactly one small storage unit?
+Before we name the storage method, predict: will every character in our examples fit into exactly one small storage unit?
 
-A byte is a small unit of storage. Python displays each byte as a non-negative number from `0` through `255`.
+Software stores data in small units called **bytes**. When we turn Python’s byte sequence into a list, each byte appears as a non-negative number from `0` through `255`.
 
-UTF-8 turns text into an ordered sequence of bytes that software can store or send.
+To turn text into an ordered byte sequence, we will use a standard called **UTF-8**.
 
 For `Cat`, the code-point numbers are:
 
@@ -142,19 +122,21 @@ For `Cat`, the code-point numbers are:
 [67, 97, 116]
 ```
 
+You already know the character numbers for `Cat`. Before we look at its bytes, do you expect the values to match those character numbers or differ from them?
+
 Its UTF-8 byte numbers are also:
 
 ```text
 [67, 97, 116]
 ```
 
-The match can make the lists look equivalent. Let’s test that idea with `🐱`.
-
-The emoji has this code-point number:
+The matching lists may tempt us to think they are always equivalent. In this example, the emoji `🐱` uses one code point:
 
 ```text
 [128049]
 ```
+
+Before we check its bytes, make a prediction: will it need one byte or several?
 
 Its UTF-8 representation has four byte numbers:
 
@@ -164,33 +146,33 @@ Its UTF-8 representation has four byte numbers:
 
 The four byte numbers work together, in order, to store or send `🐱`.
 
-For `Cat`, the code-point numbers happen to match the UTF-8 byte numbers. The cat emoji proves that this match is not a rule.
+For `Cat`, the code-point numbers happen to match the UTF-8 byte numbers. The cat emoji shows that this match is not a general rule.
 
 A code-point number identifies an example character. A UTF-8 byte sequence represents the text for storage or transmission.
 
-Now we can identify the characters and represent the text as bytes. Yet the same visible text can still arrive with extra spaces, empty lines, or special character forms. That creates our preparation question.
+We can now identify characters and represent text as bytes. But incoming text can still contain extra spaces, empty lines, different line-ending marks, or alternate character forms. That creates our preparation question.
 
-## 07:00 Preparing Text with Explicit Cleanup Steps
+## 06:45 How Can We Prepare Text Consistently?
 
-[On screen: a short text sample with extra spaces, mixed line endings, `①`, and `ﬀ`]
+[On screen: a short text sample with extra spaces, two consecutive line endings, `①`, and `ﬀ`]
 
-Look at the sample. It has spaces around the lines, an empty line, a circled digit, and a joined `ﬀ` symbol.
+Look at the sample. It has spaces around the lines, an empty line, a circled digit, and one joined symbol, `ﬀ`, that looks like two lowercase f’s.
 
-Should every difference remain? There is no universal answer. We first choose what the next use of the text requires.
+Should every difference remain? There is no universal answer. We first decide what the next use of the text requires.
 
-Suppose we want two non-empty lines with no surrounding whitespace. We also choose to replace the two special-looking forms with simpler forms.
+Suppose we want two non-empty lines, with surrounding whitespace removed from each line.
 
-We can choose one fixed cleanup step, such as removing the extra spaces around a line.
+When several chosen cleanup steps are applied together, we call the whole process **text preparation**.
 
-Each cleanup step follows a fixed choice. The complete sequence of steps is called **text preparation**.
+The circled digit and the joined symbol require another choice. Should our prepared text keep `①` distinct from `1`, or map both forms to one consistent result?
 
-Now consider the circled digit. Before we name the operation, predict whether our chosen cleanup leaves it alone or changes it.
+For this example, we choose one consistent result. Before we reveal it, what do you think `①` will become?
 
 First, look only at this change: `①` becomes `1`.
 
-One possible cleanup step replaces certain special-looking characters with simpler equivalents. Changing text into a chosen standard form is called **normalization**.
+When a rule maps selected alternate character forms to a consistent Unicode representation, that step is called **normalization**.
 
-**NFKC** is the name of one Unicode normalization rule. In these examples, it changes `①` to `1` and `ﬀ` to `ff`.
+**NFKC** is the name of one Unicode normalization form. In our examples, it changes `①` to `1` and `ﬀ` to `ff`.
 
 Trace both changes:
 
@@ -202,19 +184,19 @@ length 1 -> 1
 length 1 -> 2
 ```
 
-The first change keeps the same length. The second turns one character into two, so the length changes.
+The first keeps a Python string length of `1`. The second changes the length from `1` to `2`.
 
-Normalization is one preparation step. It is not the whole preparation job.
+Normalization is one text-preparation step. It is not the whole preparation process.
 
-These cleanup steps may change or remove details from the original text.
+NFKC can remove distinctions that matter in some text. That is why NFKC is a chosen rule for this example, not a universal definition of clean text.
 
-We have named the larger job and one step inside it. Now we need a complete example that shows every chosen step from source text to prepared text.
+We now understand one character-normalization step. Let’s combine it with spacing and line cleanup, then trace the complete result.
 
-## 08:15 Build a Self-Contained Text-Preparation Example
+## 08:50 Build a Complete Text-Preparation Example
 
 Our source string contains extra spaces and two consecutive line endings. Those marks are easy to miss when a terminal prints the string normally.
 
-`repr` makes hidden marks such as `\r\n` and surrounding spaces visible in the terminal.
+Python can make hidden marks such as `\r\n` and surrounding spaces visible in the terminal. The function that gives us this view is `repr`.
 
 Create a file named `text_preparation.py` with this complete example:
 
@@ -235,31 +217,37 @@ print("Source text:", repr(source))
 print("Prepared text:", repr(prepare_text(source)))
 ```
 
+`import unicodedata` gives us Python’s standard Unicode tools, including the normalization function used below.
+
 Follow the function from top to bottom.
 
-The first line inside the function applies the NFKC change we just traced. Next, `splitlines` splits the string wherever Python recognizes a common line-ending mark.
+The first line inside the function applies the NFKC changes we just traced.
 
-For each line, `strip` removes surrounding whitespace. The next line keeps only lines that still contain something.
+The next line separates the string at the line boundaries Python recognizes. The method that performs this step is `splitlines`.
 
-Finally, `join` puts the remaining lines back together. It places one `\n` between them.
+For every line, the code removes surrounding whitespace with `strip`. The following line keeps only the lines that still contain text.
+
+The final line rebuilds the text with one `\n` between the remaining lines. The method that performs this step is `join`.
 
 The complete trace is:
 
 ```text
 source string
 -> NFKC normalization
--> split into lines using common line-ending marks
+-> split at recognized line boundaries
 -> remove surrounding whitespace from each line
 -> remove empty lines
 -> join the remaining lines with \n
 -> prepared string
 ```
 
-These are the cleanup choices in this example. Code, poetry, or other text may need different choices.
+These steps define preparation for this example. Code, poetry, or other text may need different choices.
 
 Now let’s predict, run both files, and compare the results.
 
-## 10:45 Predict, Run, and Explain
+## 10:50 Predict, Run, and Explain
+
+[On screen: If Python is not installed, visit https://www.python.org/downloads/]
 
 Create a file named `character_representation.py`, then place this complete example inside it:
 
@@ -299,11 +287,11 @@ Code-point numbers: [128049]
 UTF-8 byte numbers: [240, 159, 144, 177]
 ```
 
-Trace the first half. Python visits `C`, `a`, and `t` in order. `ord` reports the code-point number for each character, while `encode` creates the ordered UTF-8 byte sequence.
+First, trace the `Cat` output. Python visits `C`, `a`, and `t` in order. `ord` reports each code-point number. `text.encode("utf-8")` creates the ordered byte sequence, and `list(...)` exposes each byte as a number.
 
 Then trace the emoji. One code-point number identifies it in this example, while four byte numbers represent it for storage or transmission.
 
-Now replace the first `Cat` with `A`. Before you run it, predict the two lines:
+Now change the first assignment, `text = "Cat"`, to `text = "A"`. Before you run it, predict the two lines:
 
 ```text
 Code-point numbers: [65]
@@ -314,7 +302,7 @@ Run the same command and compare the result with your prediction. Then restore `
 
 Now turn to `text_preparation.py`.
 
-Before we run the second file, predict which parts of the source text will change.
+Before we run the second file, write the exact prepared string you expect. Which characters, spaces, and lines will remain?
 
 Run:
 
@@ -331,74 +319,54 @@ Prepared text: '1 cat ff\nsecond line'
 
 Follow the source through the function. NFKC changes `①` and `ﬀ`. Then `splitlines` creates three lines, including the empty middle line.
 
-`strip` removes the surrounding spaces. The filter removes the empty line. Finally, `join` rebuilds the two remaining lines with one `\n`.
+`strip` removes the surrounding whitespace. The next list keeps only the lines that still contain text. Finally, `join` rebuilds the two remaining lines with one `\n`.
 
-Now replace `①` with `Cat`. Before you run the file again, predict which parts of the output will change and which cleanup steps will behave the same way.
+Now replace `①` with `Cat`. Before you run the file again, predict the complete new prepared string. Then identify which cleanup steps produce the same result as before.
 
 Run, compare, and explain the result. Then restore `①`.
 
-We have now completed both loops: predict, run, observe, trace, change one input, and predict again.
+You have now used the same reasoning pattern twice: predict the result, trace each operation, and check whether the explanation still works after one input changes.
 
-## 13:20 Return to the Whole Route
+## 13:30 What These Foundations Let Us Explain
 
-We began with one larger question:
+We began with this question:
 
 > **How can AI learn from written examples?**
 
-Today we completed the earlier part of that route. Here is the compact summary:
+Today we built three foundations for written input. The learning mechanism comes later.
+
+Here is the idea to carry forward:
 
 ```text
-code-point number -> identifies an example character
-UTF-8 byte sequence -> stores or sends the text
-fixed cleanup step -> changes one chosen text feature
-text preparation -> applies the chosen cleanup steps in order
+character -> code-point number -> identity
+text + UTF-8 -> byte sequence -> storage or transmission
+source text + chosen cleanup steps -> prepared text
 ```
 
-Now test that summary on every example.
+Before reading the results, answer three questions. What purpose does each `Cat` list serve? What do the two `🐱` lists tell us? What will the preparation steps change?
 
-For `Cat`, predict the three code-point numbers and the three UTF-8 byte numbers. The lists happen to match:
-
-```text
-[67, 97, 116]
-```
-
-The matching values do not make the jobs identical. One list identifies the example characters. The other is the ordered storage sequence.
-
-For `🐱`, predict whether you need one code-point number or several. Then predict whether its UTF-8 form needs one byte or several.
-
-Our observed result was:
+Now compare your answers with the evidence.
 
 ```text
+Cat
+code-point numbers -> [67, 97, 116]
+UTF-8 bytes       -> [67, 97, 116]
+
+🐱
 code-point number -> [128049]
-UTF-8 bytes -> [240, 159, 144, 177]
-```
+UTF-8 bytes       -> [240, 159, 144, 177]
 
-One number identifies the emoji in this example. Four bytes work together to store or send it.
-
-Now move to the cleanup example.
-
-Under NFKC, predict both changes:
-
-```text
-① -> ?
-ﬀ -> ?
-```
-
-The rule gives:
-
-```text
+NFKC
 ① -> 1
 ﬀ -> ff
 ```
 
-The first string keeps its length. The second changes from length `1` to length `2`.
+For `Cat`, one list identifies characters while the other represents UTF-8 bytes. For `🐱`, one code point identifies the character while four bytes represent it in UTF-8.
 
-Finally, imagine the same text arrives with mixed line endings. Predict what `prepare_text` does with those marks, the surrounding spaces, and the empty line.
+NFKC keeps `①` at length `1`, but changes `ﬀ` from length `1` to `2`. The other steps remove surrounding whitespace and the empty line, then rebuild two lines.
 
-`splitlines` separates the lines. The remaining steps remove surrounding whitespace, remove the empty line, and join the two kept lines with `\n`.
+The pattern is now clear: character numbers identify, byte sequences store or send, individual cleanup steps make chosen changes, and text preparation applies those steps together.
 
-Notice what you can now distinguish. A character number identifies. A byte sequence stores or sends. A cleanup step changes one selected feature. Text preparation combines the chosen steps.
+These foundations give later lessons a traceable starting point. They do not yet explain meaning or learning.
 
-Those are four reusable building blocks, not four labels to memorize.
-
-Stable character numbers let software decide which characters belong in a collection. Video 2 asks how to build that collection dependably.
+Stable character numbers let software decide which characters belong in a collection. Video 2 will use that building block to ask how we can construct the collection dependably.

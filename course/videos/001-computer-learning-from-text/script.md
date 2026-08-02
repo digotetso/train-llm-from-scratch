@@ -9,7 +9,7 @@ When you read `cat`, you may picture an animal or remember a pet. That meaning c
 But here's the puzzle. On your computer, the text box shows words, while the model underneath works by calculating with numbers. So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
 
 By the end, you'll explain the difference with three letters, three numbers, and a tiny Python file. To get there, let's start with a smaller question: how can a number identify something without containing its meaning?
-
+ 
 ## 00:45 Analogy
 
 **Teaching analogy:** Imagine a library where every book has a number. It helps the librarian find the right book, while the story stays inside. That number is an **identifier**: it tells us which book, not what the story means.

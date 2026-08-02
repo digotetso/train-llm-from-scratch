@@ -9,6 +9,7 @@ SCRIPT_PATH = ROOT / "course/templates/video/final_script_v1.md"
 CHARACTER_PATH = ROOT / "course/templates/video/character_representation.py"
 PREPARATION_PATH = ROOT / "course/templates/video/text_preparation.py"
 OLD_LAB_PATH = ROOT / "course/templates/video/final_script_v1_lab.py"
+EXPECTED_VIDEO_DURATION_SECONDS = 15 * 60
 
 EXPECTED_CHARACTER_SOURCE = '''text = "Cat"
 print("Text:", text)
@@ -50,14 +51,14 @@ Prepared text: '1 cat ff\nsecond line'"""
 
 EXPECTED_HEADINGS = [
     "## 00:00 The Big Question and Today’s First Step",
-    "## 01:00 Where This Video Fits",
-    "## 03:00 Three Jobs Before Text Can Be Split into Pieces",
-    "## 04:20 Identifying Characters with Code-Point Numbers",
-    "## 05:50 Representing Text with UTF-8 Bytes",
-    "## 07:00 Preparing Text with Explicit Cleanup Steps",
-    "## 08:15 Build a Self-Contained Text-Preparation Example",
-    "## 10:45 Predict, Run, and Explain",
-    "## 13:20 Return to the Whole Route",
+    "## 01:20 Three Foundations We Need First",
+    "## 02:20 Three Questions About Written Text",
+    "## 03:10 How Can Software Identify a Character?",
+    "## 04:45 How Can Software Store or Send Text?",
+    "## 06:45 How Can We Prepare Text Consistently?",
+    "## 08:50 Build a Complete Text-Preparation Example",
+    "## 10:50 Predict, Run, and Explain",
+    "## 13:30 What These Foundations Let Us Explain",
 ]
 
 # Intentionally scan the complete learner artifact, including metadata and
@@ -65,7 +66,10 @@ EXPECTED_HEADINGS = [
 PROHIBITED_SCRIPT_CONTENT = re.compile(
     r"\b(repository|project|tokenization|tokenizer|signposts?|unsigned|"
     r"integers?|polic(?:y|ies)|ASCII|models?|parameters?|divide|divided|"
-    r"dividing)\b|shared system|preparation policy|normalize_text|"
+    r"dividing|jobs?|tokens?|embeddings?)\b|"
+    r"(?:longer|whole) (?:path|route)|part of (?:that|the) (?:path|route)|"
+    r"compress the (?:path|route)|"
+    r"shared system|preparation policy|normalize_text|"
     r"_CONTROL_RE|_BLANK_LINES_RE",
     re.IGNORECASE,
 )
@@ -169,6 +173,18 @@ def test_preparation_example_is_exact_and_runnable():
     )
     assert run_example(PREPARATION_PATH) == EXPECTED_PREPARATION_OUTPUT + "\n"
 
+    namespace = {}
+    source = PREPARATION_PATH.read_text(encoding="utf-8")
+    exec(compile(source, str(PREPARATION_PATH), "exec"), namespace)
+    prepare_text = namespace["prepare_text"]
+    assert prepare_text("①") == "1"
+    assert prepare_text("ﬀ") == "ff"
+    assert prepare_text("Cat") == "Cat"
+    assert (
+        prepare_text("  Cat cat ﬀ  \r\n\r\n  second line  ")
+        == "Cat cat ff\nsecond line"
+    )
+
 
 def test_preparation_example_is_embedded_and_old_lab_is_removed():
     script = SCRIPT_PATH.read_text(encoding="utf-8")
@@ -184,9 +200,10 @@ def test_script_structure_vocabulary_and_voice():
         line for line in script.splitlines() if line.startswith("## ")
     ]
     assert headings == EXPECTED_HEADINGS
-    assert 2000 <= len(script.split()) <= 2250
+    assert 1650 <= len(spoken_text(script).split()) <= 1850
     assert not PROHIBITED_SCRIPT_CONTENT.search(script)
     assert "python course/" not in script
+    assert all(line == line.rstrip() for line in script.splitlines())
 
     long_sentences = [
         sentence
@@ -196,25 +213,59 @@ def test_script_structure_vocabulary_and_voice():
     assert not long_sentences
 
 
-def test_script_introduces_jobs_before_later_labels():
+def test_script_timing_allows_conversational_delivery():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+    matches = list(
+        re.finditer(
+            r"^## (?P<minutes>\d{2}):(?P<seconds>\d{2}) .+$",
+            script,
+            re.MULTILINE,
+        )
+    )
+    starts = [
+        int(match.group("minutes")) * 60 + int(match.group("seconds"))
+        for match in matches
+    ]
+    assert starts == sorted(starts)
+
+    boundaries = starts[1:] + [EXPECTED_VIDEO_DURATION_SECONDS]
+    for index, (match, start, end) in enumerate(
+        zip(matches, starts, boundaries, strict=True)
+    ):
+        body_start = match.end()
+        body_end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(script)
+        )
+        words = len(spoken_text(script[body_start:body_end]).split())
+        words_per_minute = words * 60 / (end - start)
+        assert 85 <= words_per_minute <= 145
+
+
+def test_script_builds_foundations_from_questions_before_terms():
     script = SCRIPT_PATH.read_text(encoding="utf-8")
     required = [
-        "Before we name the rule, make a prediction: does Python invent a new number for `A`, or follow a fixed number?",
-        "Unicode is a character-numbering standard. For each single character in today’s examples, it assigns a code-point number.",
-        "Before we name the storage method, predict: will every single character always need exactly one small storage unit?",
-        "A byte is a small unit of storage. Python displays each byte as a non-negative number from `0` through `255`.",
-        "UTF-8 turns text into an ordered sequence of bytes that software can store or send.",
-        "We can choose one fixed cleanup step, such as removing the extra spaces around a line.",
-        "Each cleanup step follows a fixed choice. The complete sequence of steps is called **text preparation**.",
+        "Before we study how AI learns from written text, we need three foundations.",
+        "Each foundation answers a different question about the same text.",
+        "They are related, but they do not form one fixed sequence.",
+        "Different programs use them in different ways.",
+        "For today, keep these three questions in view:",
+        "Which characters are present?",
+        "How can the text be stored or sent?",
+        "Which source differences should we preserve or change?",
+        "Before we name the rule, make a prediction: does Python invent a new number for `A`, or follow a number fixed by an agreed standard?",
+        "Unicode is a character-numbering standard. In our examples, each character has a fixed number called a **code point**.",
+        "Python already has a function that reports the code point for a one-character string. It is named `ord`.",
+        "Before we name the storage method, predict: will every character in our examples fit into exactly one small storage unit?",
+        "Software stores data in small units called **bytes**.",
+        "To turn text into an ordered byte sequence, we will use a standard called **UTF-8**.",
+        "Suppose we want two non-empty lines, with surrounding whitespace removed from each line.",
+        "When several chosen cleanup steps are applied together, we call the whole process **text preparation**.",
         "First, look only at this change: `①` becomes `1`.",
-        "Text is split into reusable pieces. Each piece is called a **token**.",
-        "Each token receives a number. That number is called a **token ID**.",
-        "That token ID is linked to an **embedding**—a learned list of numbers used to represent useful features of the token during later processing.",
-        "An embedding is not a dictionary definition of the token.",
-        "These are names for later steps. We have not explained how they work yet, so we will leave them for later and focus on the three jobs in front of us.",
-        "Changing text into a chosen standard form is called **normalization**.",
-        "**NFKC** is the name of one Unicode normalization rule.",
-        "`repr` makes hidden marks such as `\\r\\n` and surrounding spaces visible in the terminal.",
+        "When a rule maps selected alternate character forms to a consistent Unicode representation, that step is called **normalization**.",
+        "**NFKC** is the name of one Unicode normalization form.",
+        "Python can make hidden marks such as `\\r\\n` and surrounding spaces visible in the terminal. The function that gives us this view is `repr`.",
         "Open a terminal in the folder containing the two files.",
     ]
     for sentence in required:
@@ -225,42 +276,36 @@ def test_script_introduces_jobs_before_later_labels():
         spoken,
         "Before we name the rule, make a prediction",
         "Unicode is a character-numbering standard.",
-        "code-point number.",
+        "called a code point",
+        "It is named ord.",
     )
     assert_in_order(
         spoken,
         "Before we name the storage method, predict",
-        "A byte is a small unit of storage.",
-        "UTF-8 turns text into an ordered sequence of bytes",
+        "Software stores data in small units",
+        "called bytes.",
+        "a standard called UTF-8.",
     )
     assert_in_order(
         spoken,
-        "We can choose one fixed cleanup step",
-        "called text preparation.",
+        "with surrounding whitespace removed from each line.",
+        "call the whole process text preparation.",
     )
     assert_in_order(
         spoken,
         "First, look only at this change: ① becomes 1.",
-        "Changing text into a chosen standard form is called normalization.",
-        "NFKC is the name of one Unicode normalization rule.",
-    )
-    assert_in_order(
-        spoken,
-        "Text is split into reusable pieces.",
-        "Each piece is called a token.",
-        "Each token receives a number.",
-        "That number is called a token ID.",
-        "That token ID is linked to an embedding",
+        "that step is called normalization.",
+        "NFKC is the name of one Unicode normalization form.",
     )
     assert_in_order(
         script,
-        "**NFKC** is the name of one Unicode normalization rule.",
+        "**NFKC** is the name of one Unicode normalization form.",
         EXPECTED_PREPARATION_SOURCE,
         EXPECTED_PREPARATION_OUTPUT,
     )
     assert_in_order(
         script,
-        "`repr` makes hidden marks such as `\\r\\n`",
+        "The function that gives us this view is `repr`.",
         EXPECTED_PREPARATION_SOURCE,
         EXPECTED_PREPARATION_OUTPUT,
     )
@@ -275,8 +320,8 @@ def test_script_contains_transfer_cases_and_no_context_dependent_command():
         "restore `Cat`",
         "restore `①`",
         "https://www.python.org/downloads/",
-        "[On screen: a short text sample with extra spaces, mixed line endings, `①`, and `ﬀ`]",
-        "Python already includes a function named `ord`. It reports the code-point number for one character.",
+        "[On screen: a short text sample with extra spaces, two consecutive line endings, `①`, and `ﬀ`]",
+        "Python already has a function that reports the code point for a one-character string. It is named `ord`.",
         "① -> 1",
         "length 1 -> 1",
         "ﬀ -> ff",
@@ -286,19 +331,23 @@ def test_script_contains_transfer_cases_and_no_context_dependent_command():
 
     assert_in_order(
         script,
+        EXPECTED_CHARACTER_SOURCE,
         "Before we run the file, predict both lists for `Cat`.",
+        "```bash\npython character_representation.py\n```",
         f"```text\n{EXPECTED_CHARACTER_OUTPUT}\n```",
     )
     assert_in_order(
         script,
-        "Now replace the first `Cat` with `A`.",
+        'Now change the first assignment, `text = "Cat"`, to `text = "A"`.',
         "Code-point numbers: [65]",
         "UTF-8 byte numbers: [65]",
         "restore `Cat`",
     )
     assert_in_order(
         script,
-        "Before we run the second file, predict which parts of the source text will change.",
+        EXPECTED_PREPARATION_SOURCE,
+        "Before we run the second file, write the exact prepared string you expect.",
+        "```bash\npython text_preparation.py\n```",
         f"```text\n{EXPECTED_PREPARATION_OUTPUT}\n```",
         "replace `①` with `Cat`",
         "restore `①`",

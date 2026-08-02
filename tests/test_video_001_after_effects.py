@@ -10,6 +10,7 @@ AE_DIR = VIDEO_DIR / "after-effects"
 MANIFEST_PATH = AE_DIR / "figma-scenes.json"
 BUILDER_PATH = AE_DIR / "build-video-001.jsx"
 RENDER_SCRIPT_PATH = AE_DIR / "render-sections.sh"
+VALIDATION_IMPORT_PATH = AE_DIR / "scripts" / "import-full-lesson-validation.jsx"
 
 EXPECTED_SHOT_DURATIONS = [
     8, 10, 12, 15,
@@ -164,6 +165,24 @@ def test_builder_only_closes_its_own_generated_project_before_rebuild():
     assert "app.project.file.fsName === projectFile.fsName" in source
     assert "app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)" in source
     assert "Open a blank After Effects project before running this builder" in source
+
+
+def test_validation_import_never_renames_its_canonical_target_handle():
+    source = VALIDATION_IMPORT_PATH.read_text(encoding="utf-8")
+
+    assert "target.rename(" not in source
+    assert "var existingTarget = new File(EXPECTED_TARGET);" in source
+    assert "existingTarget.rename(backupName)" in source
+    assert "var failedTarget = new File(EXPECTED_TARGET);" in source
+    assert "failedTarget.rename(failedName)" in source
+
+
+def test_validation_import_success_alert_uses_real_line_breaks():
+    source = VALIDATION_IMPORT_PATH.read_text(encoding="utf-8")
+    alert_source = source[source.index("    alert("):]
+
+    assert r"\\n" not in alert_source
+    assert r"\n" in alert_source
 
 
 def test_section_renderer_fails_preflight_before_aerender_when_disk_is_low(tmp_path):
