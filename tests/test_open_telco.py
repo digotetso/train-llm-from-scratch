@@ -137,6 +137,54 @@ def test_materializer_streams_pinned_configs_and_promotes_atomically(tmp_path: P
         assert len(examples) == 3
 
 
+def test_materializer_skips_empty_questions_and_audits_source_indices(
+    tmp_path: Path,
+):
+    registry = load_source_registry(REGISTRY_PATH)
+    rows = [
+        {
+            "question": "Valid question zero?",
+            "choices": ["first", "second"],
+            "answer": 0,
+            "difficulty": "easy",
+        },
+        {
+            "question": "",
+            "choices": ["first", "second"],
+            "answer": 1,
+            "difficulty": "medium",
+        },
+        {
+            "question": "Valid question two?",
+            "choices": ["first", "second"],
+            "answer": 1,
+            "difficulty": "hard",
+        },
+    ]
+
+    output = tmp_path / "evaluations"
+    manifest = prepare_open_telco_evals(
+        registry=registry,
+        source_id="open_telco_full",
+        configs=("oranbench",),
+        output_dir=output,
+        dataset_loader=lambda *_args, **_kwargs: iter(rows),
+    )
+
+    stats = manifest["configs"]["oranbench"]
+    assert stats["source_examples"] == 3
+    assert stats["examples"] == 2
+    assert stats["skipped_examples"] == 1
+    assert stats["skipped_rows"] == [
+        {"source_index": 1, "reason": "missing_question"}
+    ]
+    examples = load_multiple_choice_examples(output / "oranbench.jsonl")
+    assert [example.id for example in examples] == [
+        "GSMA/ot-full/oranbench/0",
+        "GSMA/ot-full/oranbench/2",
+    ]
+
+
 def test_materializer_rejects_training_source_before_loading(tmp_path: Path):
     registry = load_source_registry(REGISTRY_PATH)
     calls = []
