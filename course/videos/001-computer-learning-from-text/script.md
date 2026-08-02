@@ -2,29 +2,27 @@
 
 ## 00:00 Hook
 
-Put the word `cat` on screen.
+[On screen: `cat`]
 
-When you read this word, you may picture an animal. You may remember a pet, a sound, or a story. Now place the same three letters into a Python program. Does the computer receive any of those memories or ideas?
+When you read `cat`, you may picture an animal or remember a pet. That meaning comes from your experience. You've seen AI work with text too: it can rewrite an essay, improve an email, or write code.
 
-No. The program receives data arranged according to agreed rules. That difference is our whole lesson.
+But here's the puzzle. On your computer, the text box shows words, while the model underneath works by calculating with numbers. So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
 
-By the end, you will be able to explain why text must be represented as numbers before a mathematical model can learn patterns from it. We will not assume any machine-learning knowledge. We will use three letters, three numbers, and a tiny Python file you can run yourself.
+By the end, you'll explain the difference with three letters, three numbers, and a tiny Python file. To get there, let's start with a smaller question: how can a number identify something without containing its meaning?
 
 ## 00:45 Analogy
 
-**Teaching analogy:** Imagine a library card. A book may make you laugh, teach you history, or remind you of someone. The library gives that book an agreed identifier, perhaps `417`. The identifier helps a system store and find the book. But the number `417` does not contain the plot, mood, or meaning of the book.
+**Teaching analogy:** Imagine a library where every book has a number. It helps the librarian find the right book, while the story stays inside. That number is an **identifier**: it tells us which book, not what the story means.
 
-Text begins with a similar separation. People agree that a written character can be represented by a number. The number lets programs store, copy, and compare the character. It does not place a human understanding of that character inside the machine.
+Text systems do something similar: agreed numbers help software tell characters apart. But the analogy only takes us so far. Here is its **limit**: a library number can point to a whole book, while text systems represent individual characters and stored forms. This bridge explains identification, not learning.
 
-**Where the analogy stops:** A library identifier often names a whole physical book. Text representation can work character by character and, at the storage level, with smaller numeric pieces. The analogy explains agreed identifiers; it does not explain the full text system or learning process.
-
-Here is the question to keep asking: is this number an agreed label, or is it learned meaning? Today, the first character numbers are agreed labels.
+Now return to Python and predict: does it invent a new number for `A` every time, or follow a fixed agreement? Hold your answer, and let's find out.
 
 ## 02:00 Technical Meaning
 
-Let us name the simple ideas.
+Now that you have a prediction, let's find out what rule Python actually follows. Take `C`, `a`, and `t`. Python processes each one as a **character**—one item from a string, just like a space or a question mark.
 
-A **character** is one written item, such as `C`, `a`, `t`, a space, or a question mark. **Unicode** is a shared standard that assigns defined characters agreed numbers. Python's `ord` function lets us inspect the Unicode number for one character.
+Software needs a shared agreement that distinguishes those characters. **Unicode** is that shared standard. It assigns each encoded character an integer identifier called a **code point**. Python's `ord` function reports the code point for one character:
 
 ```python
 ord("C")  # 67
@@ -32,17 +30,32 @@ ord("a")  # 97
 ord("t")  # 116
 ```
 
-These facts tell us how the characters are represented. They do not tell us that `Cat` names an animal. If we changed the agreement, the stored numbers could change while the human meaning stayed the same.
+Before looking ahead, compare those calls. If we run `ord("C")` again tomorrow, should the answer improve or change? No. Python is following a fixed agreement. The number identifies `C`; it does not contain the fact that `Cat` names an animal.
 
-A **byte** is a small stored number from 0 through 255. **UTF-8** is a widely used rule for turning Unicode text into one or more bytes. For the three simple English letters in `Cat`, the Unicode character numbers and UTF-8 bytes happen to match. They do not always match for characters from the rest of the world's writing systems. Video 4 will examine that carefully.
+So far, we have one agreed number for each character. But when text is stored or sent, there is another layer: the **byte**. A byte is eight bits and can hold an unsigned value from 0 through 255. **UTF-8** is a widely used rule that represents Unicode text as one or more bytes for each code point.
 
-Now define a **model** in the smallest useful way: it is a number-based guessing system with internal numbers that can be adjusted. A guess might be, "What written item is likely to come next?" At this stage, **learning** means adjusting those internal numbers so the guesses become less wrong across many examples.
+For the simple English letters in `Cat`, the code-point values and the UTF-8 byte values match. Those letters are in the ASCII range, and UTF-8 stores each one as a single byte with the same value. That is a property of this example, not a universal rule. Other characters can require several UTF-8 bytes. Video 4 will build that mechanism carefully.
 
-The input must therefore become numbers for two separate reasons. First, programs need an agreed representation for the text. Second, mathematical operations need numeric values. Representation gets the text through the door; learning adjusts other internal numbers from repeated examples.
+We can now explain how text gets a numeric form, but that still does not explain learning. For that, we need a **model**: a mathematical prediction system with adjustable numbers called **parameters**. It receives numeric input and produces a prediction. During training, we measure how wrong that prediction is and use the error to adjust the parameters. At this stage, that parameter change is what we mean by **learning**.
+
+Now that we understand both actions, we can give the distinction a stable name. **Text representation** changes the form of the input by following fixed agreements. **Learning** changes the model's adjustable parameters using examples and measured error.
+
+We can now use this representation–learning distinction as a building block:
+
+> Text representation follows fixed agreements. Learning changes adjustable model parameters using examples and measured error.
 
 ## 04:00 Tiny Example
 
-Suppose our three examples are:
+Let's use that building block immediately. Start with the representation side and predict the three code points for `Cat`. Then compare your answer with this trace:
+
+```text
+Human-readable text: C    a    t
+Agreed numbers:      67   97   116
+```
+
+Those numbers let a program count values, compare sequences, or select a value by position. But the arithmetic distance between `67` and `97` is not the difference in meaning between `C` and `a`. The numbers represent the characters under an agreement; they do not carry the human meaning of the word.
+
+Now keep that representation fixed and move to the learning side. Suppose the training examples include:
 
 ```text
 cat sat
@@ -50,71 +63,65 @@ cat ran
 cat slept
 ```
 
-A person notices that a space often follows `cat`, and then a word describing an action appears. A program does not begin with the ideas of animals, spaces, or actions. It begins with represented data.
+What repeats? Each line begins with `cat`, followed by a space and then an action word. No label says “animal” or “action.” The examples only supply repeated relationships that can affect later predictions.
 
-For an even smaller hand-check, use only `Cat`:
+Now imagine a model makes ten predictions and gets seven wrong. Training uses those mistakes to adjust its parameters. On comparable later examples, it gets five wrong. Seven mistakes becoming five gives us a small intuition for improvement: predictions changed after measured error changed the adjustable numbers.
 
-```text
-Human-readable text: C    a    t
-Agreed numbers:      67   97   116
-```
-
-Those numbers allow arithmetic and comparison. For example, a program can check that the first value is `67`, count three values, or compare two numeric sequences. None of those operations proves that the program knows what a cat is.
-
-Now imagine a model makes ten guesses and seven are wrong. After its internal numbers are adjusted, it makes ten more guesses and only five are wrong on comparable examples. The exact adjustment method comes much later in the course. For today, the important point is the direction: examples lead to measured mistakes; measured mistakes guide changes; useful changes make later guesses less wrong.
-
-This is not memorizing a dictionary definition of `cat`. It is finding repeatable relationships in represented examples. We call such a repeatable relationship a **pattern**.
-
-One boundary before we continue: these character numbers are not learned meaning, and they are not the later representation called a **token embedding**. That phrase is only a signpost for a future lesson. We are not using it to explain today's idea.
+Real training uses a numeric error measure rather than this simple mistake count. A model may also memorize its training examples, so we check improvement on separate examples it did not train on. We will build the exact update method much later. For now, the causal chain is enough: examples lead to predictions, predictions produce measurable error, and that error guides parameter changes.
 
 ## 06:00 Repository Walkthrough
 
-**Source fact:** This repository does not send remote raw text directly into training. Its preparation path first makes the text consistent and stores the cleaned result. The relevant functions are in `matgpt/data/normalize.py` and `matgpt/data/prepare.py`.
+Our tiny example gives us the idea. Now let's see where the representation side appears in this project.
 
-Start with this commented excerpt from `normalize.py`:
+**Source fact:** This repository does not send remote, unprocessed text straight into training. It first normalizes the text and stores the result. The relevant code lives in `matgpt/data/normalize.py` and `matgpt/data/prepare.py`.
+
+Start with this simplified excerpt from `normalize.py`:
 
 ```python
 def normalize_text(text: str) -> str:
-    # Put equivalent-looking text into one agreed form.
+    # Apply Unicode canonical and compatibility normalization.
     text = unicodedata.normalize("NFKC", str(text))
 
     # Use one newline style even if the source used another style.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    # Remove extra space from the right side of each line.
+    # Remove trailing whitespace from each line.
     lines = [line.rstrip() for line in text.split("\n")]
     text = "\n".join(lines).strip()
     return text
 ```
 
-Read the function from top to bottom. The first line names the function. `text: str` says the input is expected to be text, and `-> str` says the returned result is also text. The input named `text` is the raw value. `str(text)` ensures Python treats that value as text. The operation named `normalize` makes equivalent forms follow one agreement; `NFKC` is the name of that Unicode agreement. The next line makes different newline styles consistent. The list line removes space at the right edge of every line. `strip()` removes space at the beginning and end of the whole text. Finally, `return text` gives the cleaned value back.
+Let's follow the value from top to bottom. `text: str` and `-> str` communicate the expected input and output types; Python does not enforce those annotations at runtime. `str(text)` first asks Python for a string form of the input.
 
-**Cleaning-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, it changes the circled character `①` into plain `1`. That can be useful when we want both forms treated alike, but it collapses a distinction in the source text. Some inputs can also change character count, so the original text cannot always be rebuilt exactly from the cleaned result. Video 5 will explain the mechanics and tradeoffs; for now, remember only that this is a choice, not a harmless copy.
+Next, `unicodedata.normalize("NFKC", ...)` applies a chosen Unicode normalization form. Then the `replace` calls turn different newline styles into `\n`. The list comprehension removes trailing whitespace from each line. The final `strip()` removes whitespace from the outer edges, and `return text` gives the normalized string back to the caller.
 
-The full repository function also removes certain non-printing control characters and limits runs of blank lines. We are deliberately previewing its job, not teaching every cleaning rule today.
+**Normalization-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, it changes the circled character `①` into plain `1`. That can be useful when both forms should be treated alike, but it also collapses a distinction in the source. Some inputs can change character count, so the original text cannot always be recovered exactly. Video 5 will examine that tradeoff. For now, keep one point: normalization is a choice, not a lossless copy.
 
-Now look at the point where `prepare.py` uses that function:
+The full repository function also removes selected non-printing control characters and limits runs of blank lines. The excerpt shows only the operations needed for today's trace.
+
+Now follow the normalized value into this simplified excerpt from `prepare.py`:
 
 ```python
-# First pipeline step: make source text consistent.
+# First preparation operation: normalize the source text.
 normalized = normalize_text(text)
 
 return {
-    # Preserve the cleaned text for later processing.
+    # Other record fields are omitted from this excerpt.
+    # Preserve the normalized text for later processing.
     "text": normalized,
 
-    # Record how many characters the cleaned text contains.
+    # Record the normalized string length reported by Python.
     "num_chars": len(normalized),
 }
 ```
 
-**Observed code behavior:** `normalize_text(text)` receives source text and returns cleaned text. The returned record stores that cleaned text and its character count. This block does not yet perform model learning. It prepares consistent data for later steps.
+**Observed code behavior:** `normalize_text(text)` receives source text and returns normalized text. The record stores that result and the Python string length reported by `len(normalized)`, along with other metadata omitted here. That length does not always equal the number of symbols a person sees, because one visible symbol can involve multiple code points.
 
-That distinction matters. A repository path can be part of a learning system without every function doing the learning itself. Here, cleaning is preparation. Numeric representation and later model operations build on top of that preparation.
+What changed in this walkthrough? The text became more consistent, and the record captured its normalized form and length. What did not change? No model parameter was updated. This is data preparation, not learning. That distinction leads directly to our lab: can we inspect fixed numeric representations without pretending the inspection itself teaches the model?
 
 ## 09:00 Live Mini-Lab
 
-Open `course/videos/001-computer-learning-from-text/lab.py`.
+Now let's test the same ideas ourselves. Open `course/videos/001-computer-learning-from-text/lab.py`.
 
 ```python
 text = "Cat"
@@ -126,7 +133,7 @@ print("Can the mathematical model use this raw Python string as numeric input? N
 print("Learning begins after text is represented as numbers.")
 ```
 
-Before running it, predict the two lists. We already checked each character, so write `[67, 97, 116]` for both.
+Before you run it, predict both numeric lists. We already traced each character, so write down `[67, 97, 116]` for the character numbers. Will the UTF-8 list match for these three letters? Our earlier rule says yes.
 
 From the repository root, run:
 
@@ -134,53 +141,51 @@ From the repository root, run:
 python course/videos/001-computer-learning-from-text/lab.py
 ```
 
-Read the output one line at a time. `Human text` shows the form useful to us as readers. The list operation visits each character. `ord(character)` asks for its agreed Unicode number. `text.encode("utf-8")` applies the UTF-8 storage rule, and `list(...)` displays each resulting byte as an ordinary number. The question "Can the mathematical model use this raw Python string as numeric input? No" is deliberately narrow: Python can work with strings as text, but the mathematical model needs numeric input.
+Now explain each observed line. `Human text` shows the form useful to us as readers. The list comprehension visits one character at a time, and `ord(character)` reports its Unicode code point. `text.encode("utf-8")` produces the UTF-8 bytes, while `list(...)` displays those bytes as ordinary integers.
 
-For `Cat`, both lists show `67`, `97`, and `116`. Do not conclude that these lists always match. We chose simple English letters for this first hand-check.
+For `Cat`, both lists contain `67`, `97`, and `116`. The match confirms our prediction for these ASCII-range letters. It does not prove that code points and UTF-8 bytes always match.
 
-Now change only this line:
+The line `Can the mathematical model use this raw Python string as numeric input? No` makes a narrow claim. Python can perform text operations on a string. The mathematical model needs numeric input, and later lessons will show the representation it actually receives. This file demonstrates preparation; it does not update parameters.
+
+Now change only one input:
 
 ```python
 text = "A"
 ```
 
-Predict again, then rerun the file. Both lists should contain `65`. Ask yourself: did Python discover the meaning of the letter `A`, or did it follow an agreed representation? It followed an agreement.
+Predict again before rerunning the file. Both lists should contain `65`. When the output confirms that prediction, ask what caused it. `ord("A")` followed the same fixed agreement as before. It did not practice, measure an error, or improve.
 
-Finally, change the line back to `text = "Cat"` so the lab matches the documented output.
+Finally, return the line to `text = "Cat"` so the lab matches the documented output.
 
 ## 12:00 Common Mistake
 
-The common mistake is saying, "The number `65` is the meaning of `A`."
+By now, two common mistakes should stand out. The first is saying, “The number `65` is the meaning of `A`.” But `65` identifies the character `A` under the Unicode agreement. `A` might be a school grade, a musical note, a blood type, or one letter in a word. Its human meaning changes with context while its code point stays the same.
 
-It is not. `65` is an agreed Unicode number for the character `A`. Human meaning depends on use and context. `A` could be a school grade, a musical note, a blood type, or one letter inside a word. The character number stays the same across those uses.
+Try this diagnostic question: if another character system assigned a different number to `A`, would people have to change what `A` means? No. The number is a representation, not the meaning.
 
-Use this debugging question whenever the idea becomes blurry: if the agreed number changed but people still read the same character, would its human meaning have to change? No. That shows the number is a representation, not the meaning itself.
-
-Another mistake is saying that conversion alone is learning. The `ord` call follows a fixed rule; it does not improve from examples. Learning begins when a model's adjustable internal numbers change in response to measured mistakes.
+The second mistake is saying that conversion is learning. `ord` applies a fixed mapping. It returns the same result no matter how many examples you show it. Learning requires something adjustable: training measures prediction error and changes model parameters in response.
 
 ## 13:00 Recap And Exercise
 
-Return to our objective: explain why text must be represented as numbers before a mathematical model can learn patterns from it.
+We've followed the idea from human meaning to represented text and then to learning. Now let's rebuild the answer in plain language.
 
-Here is the explanation in four steps:
+When you read `cat`, you bring meaning from your experience. Software first handles represented text. Unicode gives characters code points, and UTF-8 represents those characters as bytes. Those fixed mappings make the text usable as data, but applying them does not teach a model anything.
 
-1. A program receives represented data, not a person's understanding of a word.
-2. Agreed systems such as Unicode and UTF-8 let programs represent written characters with numbers.
-3. Those first numbers identify text; they are not human meaning and are not themselves evidence of learning.
-4. Learning means adjusting a model's internal numbers so its guesses become less wrong across many examples.
+A model begins to learn only when it makes predictions, measures error, and changes its adjustable parameters so later predictions can improve.
 
-Check yourself aloud:
+Check the model in your own head:
 
-- Does a computer naturally understand `cat` like a human?
-- What does `ord("A")` return?
-- Does `65` contain every human meaning of `A`?
-- Why does a mathematical model need numeric input?
-- What changes when a model learns?
+- What does `ord("A")` return, and why is that answer stable?
+- Why does `65` identify `A` without containing every meaning of `A`?
+- What must change before we can say learning occurred?
+- If the input changes from `Cat` to `A`, which parts of your trace should change and which rule stays fixed?
 
-For the exercise, run the mini-lab with `A`, record the output, and write one sentence completing this frame: "The number 65 represents ___, but it does not contain ___."
+For the exercise, run the mini-lab with `A`, record the output, and complete this sentence: “The number 65 is assigned to ___, but it does not encode ___.” Then return the file to `Cat`.
 
-Then return the file to `Cat`. In the next video, we will slow down and examine agreed character numbers themselves. Today, stop at the boundary: text becomes numeric data first; learning is the later adjustment that makes repeated guesses less wrong.
+The representation–learning distinction is now one of our building blocks, not just a sentence to memorize. Text representation gives the model numbers it can work with. Learning changes the model's adjustable numbers—its parameters—so later predictions can improve.
 
-### Deferred Vocabulary Boundary
+In the next lesson, we will use the representation side of that building block to ask a more precise question: how does a computer assign stable numbers to written characters? Because we already know this is representation rather than learning, we can focus on how those agreed numbers are assigned.
+
+### Vocabulary Deferred to Later Videos
 
 The terms **token**, **tensor**, **logit**, **gradient**, and **attention** are intentionally not taught or used as explanations in Video 1. Each will be introduced from plain language in its approved later video.

@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.worktrees/
 
 configs/colab/
 matgpt/data/raw/
@@ -18,6 +19,13 @@ matgpt/tokenizer/*/
 checkpoints/
 runs/
 logs/
+
+# Generated Manim video output
+course/videos/001-computer-learning-from-text/media/
+
+# Generated After Effects video output
+course/videos/*/after-effects/exports/*
+!course/videos/*/after-effects/exports/.gitkeep
 
 *.pt
 *.safetensors

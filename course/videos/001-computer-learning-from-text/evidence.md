@@ -6,7 +6,7 @@
 - **Observed code behavior:** [`matgpt/data/prepare.py`](../../../matgpt/data/prepare.py) imports `normalize_text` and calls it in `make_document_record`. The shown excerpt stores the cleaned text under `text` and its character count under `num_chars`.
 - **Observed code behavior:** [`lab.py`](lab.py) uses Python's built-in `ord` and `str.encode` behavior to display the agreed character numbers and UTF-8 bytes for `Cat`.
 - **Observed test behavior:** [`tests/test_course_structure.py`](../../../tests/test_course_structure.py) checks the exact outline, single produced video, artifact headings, exact text of all five approved questions, answers, and gap explanations, lab source and output, teaching warnings, prompt alignment, and evidence contract.
-- **Teaching analogy:** The library-card comparison in the script and lesson illustrates an agreed identifier versus meaning. It is not repository behavior.
+- **Teaching analogy:** The library-card comparison in the lesson and answer key illustrates an agreed identifier versus meaning. It is not repository behavior.
 
 ## Commands Run
 
@@ -19,6 +19,11 @@ uv run pytest tests/test_course_structure.py::test_video_one_evidence_matches_th
 python course/videos/001-computer-learning-from-text/lab.py
 rg -n '\b(token|tensor|logit|gradient|attention)\b' course/videos/001-computer-learning-from-text
 uv run pytest -v
+VIDEO001_TIMING_SCALE=0.05 manim -ql --save_sections -o video-001-computer-learning-from-text --config_file course/videos/001-computer-learning-from-text/manim.cfg course/videos/001-computer-learning-from-text/animation.py Video001ComputerLearningFromText
+manim -o video-001-computer-learning-from-text --config_file course/videos/001-computer-learning-from-text/manim.cfg course/videos/001-computer-learning-from-text/animation.py Video001ComputerLearningFromText
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,profile,pix_fmt,width,height,r_frame_rate,avg_frame_rate,nb_frames -show_entries format=duration,size,format_name -of json course/videos/001-computer-learning-from-text/media/videos/animation/1080p30/video-001-computer-learning-from-text.mp4
+uv run --extra test --extra video pytest tests/test_video_001_animation.py tests/test_course_structure.py -v
+uv run --extra test --extra video pytest -v
 ```
 
 ## Observed Output
@@ -45,6 +50,14 @@ Observed locally on 2026-07-19:
 - After restoring answer 3, replacing gap explanation 4 with misleading guidance produced `1 failed in 0.09s`; the failure identified the exact wrong explanation at index 3.
 - Adding the stronger evidence-description assertion before updating this file produced `1 failed in 0.11s`.
 - With all correct content restored, the focused course contract reported `10 passed in 0.11s`, the direct lab printed the current output shown above, and the full verbose suite reported `153 passed in 7.42s`.
+
+Observed locally on 2026-07-21:
+
+- The accelerated end-to-end render completed all eight timestamped sections and 97 animation segments. Its low-quality H.264 preview is 854×480 at 15 fps and 43.399 seconds; the extra 1.399 seconds versus a simple 5% scale is caused by frame quantization across many short preview animations.
+- Representative frames from every section were inspected. The resulting regression fixes keep the hook words above their panels, prevent the character/byte diagram from overlapping, preserve terminal-line width while highlighting, center the repository preparation pair inside the safe frame, and keep the recap's parameter-update label readable.
+- The final Manim render completed all 97 animation segments. `ffprobe` reported H.264 High profile, YUV 4:2:0, 1920×1080, 30 fps, 25,200 frames, exactly 840.000 seconds, and 22,718,113 bytes.
+- The focused animation and course-structure suite reported `31 passed in 2.04s`.
+- The direct lab run exited successfully with the five documented lines shown above. The final full repository suite reported `212 passed in 14.40s`, and `git diff --check` reported no whitespace errors.
 
 ## Unverified Claims
 
