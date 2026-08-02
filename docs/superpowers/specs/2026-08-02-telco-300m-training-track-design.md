@@ -1,7 +1,9 @@
 # MatGPT Telco 300M Training Track Design
 
-**Date:** 2026-08-02  
-**Status:** Approved in conversation; implementation requested  
+**Date:** 2026-08-02
+
+**Status:** Approved in conversation; implementation requested
+
 **Target:** A reproducible from-scratch English telecom/networking model that can be trained on one high-memory GPU and later deployed as a small, retrieval-grounded edge component.
 
 ## 1. Problem and outcome
