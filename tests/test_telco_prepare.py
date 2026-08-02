@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tokenizers import Tokenizer, models, pre_tokenizers
 
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.config import clone_config, load_config
@@ -10,12 +11,14 @@ from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.data.sources import load_source_registry
 from matgpt.data.telco_prepare import (
     audit_token_quotas,
+    corpus_has_exact_token_quotas,
     iter_deterministic_buffered,
     normalize_source_row,
     prepare_telco_corpora,
 )
 from matgpt.preflight import build_preflight_report
 from matgpt.tokenizer.train import train_tokenizer_from_config
+from matgpt.utils.hashing import sha256_file
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
@@ -115,6 +118,45 @@ def _fake_loader_with_calls(calls: list[dict]):
         return iter(_stream_rows("general"))
 
     return load_dataset
+
+
+def _single_general_plan(token_quota: int = 8) -> dict:
+    return {
+        "version": 1,
+        "stage": "pilot",
+        "seed": 42,
+        "total_tokens": token_quota,
+        "quota_tolerance": 0.0,
+        "validation_fraction": 0.0,
+        "buffer_size": 3,
+        "role_quotas": {"pretrain_general": token_quota},
+        "items": [
+            {
+                "id": "common_pile_general",
+                "source_id": "common_pile_general",
+                "bucket_id": None,
+                "role": "pretrain_general",
+                "token_quota": token_quota,
+            }
+        ],
+        "plan_sha256": "f" * 64,
+    }
+
+
+def _write_word_tokenizer(path: Path, *, extra_token: str | None = None) -> str:
+    path.mkdir(parents=True)
+    vocab = {"[UNK]": 0, "a": 1, "b": 2, "c": 3}
+    if extra_token is not None:
+        vocab[extra_token] = len(vocab)
+    tokenizer = Tokenizer(models.WordLevel(vocab=vocab, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer.save(str(path / "tokenizer.json"))
+    digest = sha256_file(path / "tokenizer.json")
+    (path / "special_tokens.json").write_text(
+        json.dumps({"tokenizer_sha256": digest}) + "\n",
+        encoding="utf-8",
+    )
+    return digest
 
 
 def test_normalize_source_row_preserves_required_provenance():
@@ -233,6 +275,101 @@ def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):
     assert all(call["streaming"] is True for call in calls)
     assert all(len(call["revision"]) == 40 for call in calls)
     assert any(call.get("data_files") for call in calls)
+
+
+def test_builder_uses_frozen_tokenizer_counts_to_reach_exact_quota(
+    tmp_path: Path,
+):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_sha256 = _write_word_tokenizer(tokenizer_dir)
+    plan = _single_general_plan()
+    output = tmp_path / "corpus"
+    rows = [
+        {"text": "a b c one"},
+        {"text": "a b c two"},
+        {"text": "a b c three"},
+        {"text": "a b c four"},
+    ]
+
+    manifest = prepare_telco_corpora(
+        registry=registry,
+        plans=[plan],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+        buffer_size=1,
+        dataset_loader=lambda _name, **_kwargs: iter(rows),
+        tokenizer_dir=tokenizer_dir,
+    )
+    report = audit_token_quotas(
+        [output / "pilot.jsonl"],
+        tokenizer_dir,
+        [plan],
+        tolerance=0.0,
+    )
+
+    assert report["passed"] is True
+    assert len(_read_jsonl(output / "pilot.jsonl")) == 2
+    assert manifest["quota_counting"] == {
+        "method": "tokenizer_exact",
+        "tokenizer_sha256": tokenizer_sha256,
+    }
+    assert manifest["stages"]["pilot"]["quota_tokens"] == 8
+    assert manifest["stages"]["pilot"]["estimated_tokens"] == 6
+    assert corpus_has_exact_token_quotas(output, tokenizer_dir, [plan]) is True
+
+
+def test_exact_quota_compatibility_rejects_changed_tokenizer_or_plan(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    _write_word_tokenizer(tokenizer_dir)
+    plan = _single_general_plan()
+    output = tmp_path / "corpus"
+    rows = [{"text": "a b c one"}, {"text": "a b c two"}]
+    prepare_telco_corpora(
+        registry=registry,
+        plans=[plan],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+        buffer_size=1,
+        dataset_loader=lambda _name, **_kwargs: iter(rows),
+        tokenizer_dir=tokenizer_dir,
+    )
+    changed_tokenizer_dir = tmp_path / "changed-tokenizer"
+    _write_word_tokenizer(changed_tokenizer_dir, extra_token="changed")
+    changed_plan = {**plan, "plan_sha256": "e" * 64}
+
+    assert (
+        corpus_has_exact_token_quotas(output, changed_tokenizer_dir, [plan])
+        is False
+    )
+    assert corpus_has_exact_token_quotas(output, tokenizer_dir, [changed_plan]) is False
+
+
+def test_builder_rejects_invalid_tokenizer_before_creating_staging(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    _write_word_tokenizer(tokenizer_dir)
+    (tokenizer_dir / "special_tokens.json").write_text(
+        json.dumps({"tokenizer_sha256": "0" * 64}) + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "corpus"
+    calls: list[dict] = []
+
+    with pytest.raises(ValueError, match="Tokenizer SHA-256"):
+        prepare_telco_corpora(
+            registry=registry,
+            plans=[_single_general_plan()],
+            output_dir=output,
+            quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+            dataset_loader=_fake_loader_with_calls(calls),
+            tokenizer_dir=tokenizer_dir,
+        )
+
+    assert calls == []
+    assert not output.exists()
+    assert not list(tmp_path.glob(".corpus.staging-*"))
 
 
 def test_builder_publishes_main_and_cooldown_together(tmp_path: Path):

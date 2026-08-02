@@ -46,6 +46,14 @@ def main() -> None:
     parser.add_argument("--min-chars", type=int, default=40)
     parser.add_argument("--buffer-size", type=int, default=None)
     parser.add_argument(
+        "--tokenizer-dir",
+        default=None,
+        help=(
+            "Frozen tokenizer directory used to collect exact token quotas. "
+            "Omit only for the tokenizer-bootstrap corpus."
+        ),
+    )
+    parser.add_argument(
         "--allow-full-data",
         action="store_true",
         help="Required for main+cooldown data download; does not authorize training.",
@@ -94,6 +102,7 @@ def main() -> None:
         quality_policy=policy,
         buffer_size=args.buffer_size or int(mixture["buffer_size"]),
         force=args.force,
+        tokenizer_dir=args.tokenizer_dir,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 

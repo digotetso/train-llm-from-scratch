@@ -20,11 +20,12 @@ from matgpt.data.sources import (
     SourceSpec,
     select_pretraining_sources,
 )
-from matgpt.tokenizer.io import load_tokenizer
+from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 
 
 DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
+QuotaTokenCounter = Callable[[Mapping[str, Any]], int]
 
 
 class EmptySourceTextError(ValueError):
@@ -46,6 +47,41 @@ def _positive_token_estimate(source: SourceSpec, row: Mapping[str, Any], text: s
             )
         return estimate
     return max(1, math.ceil(len(text) / 4))
+
+
+def _validated_tokenizer_sha256(tokenizer_dir: str | Path) -> str:
+    base = Path(tokenizer_dir)
+    tokenizer_path = base / "tokenizer.json"
+    metadata = load_tokenizer_metadata(base)
+    expected = metadata.get("tokenizer_sha256")
+    actual = sha256_file(tokenizer_path)
+    if not isinstance(expected, str) or actual != expected:
+        raise ValueError(
+            "Tokenizer SHA-256 does not match special_tokens.json; refusing "
+            "exact quota collection."
+        )
+    return actual
+
+
+def _quota_counter(
+    tokenizer_dir: str | Path | None,
+) -> tuple[QuotaTokenCounter, dict[str, Any]]:
+    if tokenizer_dir is None:
+        return (
+            lambda record: int(record["estimated_tokens"]),
+            {"method": "source_estimate", "tokenizer_sha256": None},
+        )
+
+    tokenizer_sha256 = _validated_tokenizer_sha256(tokenizer_dir)
+    tokenizer = load_tokenizer(tokenizer_dir)
+
+    def count(record: Mapping[str, Any]) -> int:
+        return len(tokenizer.encode(str(record["text"])).ids)
+
+    return count, {
+        "method": "tokenizer_exact",
+        "tokenizer_sha256": tokenizer_sha256,
+    }
 
 
 def normalize_source_row(
@@ -302,6 +338,7 @@ def _write_stage(
     quality_filter: QualityFilter,
     buffer_size: int,
     dataset_loader: DatasetLoader,
+    quota_token_counter: QuotaTokenCounter,
     validation_handle,
     validation_stats: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], Counter[str]]:
@@ -313,6 +350,7 @@ def _write_stage(
         item_id: {
             "requested_tokens": item["token_quota"],
             "estimated_tokens": 0,
+            "quota_tokens": 0,
             "documents": 0,
             "raw_bytes": 0,
         }
@@ -360,9 +398,9 @@ def _write_stage(
                         f"Source {source.id!r} produced unplanned item {item_id!r}."
                     )
                 stats = item_stats[item_id]
-                if stats["estimated_tokens"] >= stats["requested_tokens"]:
+                if stats["quota_tokens"] >= stats["requested_tokens"]:
                     if all(
-                        item_stats[planned]["estimated_tokens"]
+                        item_stats[planned]["quota_tokens"]
                         >= item_stats[planned]["requested_tokens"]
                         for planned in source_item_ids
                     ):
@@ -370,6 +408,12 @@ def _write_stage(
                     continue
                 if not quality_filter.accept(record):
                     continue
+                quota_tokens = quota_token_counter(record)
+                if quota_tokens < 1:
+                    raise ValueError(
+                        f"Source {source.id!r} produced a non-positive quota "
+                        f"token count for document {record['document_id']!r}."
+                    )
                 if _is_validation_record(
                     record, float(plan.get("validation_fraction", 0.0))
                 ):
@@ -382,6 +426,7 @@ def _write_stage(
                     validation_handle.write(line + "\n")
                     encoded_bytes = len(line.encode("utf-8")) + 1
                     validation_stats["estimated_tokens"] += record["estimated_tokens"]
+                    validation_stats["quota_tokens"] += quota_tokens
                     validation_stats["documents"] += 1
                     validation_stats["document_count"] += 1
                     validation_stats["total_chars"] += len(record["text"])
@@ -398,12 +443,13 @@ def _write_stage(
                 total_chars += len(record["text"])
                 documents_digest.update(record["text_sha256"].encode("utf-8"))
                 stats["estimated_tokens"] += record["estimated_tokens"]
+                stats["quota_tokens"] += quota_tokens
                 stats["documents"] += 1
                 stats["raw_bytes"] += encoded_bytes
                 license_counts[record["license"]] += 1
 
                 if all(
-                    item_stats[planned]["estimated_tokens"]
+                    item_stats[planned]["quota_tokens"]
                     >= item_stats[planned]["requested_tokens"]
                     for planned in source_item_ids
                 ):
@@ -412,12 +458,12 @@ def _write_stage(
             incomplete = [
                 planned
                 for planned in source_item_ids
-                if item_stats[planned]["estimated_tokens"]
+                if item_stats[planned]["quota_tokens"]
                 < item_stats[planned]["requested_tokens"]
             ]
             if incomplete:
                 details = ", ".join(
-                    f"{item_id}={item_stats[item_id]['estimated_tokens']}/"
+                    f"{item_id}={item_stats[item_id]['quota_tokens']}/"
                     f"{item_stats[item_id]['requested_tokens']}"
                     for item_id in incomplete
                 )
@@ -434,6 +480,9 @@ def _write_stage(
         ),
         "estimated_tokens": sum(
             stats["estimated_tokens"] for stats in item_stats.values()
+        ),
+        "quota_tokens": sum(
+            stats["quota_tokens"] for stats in item_stats.values()
         ),
         "documents": sum(stats["documents"] for stats in item_stats.values()),
         "document_count": sum(
@@ -457,6 +506,7 @@ def prepare_telco_corpora(
     buffer_size: int = 2048,
     force: bool = False,
     dataset_loader: DatasetLoader | None = None,
+    tokenizer_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build one or more stages and publish them as one validated directory."""
 
@@ -484,11 +534,12 @@ def prepare_telco_corpora(
             f"Output already exists: {output}. Pass --force to create a backup "
             "and replace it."
         )
+    loader = _load_dataset_function(dataset_loader)
+    quota_token_counter, quota_counting = _quota_counter(tokenizer_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent)
     )
-    loader = _load_dataset_function(dataset_loader)
     quality_filter = QualityFilter(quality_policy)
     stage_stats: dict[str, Any] = {}
     loader_calls: list[dict[str, Any]] = []
@@ -497,6 +548,7 @@ def prepare_telco_corpora(
         "path": "validation.jsonl",
         "validation_fraction": validation_fraction,
         "estimated_tokens": 0,
+        "quota_tokens": 0,
         "documents": 0,
         "document_count": 0,
         "total_chars": 0,
@@ -524,6 +576,7 @@ def prepare_telco_corpora(
                     quality_filter=quality_filter,
                     buffer_size=buffer_size,
                     dataset_loader=loader,
+                    quota_token_counter=quota_token_counter,
                     validation_handle=validation_handle,
                     validation_stats=validation_stats,
                 )
@@ -547,6 +600,7 @@ def prepare_telco_corpora(
             "version": 1,
             "complete": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "quota_counting": quota_counting,
             "stages": {stage: stage_stats[stage] for stage in sorted(stage_stats)},
             "validation": validation_stats,
             "split_stats": {
@@ -598,6 +652,41 @@ def prepare_telco_corpora(
         if staging.exists():
             shutil.rmtree(staging)
         raise
+
+
+def corpus_has_exact_token_quotas(
+    corpus_dir: str | Path,
+    tokenizer_dir: str | Path,
+    plans: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Return whether a completed corpus matches one tokenizer and plan set."""
+
+    try:
+        manifest = json.loads(
+            (Path(corpus_dir) / "manifest.json").read_text(encoding="utf-8")
+        )
+        tokenizer_sha256 = _validated_tokenizer_sha256(tokenizer_dir)
+        expected_plans = {
+            str(plan["stage"]): str(plan["plan_sha256"])
+            for plan in plans
+        }
+        if len(expected_plans) != len(plans):
+            return False
+        stage_manifests = manifest["stages"]
+        quota_counting = manifest["quota_counting"]
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+    return (
+        manifest.get("complete") is True
+        and quota_counting.get("method") == "tokenizer_exact"
+        and quota_counting.get("tokenizer_sha256") == tokenizer_sha256
+        and set(stage_manifests) == set(expected_plans)
+        and all(
+            stage_manifests[stage].get("plan_sha256") == plan_sha256
+            for stage, plan_sha256 in expected_plans.items()
+        )
+    )
 
 
 def audit_token_quotas(

@@ -119,8 +119,11 @@ FULL_APPROVED = False
 
 This stage first materializes pinned Open Telco Lite and Full outside the
 training tree. Their questions become contamination patterns. It then writes
-the 20M-token mixture plan and streams the role-approved pilot corpus. It does
-not import or start pretraining.
+the 20M-token mixture plan and streams a role-approved tokenizer-bootstrap
+corpus. At this first gate only, source token fields or `ceil(characters / 4)`
+are used to stop collection because the project tokenizer does not exist yet.
+The resulting corpus is representative tokenizer-fitting input, not the final
+exact 20M-token pilot. This stage does not import or start pretraining.
 
 The pinned Open Telco Full `oranbench` config contains 1,500 source rows, but
 three rows have empty questions and cannot be evaluated. Preparation keeps the
@@ -136,6 +139,7 @@ Stop and inspect:
 
 - `evidence/pilot/mixture_plan_pilot.json`;
 - `corpora/pilot/manifest.json`;
+- `quota_counting.method: source_estimate` for a first bootstrap build;
 - source revisions, role totals, rejection counts, and licence counts;
 - confirmation that Open Telco source IDs are absent from the training sources.
 
@@ -145,10 +149,19 @@ generated JSONL or plan in Drive.
 
 ### 2. `prepare` with `DATA_PLAN = "pilot"`
 
-This stage trains the tokenizer, checks general and telecom fertility probes,
-counts actual tokenizer IDs against every quota, creates packed shards, runs
-the supported-GPU preflight, and benchmarks micro-batches 4, 8, and 12. It
-starts no pretraining.
+This stage trains the tokenizer once from the bootstrap corpus (or restores an
+already frozen pilot tokenizer), checks general and telecom fertility probes,
+and immediately snapshots that tokenizer to
+`prepared/pilot/tokenizer`. It then atomically rebuilds the pilot corpus while
+counting exact tokenizer IDs, retains the bootstrap corpus as a timestamped
+backup, audits every exact quota, creates packed shards, runs the supported-GPU
+preflight, and benchmarks micro-batches 4, 8, and 12. It starts no pretraining.
+
+The exact corpus manifest must report `quota_counting.method: tokenizer_exact`
+and the same tokenizer SHA-256 as
+`prepared/pilot/tokenizer/special_tokens.json`. Do not retrain the tokenizer
+after this rebuild: changing the tokenizer would invalidate the counts that
+selected the corpus.
 
 Required pass evidence:
 
@@ -193,13 +206,17 @@ acceptable.
 ### 5. `prepare_data` and `prepare` with `DATA_PLAN = "full"`
 
 Set `ALLOW_FULL_DATA = True` only after the pilot review. Keep
-`FULL_APPROVED = False`. The data stage builds `main` and `cooldown` together
-atomically; a partial phase is never published. Then select `prepare` to create
-and verify the full tokenizer and shards.
+`FULL_APPROVED = False`. A completed `prepared/pilot/tokenizer` is now a hard
+prerequisite. The data stage uses that frozen tokenizer to build exact `main`
+and `cooldown` quotas together in one streamed pass; a partial phase is never
+published. Then select `prepare` to restore/verify the same tokenizer, audit
+the exact corpus, and create the full shards.
 
-Changing from pilot to full intentionally produces a different tokenizer,
-dataset manifest, shard set, config fingerprint, and run directory. A pilot
-checkpoint must not be resumed into the full run.
+Changing from pilot to full preserves the tokenizer fingerprint but produces a
+different dataset manifest, shard set, config fingerprint, and run directory.
+A pilot checkpoint must not be resumed into the full run; checkpoint
+compatibility rejects the changed config and corpus even though the vocabulary
+is shared.
 
 ### 6. `full` with `DATA_PLAN = "full"`
 
@@ -247,6 +264,14 @@ not authority for live network changes.
 
 - A normal interruption: reconnect, select the same stage and data plan, run
   from the top, and resume `latest.pt`.
+- An older pilot `prepare` that fails with `Actual tokenizer quotas are outside
+  tolerance`: do not raise the tolerance and do not delete the corpus. Pull the
+  merged fix, open the repository's current Telco notebook, select
+  `RUN_STAGE = "prepare"` and `DATA_PLAN = "pilot"`, then run all cells. The
+  notebook reuses a valid local/frozen tokenizer (or trains it once if the
+  runtime was restarted), snapshots it before replacement, and atomically
+  rebuilds the corpus with exact counts. The earlier estimate-selected corpus
+  remains recoverable under `corpora/pilot.backup-<timestamp>`.
 - Artifact mismatch: stop. Compare the saved config, manifest, tokenizer hash,
   and current Git commit. Resume only the exact matching run.
 - Failed corpus replacement: the builder publishes through a staging directory
