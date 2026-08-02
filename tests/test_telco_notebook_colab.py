@@ -81,13 +81,31 @@ def test_prepare_data_materializes_benchmarks_before_training_corpus():
         "## 7. Prepare isolated evaluation and training data"
     )
 
-    eval_position = source.index("scripts/prepare_open_telco_evals.py")
-    corpus_position = source.index("scripts/prepare_telco_corpus.py")
+    eval_position = source.index(
+        'run_command([sys.executable, "scripts/prepare_open_telco_evals.py"'
+    )
+    corpus_position = source.index("run_command(build_corpus_command")
     assert eval_position < corpus_position
     assert "--contamination-patterns" in source
     assert "--allow-full-data" in source
     assert "ALLOW_FULL_DATA" in source
     assert "scripts/pretrain.py" not in source
+
+
+def test_prepare_data_full_requires_and_uses_frozen_pilot_tokenizer():
+    paths = _code_after_heading("## 6. Build fixed local and Drive paths")
+    source = _code_after_heading(
+        "## 7. Prepare isolated evaluation and training data"
+    )
+
+    assert "PILOT_TOKENIZER_DRIVE_DIR" in paths
+    assert "corpus_has_exact_token_quotas" in source
+    assert (
+        'tokenizer_for_quota = PILOT_TOKENIZER_DRIVE_DIR if DATA_PLAN == "full"'
+        in source
+    )
+    assert "tokenizer_dir=tokenizer_for_quota" in source
+    assert "Run the pilot prepare stage first" in source
 
 
 def test_prepare_stage_audits_before_sharding_and_never_pretrains():
@@ -104,6 +122,20 @@ def test_prepare_stage_audits_before_sharding_and_never_pretrains():
     assert 'status\"] == \"ok\"' in source
     assert "memory_fraction" in source
     assert "scripts/pretrain.py" not in source
+
+
+def test_prepare_stage_freezes_tokenizer_then_rebuilds_exact_pilot():
+    source = _code_after_heading("## 8. Prepare tokenizer and shards")
+
+    freeze_position = source.index(
+        "atomic_snapshot(TOKENIZER_DIR, frozen_tokenizer_dir)"
+    )
+    exact_gate_position = source.index("corpus_has_exact_token_quotas")
+    audit_position = source.index("scripts/audit_telco_corpus.py")
+    assert freeze_position < exact_gate_position < audit_position
+    assert "tokenizer_dir=TOKENIZER_DIR" in source
+    assert "force=True" in source
+    assert "Frozen tokenizer:" in source
 
 
 def test_training_cell_has_only_explicit_smoke_pilot_and_full_branches():

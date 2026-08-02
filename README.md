@@ -82,7 +82,10 @@ from-scratch `306,226,176`-parameter English + telecom track. It uses an
 immutable source registry, separates pretraining/post-training/RAG/evaluation
 roles, plans a 10B-token main phase plus 2B-token cooldown, audits actual
 tokenizer quotas before sharding, and isolates Open Telco Lite/Full from
-training.
+training. The pilot first creates a bounded tokenizer-bootstrap sample, freezes
+that tokenizer, and atomically rebuilds the 20M-token corpus using exact token
+counts. The same frozen tokenizer is reused for the exact 12B full-data build,
+avoiding a second vocabulary and an estimate-first 12B pass.
 
 Start with the notebook defaults (`RUN_STAGE = "prepare_data"`,
 `DATA_PLAN = "pilot"`). The 20M-token pilot, resume check, evidence review, full
