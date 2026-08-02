@@ -114,6 +114,13 @@ class QualityFilter:
             self.seen_hashes.add(record["text_sha256"])
         return True
 
+    def record_rejection(self, reason: str) -> None:
+        """Audit a raw source row rejected before record normalization."""
+
+        self.total_documents += 1
+        self.rejected_documents += 1
+        self.rejection_reasons[reason] += 1
+
     def filter(self, records: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         for record in records:
             if self.accept(record):
