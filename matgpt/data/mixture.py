@@ -18,7 +18,14 @@ from matgpt.utils.hashing import sha256_json
 
 
 MIXTURE_KEYS = frozenset(
-    {"version", "seed", "quota_tolerance", "buffer_size", "stages"}
+    {
+        "version",
+        "seed",
+        "quota_tolerance",
+        "validation_fraction",
+        "buffer_size",
+        "stages",
+    }
 )
 STAGE_KEYS = frozenset({"total_tokens", "role_weights", "source_weights"})
 PATENT_MAX_FRACTION = Decimal("0.08")
@@ -100,6 +107,14 @@ def load_mixture_config(path: str | Path) -> dict[str, Any]:
         or not 0 <= float(tolerance) < 1
     ):
         raise ValueError("Mixture quota_tolerance must be in [0, 1).")
+    validation_fraction = mixture.get("validation_fraction")
+    if (
+        not isinstance(validation_fraction, (int, float))
+        or isinstance(validation_fraction, bool)
+        or not math.isfinite(float(validation_fraction))
+        or not 0 <= float(validation_fraction) < 1
+    ):
+        raise ValueError("Mixture validation_fraction must be in [0, 1).")
     buffer_size = mixture.get("buffer_size")
     if (
         not isinstance(buffer_size, int)
@@ -250,6 +265,7 @@ def build_mixture_plan(
         "seed": int(mixture["seed"]),
         "total_tokens": planned_total,
         "quota_tolerance": float(mixture["quota_tolerance"]),
+        "validation_fraction": float(mixture["validation_fraction"]),
         "buffer_size": int(mixture["buffer_size"]),
         "role_quotas": role_quotas,
         "items": items,

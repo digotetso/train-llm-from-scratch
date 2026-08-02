@@ -103,6 +103,7 @@ def test_pilot_uses_aggregate_mix_and_accepts_bounded_override():
     }
     assert sum(tiny["role_quotas"].values()) == 1_200
     assert sum(item["token_quota"] for item in tiny["items"]) == 1_200
+    assert configured["validation_fraction"] == 0.005
 
 
 def test_plan_is_deterministic_and_contains_only_pretraining_roles():
@@ -126,6 +127,7 @@ def test_plan_rejects_evaluation_source():
         "version": 1,
         "seed": 42,
         "quota_tolerance": 0.03,
+        "validation_fraction": 0.005,
         "buffer_size": 32,
         "stages": {
             "bad": {
@@ -172,7 +174,7 @@ def test_plan_rejects_patent_weight_above_ceiling():
 def test_mixture_loader_rejects_unknown_top_level_keys(tmp_path: Path):
     path = tmp_path / "mixture.yaml"
     path.write_text(
-        "version: 1\nseed: 42\nquota_tolerance: 0.03\nbuffer_size: 16\nstages: {}\nignored: true\n",
+        "version: 1\nseed: 42\nquota_tolerance: 0.03\nvalidation_fraction: 0.005\nbuffer_size: 16\nstages: {}\nignored: true\n",
         encoding="utf-8",
     )
 

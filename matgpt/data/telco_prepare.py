@@ -276,6 +276,13 @@ def _item_id(record: Mapping[str, Any]) -> str:
     )
 
 
+def _is_validation_record(record: Mapping[str, Any], fraction: float) -> bool:
+    if fraction <= 0:
+        return False
+    value = int(str(record["content_sha256"])[:16], 16) / float(16**16)
+    return value < fraction
+
+
 def _write_stage(
     path: Path,
     *,
@@ -284,6 +291,8 @@ def _write_stage(
     quality_filter: QualityFilter,
     buffer_size: int,
     dataset_loader: DatasetLoader,
+    validation_handle,
+    validation_stats: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], Counter[str]]:
     stage = str(plan["stage"])
     items = _validated_plan_items(registry, plan)
@@ -342,6 +351,23 @@ def _write_stage(
                         break
                     continue
                 if not quality_filter.accept(record):
+                    continue
+                if _is_validation_record(
+                    record, float(plan.get("validation_fraction", 0.0))
+                ):
+                    validation_record = dict(record)
+                    validation_record["source_split"] = validation_record["split"]
+                    validation_record["split"] = "validation"
+                    line = json.dumps(
+                        validation_record, ensure_ascii=False, sort_keys=True
+                    )
+                    validation_handle.write(line + "\n")
+                    encoded_bytes = len(line.encode("utf-8")) + 1
+                    validation_stats["estimated_tokens"] += record["estimated_tokens"]
+                    validation_stats["documents"] += 1
+                    validation_stats["raw_bytes"] += encoded_bytes
+                    validation_stats["items"][_item_id(record)] += 1
+                    license_counts[record["license"]] += 1
                     continue
                 line = json.dumps(record, ensure_ascii=False, sort_keys=True)
                 handle.write(line + "\n")
@@ -411,6 +437,14 @@ def prepare_telco_corpora(
         raise ValueError("Corpus plans must use unique stage names.")
     for plan in plans:
         _validated_plan_items(registry, plan)
+    validation_fractions = {
+        float(plan.get("validation_fraction", 0.0)) for plan in plans
+    }
+    if len(validation_fractions) != 1:
+        raise ValueError("All corpus plans must use the same validation_fraction.")
+    validation_fraction = validation_fractions.pop()
+    if not 0 <= validation_fraction < 1:
+        raise ValueError("validation_fraction must be in [0, 1).")
     if buffer_size < 1:
         raise ValueError("buffer_size must be positive.")
 
@@ -429,6 +463,14 @@ def prepare_telco_corpora(
     stage_stats: dict[str, Any] = {}
     loader_calls: list[dict[str, Any]] = []
     license_counts: Counter[str] = Counter()
+    validation_stats: dict[str, Any] = {
+        "path": "validation.jsonl",
+        "validation_fraction": validation_fraction,
+        "estimated_tokens": 0,
+        "documents": 0,
+        "raw_bytes": 0,
+        "items": Counter(),
+    }
     used_source_ids = sorted(
         {
             str(item["source_id"])
@@ -438,25 +480,39 @@ def prepare_telco_corpora(
     )
 
     try:
-        for plan in plans:
-            stage = str(plan["stage"])
-            stats, calls, stage_licenses = _write_stage(
-                staging / f"{stage}.jsonl",
-                registry=registry,
-                plan=plan,
-                quality_filter=quality_filter,
-                buffer_size=buffer_size,
-                dataset_loader=loader,
+        validation_path = staging / "validation.jsonl"
+        with validation_path.open("w", encoding="utf-8") as validation_handle:
+            for plan in plans:
+                stage = str(plan["stage"])
+                stats, calls, stage_licenses = _write_stage(
+                    staging / f"{stage}.jsonl",
+                    registry=registry,
+                    plan=plan,
+                    quality_filter=quality_filter,
+                    buffer_size=buffer_size,
+                    dataset_loader=loader,
+                    validation_handle=validation_handle,
+                    validation_stats=validation_stats,
+                )
+                stage_stats[stage] = stats
+                loader_calls.extend(calls)
+                license_counts.update(stage_licenses)
+
+        validation_stats["raw_bytes"] = validation_path.stat().st_size
+        validation_stats["sha256"] = sha256_file(validation_path)
+        validation_stats["items"] = dict(sorted(validation_stats["items"].items()))
+        if validation_fraction > 0 and validation_stats["documents"] == 0:
+            raise ValueError(
+                "Validation holdout is empty; increase the prepared corpus or "
+                "validation_fraction."
             )
-            stage_stats[stage] = stats
-            loader_calls.extend(calls)
-            license_counts.update(stage_licenses)
 
         manifest: dict[str, Any] = {
             "version": 1,
             "complete": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "stages": {stage: stage_stats[stage] for stage in sorted(stage_stats)},
+            "validation": validation_stats,
             "sources": [
                 {
                     "id": registry.by_id[source_id].id,

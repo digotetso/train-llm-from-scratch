@@ -55,6 +55,7 @@ def _tiny_plan(stage: str = "pilot") -> dict:
         "seed": 42,
         "total_tokens": 56,
         "quota_tolerance": 0.03,
+        "validation_fraction": 0.2,
         "buffer_size": 3,
         "role_quotas": {
             "pretrain_general": 8,
@@ -202,9 +203,11 @@ def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):
     assert manifest["stages"]["pilot"]["requested_tokens"] == 56
     assert manifest["stages"]["pilot"]["estimated_tokens"] >= 56
     assert (output / "pilot.jsonl").exists()
+    assert (output / "validation.jsonl").exists()
     assert (output / "manifest.json").exists()
     assert not list(tmp_path.glob(".corpus.staging-*"))
     rows = _read_jsonl(output / "pilot.jsonl")
+    validation_rows = _read_jsonl(output / "validation.jsonl")
     assert all(row["role"].startswith("pretrain_") for row in rows)
     assert all(row["license"] for row in rows)
     assert {row["source_id"] for row in rows} == {
@@ -212,6 +215,11 @@ def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):
         "common_pile_structured",
         "telco_common_corpus",
     }
+    assert validation_rows
+    assert {row["content_sha256"] for row in rows}.isdisjoint(
+        row["content_sha256"] for row in validation_rows
+    )
+    assert manifest["validation"]["documents"] == len(validation_rows)
     assert len(calls) == 3
     assert all(call["streaming"] is True for call in calls)
     assert all(len(call["revision"]) == 40 for call in calls)
@@ -243,6 +251,10 @@ def test_builder_publishes_main_and_cooldown_together(tmp_path: Path):
         row["content_sha256"] for row in _read_jsonl(output / "cooldown.jsonl")
     }
     assert main_hashes.isdisjoint(cooldown_hashes)
+    validation_hashes = {
+        row["content_sha256"] for row in _read_jsonl(output / "validation.jsonl")
+    }
+    assert validation_hashes.isdisjoint(main_hashes | cooldown_hashes)
 
 
 def test_builder_filters_exact_duplicates_and_contamination(tmp_path: Path):
@@ -351,6 +363,7 @@ def test_builder_rejects_evaluation_plan_before_loading(tmp_path: Path):
         "seed": 42,
         "total_tokens": 10,
         "quota_tolerance": 0.03,
+        "validation_fraction": 0.2,
         "buffer_size": 3,
         "role_quotas": {"evaluation_only": 10},
         "items": [

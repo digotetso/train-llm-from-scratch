@@ -1,6 +1,7 @@
 version: 1
 seed: 42
 quota_tolerance: 0.03
+validation_fraction: 0.005
 buffer_size: 2048
 
 stages:
