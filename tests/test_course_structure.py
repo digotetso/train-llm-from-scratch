@@ -74,12 +74,15 @@ EXPECTED_OUTLINE = [
 
 VIDEO_DIR = Path("course/videos/001-computer-learning-from-text")
 REQUIRED_VIDEO_FILES = {
+    "animation.py",
     "answer-key.md",
     "evidence.md",
     "lab.md",
     "lab.py",
     "lesson.md",
+    "manim.cfg",
     "quiz.md",
+    "scenes.md",
     "script.md",
 }
 MODEL_INPUT_PROMPT = "Can the mathematical model use this raw Python string as numeric input? No"
@@ -132,7 +135,9 @@ TEMPLATE_HEADINGS = {
 VIDEO_HEADINGS = {
     "script.md": [
         "# Video 1: What Does It Mean for a Computer to Learn From Text?",
-        *TEMPLATE_HEADINGS["script.md"][1:],
+        "## 00:00 Hook",
+        "## 00:45 Analogy",
+        *TEMPLATE_HEADINGS["script.md"][3:],
     ],
     "lesson.md": [
         "# Video 1: What Does It Mean for a Computer to Learn From Text?",

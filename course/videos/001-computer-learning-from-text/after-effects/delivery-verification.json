@@ -1,0 +1,59 @@
+{
+  "verifiedAt": "2026-07-22",
+  "project": {
+    "path": "video-001-what-ai-models-actually-do.aep",
+    "bytes": 20058270,
+    "sha256": "ffbb3daa7b1cc225cdacc1ed4e490da083c85c9e3877162293993cd6306a3881",
+    "shotComps": 48,
+    "nativeLayers": 865,
+    "projectItems": 106,
+    "liveTextLayers": 565,
+    "missingFonts": 0
+  },
+  "review": {
+    "path": "exports/video-001-what-ai-models-actually-do-review.mp4",
+    "bytes": 12233526,
+    "sha256": "28aa7975fed12c8c9b753c9fc447cc14882c0a60aefe7ec4c8836b0ed7569cf5",
+    "codec": "H.264 High",
+    "pixelFormat": "yuv420p",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "frames": 25200,
+    "durationSeconds": 840.0,
+    "audioStreams": 0,
+    "timecodeTrack": "tmcd",
+    "color": "BT.709"
+  },
+  "master": {
+    "path": "exports/video-001-what-ai-models-actually-do-prores-422-hq.mov",
+    "bytes": 3944818907,
+    "sha256": "c422bed9cc5342ac6251c493f6383e6c01631b020c163e1bb6969c0e12f8abfc",
+    "codec": "Apple ProRes 422 HQ",
+    "codecTag": "apch",
+    "pixelFormat": "yuv422p10le",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "frames": 25200,
+    "durationSeconds": 840.0,
+    "audioStreams": 0,
+    "timecodeTrack": "tmcd",
+    "color": "BT.709"
+  },
+  "tests": {
+    "command": "uv run pytest tests/test_video_001_after_effects.py tests/test_video_001_animation.py tests/test_course_structure.py -q",
+    "passed": 42,
+    "failed": 0
+  },
+  "visualQa": {
+    "settledSampleSeconds": [4, 60, 180, 300, 450, 630, 756, 810],
+    "checks": [
+      "typography visible and correctly anchored",
+      "right-aligned nested labels remain within their panels",
+      "arrow glyphs render",
+      "critical content remains within the 1920x1080 canvas"
+    ]
+  },
+  "residualRisk": "No final voice-over was supplied; timing follows the approved Figma section handoff."
+}
