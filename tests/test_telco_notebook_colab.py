@@ -38,6 +38,7 @@ def test_telco_notebook_is_valid_and_defaults_to_prepare_data():
     assert 'DATA_PLAN = "pilot"' in source
     assert "ALLOW_FULL_DATA = False" in source
     assert "FULL_APPROVED = False" in source
+    assert "GOOGLE_DRIVE_FREE_GB_OVERRIDE = 0.0" in source
     for stage in ("prepare_data", "prepare", "smoke", "pilot", "full", "evaluate"):
         assert stage in source
 
@@ -74,6 +75,21 @@ def test_runtime_gate_is_cuda_and_memory_based_not_name_locked():
     assert "40 * 1024**3" in source
     assert '"T4" in gpu_name' not in source
     assert "RTX PRO 6000" not in source
+    assert 'print("Drive mount/cache filesystem:"' in source
+    assert 'print("Drive disk:"' not in source
+
+
+def test_full_data_gate_uses_drive_api_quota_not_mount_cache_statvfs():
+    source = _code_after_heading(
+        "## 7. Prepare isolated evaluation and training data"
+    )
+
+    assert "google_drive_storage_evidence" in source
+    assert "storageQuota" in source
+    assert "require_free_storage_gib" in source
+    assert "GOOGLE_DRIVE_FREE_GB_OVERRIDE" in source
+    assert "require_free_storage_gib(drive_storage, 140.0)" in source
+    assert 'shutil.disk_usage("/content/drive").free' not in source
 
 
 def test_prepare_data_materializes_benchmarks_before_training_corpus():
@@ -122,6 +138,7 @@ def test_prepare_stage_audits_before_sharding_and_never_pretrains():
     assert 'status\"] == \"ok\"' in source
     assert "memory_fraction" in source
     assert "scripts/pretrain.py" not in source
+    assert source.count('"--min-free-disk-gb", "0"') == 1
 
 
 def test_prepare_stage_freezes_tokenizer_then_rebuilds_exact_pilot():
@@ -167,6 +184,7 @@ def test_training_gate_revalidates_artifacts_and_binds_evidence_to_config():
     assert "config_sha256" in source
     assert "scripts/preflight_t4.py" in source
     assert "preflight_{RUN_STAGE}.json" in source
+    assert '"--min-free-disk-gb", "0"' in source
 
 
 def test_evaluation_uses_open_telco_and_fifty_blinded_llm_reviews():
@@ -190,3 +208,15 @@ def test_notebook_uses_dedicated_config_and_drive_directory():
     assert "MyDrive/matgpt_artifacts" in paths
     assert "training_splits" in paths
     assert "data_phases" in paths
+    assert "DATA_RECIPE_SHA256" in paths
+    assert "SOURCE_REGISTRY.read_bytes()" in paths
+    assert "MIXTURE_CONFIG.read_bytes()" in paths
+    assert "CHECKED_CONFIG.read_bytes()" in paths
+    assert 'RECIPE_ROOT = DRIVE_ROOT / "recipes" / DATA_RECIPE_SHA256[:12]' in paths
+    assert 'WORK_ROOT = Path("/content/matgpt_work") / "matgpt_telco_300m" / DATA_RECIPE_SHA256[:12]' in paths
+
+
+def test_full_gate_requires_pilot_from_same_data_recipe():
+    source = _code_after_heading("## 9. Verify evidence gates")
+
+    assert 'pilot_gate = RECIPE_ROOT / "evidence/pilot/pilot_complete.json"' in source

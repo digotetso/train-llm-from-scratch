@@ -12,6 +12,25 @@ from matgpt.data.sources import load_source_registry
 
 SOURCES = Path("configs/data/telco_300m_sources.yaml")
 MIXTURE = Path("configs/data/telco_300m_mixture.yaml")
+GENERAL_MAIN_QUOTAS = {
+    "common_pile_arxiv_abstracts": 130_000_000,
+    "common_pile_doab": 325_000_000,
+    "common_pile_libretexts": 65_000_000,
+    "common_pile_oercommons": 6_500_000,
+    "common_pile_pes2o": 520_000_000,
+    "common_pile_pre_1929_books": 910_000_000,
+    "common_pile_pressbooks": 65_000_000,
+    "common_pile_project_gutenberg": 650_000_000,
+    "common_pile_public_domain_review": 650_000,
+    "common_pile_pubmed": 252_850_000,
+    "common_pile_stackexchange": 1_300_000_000,
+    "common_pile_wikimedia": 2_275_000_000,
+}
+STRUCTURED_MAIN_QUOTAS = {
+    "common_pile_github_archive": 275_000_000,
+    "common_pile_python_enhancement_proposals": 2_000_000,
+    "common_pile_stackv2_edu": 223_000_000,
+}
 
 
 def test_largest_remainder_allocation_preserves_total_and_is_stable():
@@ -86,6 +105,26 @@ def test_telecom_bucket_quotas_are_exact_and_patents_are_capped():
     assert items["telco_common_corpus/patents"]["token_quota"] <= int(
         plan["role_quotas"]["pretrain_telecom"] * 0.08
     )
+
+
+def test_main_plan_exposes_exact_general_and_structured_collection_quotas():
+    registry = load_source_registry(SOURCES)
+    mixture = load_mixture_config(MIXTURE)
+    plan = build_mixture_plan(registry, mixture, "main")
+    items = {item["id"]: item["token_quota"] for item in plan["items"]}
+
+    assert {source_id: items[source_id] for source_id in GENERAL_MAIN_QUOTAS} == (
+        GENERAL_MAIN_QUOTAS
+    )
+    assert {
+        source_id: items[source_id] for source_id in STRUCTURED_MAIN_QUOTAS
+    } == STRUCTURED_MAIN_QUOTAS
+    assert sum(GENERAL_MAIN_QUOTAS.values()) == plan["role_quotas"][
+        "pretrain_general"
+    ]
+    assert sum(STRUCTURED_MAIN_QUOTAS.values()) == plan["role_quotas"][
+        "pretrain_structured"
+    ]
 
 
 def test_pilot_uses_aggregate_mix_and_accepts_bounded_override():

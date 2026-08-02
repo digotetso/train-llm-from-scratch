@@ -46,6 +46,34 @@ Every upstream Hugging Face dataset is pinned to an immutable commit.
 | GSMA 3GPP mirror | `rag_only` | No | Retrieval/reference use subject to licence review |
 | Open Telco Lite and Full | `evaluation_only` | No | Isolated benchmark and contamination patterns |
 
+Each Common Pile collection is a separate registry source and receives an
+explicit token quota. Do not combine these file globs into one streaming source:
+the stream could satisfy the quota from early files before later collections
+are reached. The selected weights are deliberately below the source token
+supplies published in the
+[official Comma v0.1 dataset card](https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset),
+although the exact counts still depend on this project's tokenizer.
+
+| General collection | Share of general role | Main | Cooldown | Full total |
+| --- | ---: | ---: | ---: | ---: |
+| Wikimedia | 35% | 2.275B | 420M | 2.695B |
+| Stack Exchange | 20% | 1.300B | 240M | 1.540B |
+| Pre-1929 books | 14% | 910M | 168M | 1.078B |
+| Project Gutenberg | 10% | 650M | 120M | 770M |
+| peS2o | 8% | 520M | 96M | 616M |
+| DOAB | 5% | 325M | 60M | 385M |
+| PubMed | 3.89% | 252.85M | 46.68M | 299.53M |
+| arXiv abstracts | 2% | 130M | 24M | 154M |
+| LibreTexts | 1% | 65M | 12M | 77M |
+| Pressbooks | 1% | 65M | 12M | 77M |
+| OER Commons | 0.1% | 6.5M | 1.2M | 7.7M |
+| Public Domain Review | 0.01% | 0.65M | 0.12M | 0.77M |
+
+The structured role is also explicit: GitHub Archive receives 55% (330M full
+tokens), Stack v2 educational code 44.6% (267.6M), and Python Enhancement
+Proposals 0.4% (2.4M). The telecom role remains 35% 3GPP, 30% RFC/IETF, 25%
+research, 8% patents, and 2% semantic telecom text.
+
 `license_review: required` means the pipeline preserves and reports the source
 and document-level licence, but it does **not** grant legal clearance. Review
 the manifest's licence counts and the upstream terms before publishing the
@@ -68,6 +96,15 @@ Before the full corpus, plan for at least:
 - more space if you enable milestone checkpoints. The checked config keeps only
   rolling `latest.pt` and `best.pt` by setting `keep_milestones: false`.
 
+The value printed by `shutil.disk_usage("/content/drive")` describes Colab's
+Drive mount/cache filesystem; it is **not** the Google account quota. For a full
+data build, the notebook requests `storageQuota` from Google Drive API v3,
+checks the resulting account free space, and writes `drive_storage.json`. If
+that API authentication is unavailable, read free space from the Google Drive
+Storage page and set `GOOGLE_DRIVE_FREE_GB_OVERRIDE` to its decimal-GB free
+amount (not the used amount). The local `/content` check remains separate and still guards
+the temporary tokenizer and shard copies.
+
 Do not trust a GPU-name-based time estimate. Read `benchmark.json` and estimate:
 
 ```text
@@ -85,18 +122,25 @@ normal case.
 The notebook uses these fixed roots:
 
 ```text
-/content/matgpt_work/matgpt_telco_300m/
+/content/matgpt_work/matgpt_telco_300m/<recipe-id>/
   <pilot|full>/tokenizer/       fast local copy
   <pilot|full>/shards/          fast local copy
   <pilot|full>/config/          generated absolute-path config
 
 /content/drive/MyDrive/matgpt_artifacts/matgpt_telco_300m/
-  corpora/<pilot|full>/         normalized JSONL and manifest
   evaluation_assets/           isolated Open Telco Lite/Full JSONL
-  prepared/<pilot|full>/        durable tokenizer and shard snapshot
-  evidence/<pilot|full>/        plans, audit, preflight, benchmark, gates
-  runs/<pilot|full>/            metrics, samples, checkpoints, evaluations
+  recipes/<recipe-id>/
+    corpora/<pilot|full>/       normalized JSONL and manifest
+    prepared/<pilot|full>/      durable tokenizer and shard snapshot
+    evidence/<pilot|full>/      plans, audit, preflight, benchmark, gates
+    runs/<pilot|full>/          metrics, samples, checkpoints, evaluations
 ```
+
+`recipe-id` is the first 12 characters of a SHA-256 over the checked model/data
+config, source registry, and mixture. Any checked configuration, mixture, or
+source change gets a fresh namespace, so an old corpus, tokenizer, gate, or
+checkpoint cannot silently satisfy a new run. Older recipe directories remain
+intact for comparison and rollback.
 
 The original 8M/59M directories are not reused or overwritten.
 
@@ -137,8 +181,8 @@ A missing declared text field or another source-schema violation remains fatal.
 
 Stop and inspect:
 
-- `evidence/pilot/mixture_plan_pilot.json`;
-- `corpora/pilot/manifest.json`;
+- `recipes/<recipe-id>/evidence/pilot/mixture_plan_pilot.json`;
+- `recipes/<recipe-id>/corpora/pilot/manifest.json`;
 - `quota_counting.method: source_estimate` for a first bootstrap build;
 - source revisions, role totals, rejection counts, and licence counts;
 - confirmation that Open Telco source IDs are absent from the training sources.
@@ -152,14 +196,14 @@ generated JSONL or plan in Drive.
 This stage trains the tokenizer once from the bootstrap corpus (or restores an
 already frozen pilot tokenizer), checks general and telecom fertility probes,
 and immediately snapshots that tokenizer to
-`prepared/pilot/tokenizer`. It then atomically rebuilds the pilot corpus while
+`recipes/<recipe-id>/prepared/pilot/tokenizer`. It then atomically rebuilds the pilot corpus while
 counting exact tokenizer IDs, retains the bootstrap corpus as a timestamped
 backup, audits every exact quota, creates packed shards, runs the supported-GPU
 preflight, and benchmarks micro-batches 4, 8, and 12. It starts no pretraining.
 
 The exact corpus manifest must report `quota_counting.method: tokenizer_exact`
 and the same tokenizer SHA-256 as
-`prepared/pilot/tokenizer/special_tokens.json`. Do not retrain the tokenizer
+`recipes/<recipe-id>/prepared/pilot/tokenizer/special_tokens.json`. Do not retrain the tokenizer
 after this rebuild: changing the tokenizer would invalidate the counts that
 selected the corpus.
 
@@ -206,9 +250,10 @@ acceptable.
 ### 5. `prepare_data` and `prepare` with `DATA_PLAN = "full"`
 
 Set `ALLOW_FULL_DATA = True` only after the pilot review. Keep
-`FULL_APPROVED = False`. A completed `prepared/pilot/tokenizer` is now a hard
-prerequisite. The data stage uses that frozen tokenizer to build exact `main`
-and `cooldown` quotas together in one streamed pass; a partial phase is never
+`FULL_APPROVED = False`. A completed
+`recipes/<recipe-id>/prepared/pilot/tokenizer` is now a hard prerequisite. The
+data stage uses that recipe-matched frozen tokenizer to build exact `main` and
+`cooldown` quotas together in one atomic corpus build; a partial phase is never
 published. Then select `prepare` to restore/verify the same tokenizer, audit
 the exact corpus, and create the full shards.
 
@@ -264,14 +309,17 @@ not authority for live network changes.
 
 - A normal interruption: reconnect, select the same stage and data plan, run
   from the top, and resume `latest.pt`.
+- A source-registry or mixture change creates a new recipe ID. Start again at
+  `prepare_data` with `DATA_PLAN = "pilot"`; the old recipe remains preserved,
+  but its tokenizer, pilot gate, and checkpoints cannot promote the new recipe.
 - An older pilot `prepare` that fails with `Actual tokenizer quotas are outside
   tolerance`: do not raise the tolerance and do not delete the corpus. Pull the
   merged fix, open the repository's current Telco notebook, select
   `RUN_STAGE = "prepare"` and `DATA_PLAN = "pilot"`, then run all cells. The
-  notebook reuses a valid local/frozen tokenizer (or trains it once if the
-  runtime was restarted), snapshots it before replacement, and atomically
-  rebuilds the corpus with exact counts. The earlier estimate-selected corpus
-  remains recoverable under `corpora/pilot.backup-<timestamp>`.
+  notebook uses the recipe-matched tokenizer (or trains it once if this recipe
+  has none), snapshots it before replacement, and atomically rebuilds the
+  corpus with exact counts. The earlier estimate-selected corpus remains
+  recoverable under `corpora/pilot.backup-<timestamp>` inside that recipe.
 - Artifact mismatch: stop. Compare the saved config, manifest, tokenizer hash,
   and current Git commit. Resume only the exact matching run.
 - Failed corpus replacement: the builder publishes through a staging directory
