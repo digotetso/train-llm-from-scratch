@@ -209,11 +209,19 @@ selected the corpus.
 
 Required pass evidence:
 
-- `quota_audit.json` has `passed: true` and every item is within 3%;
+- `quota_audit.json` has `passed: true`, the whole stage is within 3%, and
+  every item is either within 3% or has `document_boundary_limited: true`;
 - `preflight.json` has `status: pass` for configuration, registry, every data
   split, tokenizer, shards, storage, GPU, schedule math, and checkpoint state;
 - `benchmark.json` has a finite batch-8 loss and gradient norm, positive
   throughput, and acceptable memory headroom.
+
+The document-boundary exception does not increase the configured tolerance.
+It applies only when all earlier whole documents for that source remain below
+quota and the final whole document is the one that crosses it. The audit still
+fails if an additional document was included or if the aggregate stage total
+exceeds 3%. This keeps licensed source documents intact while making very small
+pilot allocations auditable.
 
 Do not increase batch size merely because it fits once. Keep headroom for
 validation, checkpoint serialization, and runtime variance. If batch 8 fails,
@@ -317,9 +325,10 @@ not authority for live network changes.
   merged fix, open the repository's current Telco notebook, select
   `RUN_STAGE = "prepare"` and `DATA_PLAN = "pilot"`, then run all cells. The
   notebook uses the recipe-matched tokenizer (or trains it once if this recipe
-  has none), snapshots it before replacement, and atomically rebuilds the
-  corpus with exact counts. The earlier estimate-selected corpus remains
-  recoverable under `corpora/pilot.backup-<timestamp>` inside that recipe.
+  has none). An estimate-selected corpus is atomically rebuilt with exact
+  counts; an already exact corpus is reused and audited with the whole-document
+  boundary policy. Any earlier estimate-selected corpus remains recoverable
+  under `corpora/pilot.backup-<timestamp>` inside that recipe.
 - Artifact mismatch: stop. Compare the saved config, manifest, tokenizer hash,
   and current Git commit. Resume only the exact matching run.
 - Failed corpus replacement: the builder publishes through a staging directory

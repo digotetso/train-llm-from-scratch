@@ -690,8 +690,132 @@ def test_audit_token_quotas_reports_actual_counts(monkeypatch, tmp_path: Path):
         "planned_tokens": 2,
         "actual_tokens": 2,
         "relative_variance": 0.0,
+        "last_document_tokens": 2,
+        "document_boundary_limited": False,
         "passed": True,
     }
+
+
+def test_audit_accepts_minimal_document_overshoot_when_stage_total_is_within_tolerance(
+    monkeypatch, tmp_path: Path
+):
+    path = tmp_path / "pilot.jsonl"
+    rows = [
+        {
+            "source_id": "tiny",
+            "bucket_id": None,
+            "stage": "pilot",
+            "text": " ".join(["tiny"] * 8),
+        },
+        {
+            "source_id": "tiny",
+            "bucket_id": None,
+            "stage": "pilot",
+            "text": " ".join(["tiny"] * 8),
+        },
+        {
+            "source_id": "bulk",
+            "bucket_id": None,
+            "stage": "pilot",
+            "text": " ".join(["bulk"] * 990),
+        },
+    ]
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    class WordTokenizer:
+        def encode(self, text: str):
+            return SimpleNamespace(ids=list(range(len(text.split()))))
+
+    monkeypatch.setattr(
+        "matgpt.data.telco_prepare.load_tokenizer",
+        lambda _path: WordTokenizer(),
+    )
+    plan = {
+        "stage": "pilot",
+        "items": [
+            {
+                "id": "tiny",
+                "source_id": "tiny",
+                "bucket_id": None,
+                "token_quota": 10,
+            },
+            {
+                "id": "bulk",
+                "source_id": "bulk",
+                "bucket_id": None,
+                "token_quota": 990,
+            },
+        ],
+    }
+
+    report = audit_token_quotas(
+        [path],
+        tmp_path / "tokenizer",
+        [plan],
+        tolerance=0.03,
+    )
+
+    assert report["passed"] is True
+    assert report["stages"]["pilot"]["relative_variance"] == pytest.approx(
+        0.006
+    )
+    assert report["stages"]["pilot"]["items"]["tiny"] == {
+        "planned_tokens": 10,
+        "actual_tokens": 16,
+        "relative_variance": 0.6,
+        "last_document_tokens": 8,
+        "document_boundary_limited": True,
+        "passed": True,
+    }
+
+
+def test_audit_rejects_document_overshoot_when_stage_total_exceeds_tolerance(
+    monkeypatch, tmp_path: Path
+):
+    path = tmp_path / "pilot.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "source_id": "tiny",
+                    "bucket_id": None,
+                    "stage": "pilot",
+                    "text": " ".join(["tiny"] * 8),
+                }
+            )
+            + "\n"
+            for _ in range(2)
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "matgpt.data.telco_prepare.load_tokenizer",
+        lambda _path: SimpleNamespace(
+            encode=lambda text: SimpleNamespace(ids=list(range(len(text.split()))))
+        ),
+    )
+    plan = {
+        "stage": "pilot",
+        "items": [
+            {
+                "id": "tiny",
+                "source_id": "tiny",
+                "bucket_id": None,
+                "token_quota": 10,
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="stage total"):
+        audit_token_quotas(
+            [path],
+            tmp_path / "tokenizer",
+            [plan],
+            tolerance=0.03,
+        )
 
 
 def test_audit_token_quotas_fails_outside_tolerance(monkeypatch, tmp_path: Path):
