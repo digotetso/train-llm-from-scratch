@@ -696,7 +696,7 @@ def audit_token_quotas(
     *,
     tolerance: float,
 ) -> dict[str, Any]:
-    """Count actual tokenizer IDs per plan item and fail outside tolerance."""
+    """Audit tokenizer quotas while preserving whole-document boundaries."""
 
     if not 0 <= tolerance < 1:
         raise ValueError("tolerance must be in [0, 1).")
@@ -711,6 +711,10 @@ def audit_token_quotas(
         for stage, plan in plan_by_stage.items()
     }
     actual = {
+        stage: {item_id: 0 for item_id in items}
+        for stage, items in expected.items()
+    }
+    last_document_tokens = {
         stage: {item_id: 0 for item_id in items}
         for stage, items in expected.items()
     }
@@ -733,35 +737,65 @@ def audit_token_quotas(
                         f"Unexpected plan item {item_id!r} at "
                         f"{input_path}:{line_number}."
                     )
-                actual[stage][item_id] += len(tokenizer.encode(str(row["text"])).ids)
+                document_tokens = len(tokenizer.encode(str(row["text"])).ids)
+                actual[stage][item_id] += document_tokens
+                last_document_tokens[stage][item_id] = document_tokens
 
     report: dict[str, Any] = {
         "tolerance": tolerance,
+        "item_policy": "relative_tolerance_or_minimal_whole_document_boundary",
+        "stage_policy": "relative_tolerance",
         "passed": True,
         "stages": {},
     }
     failures: list[str] = []
     for stage in sorted(expected):
+        stage_planned = sum(expected[stage].values())
+        stage_counted = sum(actual[stage].values())
+        stage_variance = abs(stage_counted - stage_planned) / stage_planned
+        stage_passed = stage_variance <= tolerance
         stage_items: dict[str, Any] = {}
         for item_id in sorted(expected[stage]):
             planned = expected[stage][item_id]
             counted = actual[stage][item_id]
             variance = abs(counted - planned) / planned
-            passed = variance <= tolerance
+            final_document = last_document_tokens[stage][item_id]
+            within_tolerance = variance <= tolerance
+            boundary_limited = (
+                counted > planned
+                and counted - final_document < planned
+            )
+            passed = within_tolerance or boundary_limited
             stage_items[item_id] = {
                 "planned_tokens": planned,
                 "actual_tokens": counted,
                 "relative_variance": variance,
+                "last_document_tokens": final_document,
+                "document_boundary_limited": boundary_limited,
                 "passed": passed,
             }
             if not passed:
                 failures.append(
                     f"{stage}/{item_id}={counted}/{planned} ({variance:.2%})"
                 )
-        report["stages"][stage] = {"items": stage_items}
+        if not stage_passed:
+            failures.append(
+                f"{stage} stage total={stage_counted}/{stage_planned} "
+                f"({stage_variance:.2%})"
+            )
+        report["stages"][stage] = {
+            "planned_tokens": stage_planned,
+            "actual_tokens": stage_counted,
+            "relative_variance": stage_variance,
+            "passed": stage_passed and all(
+                item["passed"] for item in stage_items.values()
+            ),
+            "items": stage_items,
+        }
     if failures:
         report["passed"] = False
         raise ValueError(
-            "Actual tokenizer quotas are outside tolerance: " + "; ".join(failures)
+            "Actual tokenizer quotas are outside tolerance or whole-document "
+            "policy: " + "; ".join(failures)
         )
     return report
