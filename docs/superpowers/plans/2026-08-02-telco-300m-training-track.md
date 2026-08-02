@@ -237,7 +237,7 @@ git commit -m "feat: add deterministic telco mixture plans"
 
 **Interfaces:**
 - Consumes: `SourceSpec`, mixture `items`, `normalize_text`, `DataQualityPolicy`, `QualityFilter`, `sha256_json`, and `sha256_text`.
-- Produces: `normalize_source_row(source: SourceSpec, row: Mapping[str, Any], index: int, stage: str, bucket_id: str | None) -> dict[str, Any]`, `iter_deterministic_buffered(records: Iterable[dict[str, Any]], *, seed: int, buffer_size: int) -> Iterator[dict[str, Any]]`, `prepare_telco_corpus(registry: SourceRegistry, plan: Mapping[str, Any], output_dir: str | Path, quality_policy: DataQualityPolicy, *, buffer_size: int = 2048, force: bool = False, dataset_loader: Callable[..., Iterable[Mapping[str, Any]]] | None = None) -> dict[str, Any]`, and `audit_token_quotas(input_paths: Sequence[str | Path], tokenizer_dir: str | Path, plan: Mapping[str, Any], *, tolerance: float) -> dict[str, Any]`.
+- Produces: `normalize_source_row(source: SourceSpec, row: Mapping[str, Any], index: int, stage: str, bucket_id: str | None) -> dict[str, Any]`, `iter_deterministic_buffered(records: Iterable[dict[str, Any]], *, seed: int, buffer_size: int) -> Iterator[dict[str, Any]]`, `prepare_telco_corpora(registry: SourceRegistry, plans: Sequence[Mapping[str, Any]], output_dir: str | Path, quality_policy: DataQualityPolicy, *, buffer_size: int = 2048, force: bool = False, dataset_loader: Callable[..., Iterable[Mapping[str, Any]]] | None = None) -> dict[str, Any]`, and `audit_token_quotas(input_paths: Sequence[str | Path], tokenizer_dir: str | Path, plans: Sequence[Mapping[str, Any]], *, tolerance: float) -> dict[str, Any]`.
 
 - [ ] **Step 1: Write failing normalization and determinism tests**
 
@@ -278,23 +278,23 @@ Use the upstream document ID field when present and otherwise use the normalized
 
 ```python
 def test_builder_streams_only_to_quotas_and_promotes_atomically(tmp_path):
-    manifest = prepare_telco_corpus(
-        registry=registry, plan=tiny_plan, output_dir=tmp_path / "corpus",
+    manifest = prepare_telco_corpora(
+        registry=registry, plans=[tiny_plan], output_dir=tmp_path / "corpus",
         quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
         dataset_loader=fake_streaming_loader,
     )
     assert manifest["complete"] is True
-    assert (tmp_path / "corpus" / "train.jsonl").exists()
+    assert (tmp_path / "corpus" / "pilot.jsonl").exists()
     assert not (tmp_path / "corpus.staging").exists()
-    assert all(row["role"].startswith("pretrain_") for row in read_jsonl(tmp_path / "corpus" / "train.jsonl"))
+    assert all(row["role"].startswith("pretrain_") for row in read_jsonl(tmp_path / "corpus" / "pilot.jsonl"))
 
 def test_builder_failure_leaves_existing_output_untouched(tmp_path):
     output = tmp_path / "corpus"
     output.mkdir()
     (output / "sentinel").write_text("keep", encoding="utf-8")
     with pytest.raises(ValueError, match="exhausted before quota"):
-        prepare_telco_corpus(
-            registry=registry, plan=too_large_plan, output_dir=output,
+        prepare_telco_corpora(
+            registry=registry, plans=[too_large_plan], output_dir=output,
             quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
             dataset_loader=too_small_loader,
         )
@@ -306,8 +306,8 @@ def test_builder_rejects_evaluation_plan_before_loading(tmp_path):
         "items": [{"id": "open_telco_lite", "source_id": "open_telco_lite", "bucket_id": None, "role": "evaluation_only", "token_quota": 10}],
     }
     with pytest.raises(ValueError, match="not permitted for pretraining"):
-        prepare_telco_corpus(
-            registry=registry, plan=bad_plan, output_dir=tmp_path / "bad",
+        prepare_telco_corpora(
+            registry=registry, plans=[bad_plan], output_dir=tmp_path / "bad",
             quality_policy=DataQualityPolicy(enabled=True), dataset_loader=fake_streaming_loader,
         )
     assert loader_calls == []
@@ -321,13 +321,13 @@ Expected: normalization tests PASS; builder/promotion tests FAIL because assembl
 
 - [ ] **Step 6: Implement streamed collection and manifests**
 
-Call the injected loader or `datasets.load_dataset` with `streaming=True`, pinned `revision`, split/config, and `data_files` when configured. Scan each upstream source once, route collection rows to bucket quotas, apply one cross-source `QualityFilter`, and write accepted rows to `Path(f"{output_dir}.staging") / "train.jsonl"`. Estimate tokens from the configured upstream token field, otherwise `ceil(UTF-8 characters / 4)`. Stop only after every item quota is reached; fail if a source exhausts early.
+Call the injected loader or `datasets.load_dataset` with `streaming=True`, pinned `revision`, split/config, and `data_files` when configured. For each requested plan, scan each upstream source once, route collection rows to bucket quotas, apply one cross-source `QualityFilter`, and write accepted rows to `Path(f"{output_dir}.staging") / f"{stage}.jsonl"`. A pilot therefore produces `pilot.jsonl`; an approved full preparation passes both plans and atomically publishes `main.jsonl` plus `cooldown.jsonl` in one output tree. Estimate tokens from the configured upstream token field, otherwise `ceil(UTF-8 characters / 4)`. Stop only after every item quota is reached; fail if a source exhausts early.
 
 Write `manifest.json` containing plan hash, source revisions, requested/estimated tokens, documents, bytes, per-license counts, quality report, input loader arguments, incomplete quota variance, and `complete: true`. Validate the staging manifest and JSONL before atomic rename. Refuse to replace a non-empty output unless `--force` is explicitly supplied; with force, move the prior output to a timestamped backup rather than deleting it.
 
 - [ ] **Step 7: Add the preparation CLI**
 
-Accept `--sources`, `--mixture`, `--stage`, `--output-dir`, optional `--total-tokens`, `--contamination-patterns`, `--buffer-size`, and `--force`. Require `--allow-full-data` for `main` or `cooldown`; pilot needs no override. The CLI must not import or call pretraining code.
+Accept `--sources`, `--mixture`, repeatable `--stage`, `--output-dir`, optional `--total-tokens` for a single-stage pilot, `--contamination-patterns`, `--buffer-size`, and `--force`. Require `--allow-full-data` when either `main` or `cooldown` is selected, and require those two stages together for full preparation; pilot needs no override. The CLI must not import or call pretraining code.
 
 - [ ] **Step 8: Verify builder tests and CLI help**
 
@@ -599,7 +599,7 @@ LOCAL_WORK_ROOT = "/content/matgpt_work"
 CONFIG_PATH = "configs/matgpt_telco_300m.yaml"
 ```
 
-`prepare_data` first materializes pinned Open Telco Lite questions outside the training tree, passes those JSONL files to the contamination filter, then performs only mixture planning and bounded streamed corpus preparation. `prepare` trains/validates the tokenizer, audits exact token quotas, shards named phases, runs artifact preflight, and executes a temporary batch benchmark. `smoke` performs 20 successful updates plus resume verification. `pilot` has an explicit bounded token/step override. `full` executes the unchanged 12B schedule only when manually selected and after required evidence files exist. `evaluate` reuses the isolated Open Telco assets, evaluates preserved checkpoints, runs repetition/consistency/comparison commands, and writes the summary.
+`prepare_data` first materializes pinned Open Telco Lite questions outside the training tree, passes those JSONL files to the contamination filter, then performs only mixture planning and bounded streamed corpus preparation. Pilot preparation publishes `pilot.jsonl`; the notebook writes a temporary one-phase config mapping its `main` phase to that file. Approved full preparation publishes `main.jsonl` and `cooldown.jsonl` together for the checked two-phase config. `prepare` trains/validates the tokenizer, audits exact token quotas, shards the applicable named phases, runs artifact preflight, and executes a temporary batch benchmark. `smoke` performs 20 successful updates plus resume verification. `pilot` has an explicit bounded token/step override. `full` executes the unchanged 12B schedule only when manually selected and after required evidence files exist. `evaluate` reuses the isolated Open Telco assets, evaluates preserved checkpoints, runs repetition/consistency/comparison commands, and writes the summary.
 
 Runtime checks require CUDA for training stages, report device name and VRAM, warn below 40 GiB for the default batch, and accept the observed `NVIDIA RTX PRO 6000 Blackwell Server Edition`. Preparation may run without CUDA; no stage asserts a literal GPU model name.
 
