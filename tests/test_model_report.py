@@ -28,3 +28,27 @@ def test_mini_config_has_exact_trainable_parameter_count():
     assert report["size_label_parameters"] == 8_000_000
     assert report["parameter_count"] == 8_391_936
     assert report["size_label_matches"] is True
+
+
+def test_telco_config_has_exact_trainable_parameter_count():
+    cfg = load_config("configs/matgpt_telco_300m.yaml")
+
+    report = build_model_report(cfg)
+
+    assert cfg["model"] == {
+        "vocab_size": 32768,
+        "context_length": 2048,
+        "n_layers": 20,
+        "n_heads": 16,
+        "d_model": 1024,
+        "d_ff": 3072,
+        "dropout": 0.0,
+        "norm_eps": 1.0e-5,
+        "rope_base": 10000.0,
+        "tie_embeddings": True,
+        "use_bias": False,
+        "activation": "swiglu",
+    }
+    assert report["size_label_parameters"] == 300_000_000
+    assert report["parameter_count"] == 306_226_176
+    assert report["size_label_matches"] is True
