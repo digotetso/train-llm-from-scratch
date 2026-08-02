@@ -27,6 +27,10 @@ from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
 
 
+class EmptySourceTextError(ValueError):
+    """Raised when a source row's declared text normalizes to empty."""
+
+
 def _positive_token_estimate(source: SourceSpec, row: Mapping[str, Any], text: str) -> int:
     if source.token_count_field:
         raw = row.get(source.token_count_field)
@@ -62,7 +66,9 @@ def normalize_source_row(
         )
     text = normalize_text(str(raw_text))
     if not text:
-        raise ValueError(f"Source {source.id!r} row {index} has empty text.")
+        raise EmptySourceTextError(
+            f"Source {source.id!r} row {index} has empty text."
+        )
 
     content_sha256 = sha256_text(text)
     raw_document_id = (
@@ -242,6 +248,7 @@ def _iter_normalized_source(
     source: SourceSpec,
     dataset: Iterable[Mapping[str, Any]],
     stage: str,
+    quality_filter: QualityFilter,
 ) -> Iterator[dict[str, Any]]:
     collections = _bucket_lookup(source)
     for index, row in enumerate(dataset):
@@ -259,13 +266,16 @@ def _iter_normalized_source(
                     f"{collection!r}; update and review the registry before continuing."
                 )
             bucket_id = collections[collection]
-        yield normalize_source_row(
-            source,
-            row,
-            index=index,
-            stage=stage,
-            bucket_id=bucket_id,
-        )
+        try:
+            yield normalize_source_row(
+                source,
+                row,
+                index=index,
+                stage=stage,
+                bucket_id=bucket_id,
+            )
+        except EmptySourceTextError:
+            quality_filter.record_rejection("empty_text")
 
 
 def _item_id(record: Mapping[str, Any]) -> str:
@@ -331,7 +341,12 @@ def _write_stage(
                 }
             )
             dataset = dataset_loader(source.hf_name, **kwargs)
-            normalized = _iter_normalized_source(source, dataset, stage)
+            normalized = _iter_normalized_source(
+                source,
+                dataset,
+                stage,
+                quality_filter,
+            )
             ordered = iter_deterministic_buffered(
                 normalized,
                 seed=int(plan["seed"]),

@@ -127,6 +127,11 @@ three rows have empty questions and cannot be evaluated. Preparation keeps the
 1,497 usable rows and records the skipped source indices and reason in the
 evaluation manifest. Other malformed row types remain fatal.
 
+Pinned pretraining sources can also contain whitespace-only documents. Corpus
+preparation skips those documents, records them as `empty_text` quality
+rejections, and continues streaming until the planned token quota is filled.
+A missing declared text field or another source-schema violation remains fatal.
+
 Stop and inspect:
 
 - `evidence/pilot/mixture_plan_pilot.json`;

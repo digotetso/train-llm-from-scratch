@@ -359,6 +359,61 @@ def test_builder_filters_exact_duplicates_and_contamination(tmp_path: Path):
     assert reasons["duplicate_exact"] >= 1
 
 
+def test_builder_skips_empty_text_rows_and_records_rejection(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    base_loader = _fake_loader_with_calls([])
+
+    def loader(hf_name: str, **kwargs):
+        rows = list(base_loader(hf_name, **kwargs))
+        data_files = kwargs.get("data_files") or []
+        if any("github_archive" in path for path in data_files):
+            rows.insert(0, {"text": " \t\n"})
+        return iter(rows)
+
+    output = tmp_path / "corpus"
+    manifest = prepare_telco_corpora(
+        registry=registry,
+        plans=[_tiny_plan()],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(
+            enabled=True,
+            min_chars=2,
+            exact_dedup=True,
+        ),
+        buffer_size=3,
+        dataset_loader=loader,
+    )
+
+    assert manifest["complete"] is True
+    assert manifest["quality_filter"]["rejection_reasons"]["empty_text"] == 1
+    rows = _read_jsonl(output / "pilot.jsonl")
+    rows.extend(_read_jsonl(output / "validation.jsonl"))
+    assert rows
+    assert all(row["text"].strip() for row in rows)
+
+
+def test_builder_still_rejects_missing_text_field(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    base_loader = _fake_loader_with_calls([])
+
+    def loader(hf_name: str, **kwargs):
+        rows = list(base_loader(hf_name, **kwargs))
+        data_files = kwargs.get("data_files") or []
+        if any("github_archive" in path for path in data_files):
+            rows.insert(0, {})
+        return iter(rows)
+
+    with pytest.raises(ValueError, match="is missing 'text'"):
+        prepare_telco_corpora(
+            registry=registry,
+            plans=[_tiny_plan()],
+            output_dir=tmp_path / "corpus",
+            quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+            buffer_size=3,
+            dataset_loader=loader,
+        )
+
+
 def test_builder_failure_leaves_existing_output_untouched(tmp_path: Path):
     registry = load_source_registry(REGISTRY_PATH)
     output = tmp_path / "corpus"
