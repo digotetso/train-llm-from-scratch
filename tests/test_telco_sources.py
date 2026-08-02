@@ -10,15 +10,35 @@ from matgpt.data.sources import (
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
+COMMON_PILE_REVISION = "5afc546db324e7f39f297ba757c9a60547151e7c"
+GENERAL_COLLECTIONS = {
+    "common_pile_arxiv_abstracts": "arxiv_abstracts/*.jsonl.gz",
+    "common_pile_doab": "doab/*.jsonl.gz",
+    "common_pile_libretexts": "libretexts/*.jsonl.gz",
+    "common_pile_oercommons": "oercommons/*.jsonl.gz",
+    "common_pile_pes2o": "peS2o/*.jsonl.gz",
+    "common_pile_pre_1929_books": "pre_1929_books/*.jsonl.gz",
+    "common_pile_pressbooks": "pressbooks/*.jsonl.gz",
+    "common_pile_project_gutenberg": "project_gutenberg/*.jsonl.gz",
+    "common_pile_public_domain_review": "public_domain_review/*.jsonl.gz",
+    "common_pile_pubmed": "pubmed/*.jsonl.gz",
+    "common_pile_stackexchange": "stackexchange/*.jsonl.gz",
+    "common_pile_wikimedia": "wikimedia/*.jsonl.gz",
+}
+STRUCTURED_COLLECTIONS = {
+    "common_pile_github_archive": "github_archive/*.jsonl.gz",
+    "common_pile_python_enhancement_proposals": (
+        "python_enhancement_proposals/*.jsonl.gz"
+    ),
+    "common_pile_stackv2_edu": "stackv2_edu/*.jsonl.gz",
+}
 
 
 def test_registry_pins_training_and_evaluation_sources():
     registry = load_source_registry(REGISTRY_PATH)
 
     assert registry.version == 1
-    assert registry.by_id["common_pile_general"].revision == (
-        "5afc546db324e7f39f297ba757c9a60547151e7c"
-    )
+    assert registry.by_id["common_pile_wikimedia"].revision == COMMON_PILE_REVISION
     assert registry.by_id["telco_common_corpus"].revision == (
         "c590e4e6224d2cd50cc9403537cff7656d1535ea"
     )
@@ -43,7 +63,7 @@ def test_registry_declares_all_asset_roles_and_license_review_state():
         "rag_only",
         "evaluation_only",
     }
-    assert registry.by_id["common_pile_general"].license_review == "required"
+    assert registry.by_id["common_pile_wikimedia"].license_review == "required"
     assert registry.by_id["telco_common_corpus"].license_field == "license"
     assert registry.by_id["smol_smoltalk"].license_review == "required"
 
@@ -83,18 +103,23 @@ def test_telco_source_has_bounded_collection_buckets():
     }
 
 
-def test_common_pile_sources_limit_remote_files_by_collection():
+def test_common_pile_collections_are_independently_quota_controlled():
     registry = load_source_registry(REGISTRY_PATH)
 
-    general = registry.by_id["common_pile_general"]
-    structured = registry.by_id["common_pile_structured"]
-    assert "wikimedia/*.jsonl.gz" in general.data_files
-    assert "stackexchange/*.jsonl.gz" in general.data_files
-    assert structured.data_files == (
-        "github_archive/*.jsonl.gz",
-        "python_enhancement_proposals/*.jsonl.gz",
-        "stackv2_edu/*.jsonl.gz",
-    )
+    assert "common_pile_general" not in registry.by_id
+    assert "common_pile_structured" not in registry.by_id
+    for source_id, data_file in GENERAL_COLLECTIONS.items():
+        source = registry.by_id[source_id]
+        assert source.role == "pretrain_general"
+        assert source.revision == COMMON_PILE_REVISION
+        assert source.data_files == (data_file,)
+        assert source.collection == data_file.split("/", 1)[0]
+    for source_id, data_file in STRUCTURED_COLLECTIONS.items():
+        source = registry.by_id[source_id]
+        assert source.role == "pretrain_structured"
+        assert source.revision == COMMON_PILE_REVISION
+        assert source.data_files == (data_file,)
+        assert source.collection == data_file.split("/", 1)[0]
 
 
 @pytest.mark.parametrize(
@@ -120,12 +145,12 @@ def test_training_boundary_returns_only_requested_pretraining_sources():
 
     selected = select_pretraining_sources(
         registry,
-        ["telco_common_corpus", "common_pile_general"],
+        ["telco_common_corpus", "common_pile_wikimedia"],
     )
 
     assert tuple(source.id for source in selected) == (
         "telco_common_corpus",
-        "common_pile_general",
+        "common_pile_wikimedia",
     )
     assert all(source.role in PRETRAIN_ROLES for source in selected)
 

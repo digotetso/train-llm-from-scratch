@@ -31,15 +31,15 @@ def _read_jsonl(path: Path) -> list[dict]:
 def _tiny_plan(stage: str = "pilot") -> dict:
     items = [
         {
-            "id": "common_pile_general",
-            "source_id": "common_pile_general",
+            "id": "common_pile_wikimedia",
+            "source_id": "common_pile_wikimedia",
             "bucket_id": None,
             "role": "pretrain_general",
             "token_quota": 8,
         },
         {
-            "id": "common_pile_structured",
-            "source_id": "common_pile_structured",
+            "id": "common_pile_github_archive",
+            "source_id": "common_pile_github_archive",
             "bucket_id": None,
             "role": "pretrain_structured",
             "token_quota": 8,
@@ -132,8 +132,8 @@ def _single_general_plan(token_quota: int = 8) -> dict:
         "role_quotas": {"pretrain_general": token_quota},
         "items": [
             {
-                "id": "common_pile_general",
-                "source_id": "common_pile_general",
+                "id": "common_pile_wikimedia",
+                "source_id": "common_pile_wikimedia",
                 "bucket_id": None,
                 "role": "pretrain_general",
                 "token_quota": token_quota,
@@ -262,8 +262,8 @@ def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):
     assert all(row["role"].startswith("pretrain_") for row in rows)
     assert all(row["license"] for row in rows)
     assert {row["source_id"] for row in rows} == {
-        "common_pile_general",
-        "common_pile_structured",
+        "common_pile_wikimedia",
+        "common_pile_github_archive",
         "telco_common_corpus",
     }
     assert validation_rows
@@ -462,8 +462,8 @@ def test_builder_filters_exact_duplicates_and_contamination(tmp_path: Path):
     plan = _tiny_plan()
     for item in plan["items"]:
         if item["source_id"] in {
-            "common_pile_general",
-            "common_pile_structured",
+                "common_pile_wikimedia",
+                "common_pile_github_archive",
         }:
             item["token_quota"] = 40
     plan["role_quotas"]["pretrain_general"] = 40
@@ -648,7 +648,7 @@ def test_audit_token_quotas_reports_actual_counts(monkeypatch, tmp_path: Path):
     path.write_text(
         json.dumps(
             {
-                "source_id": "common_pile_general",
+                "source_id": "common_pile_wikimedia",
                 "bucket_id": None,
                 "stage": "pilot",
                 "text": "one two",
@@ -670,8 +670,8 @@ def test_audit_token_quotas_reports_actual_counts(monkeypatch, tmp_path: Path):
         "stage": "pilot",
         "items": [
             {
-                "id": "common_pile_general",
-                "source_id": "common_pile_general",
+                "id": "common_pile_wikimedia",
+                "source_id": "common_pile_wikimedia",
                 "bucket_id": None,
                 "token_quota": 2,
             }
@@ -686,7 +686,7 @@ def test_audit_token_quotas_reports_actual_counts(monkeypatch, tmp_path: Path):
     )
 
     assert report["passed"] is True
-    assert report["stages"]["pilot"]["items"]["common_pile_general"] == {
+    assert report["stages"]["pilot"]["items"]["common_pile_wikimedia"] == {
         "planned_tokens": 2,
         "actual_tokens": 2,
         "relative_variance": 0.0,
@@ -699,7 +699,7 @@ def test_audit_token_quotas_fails_outside_tolerance(monkeypatch, tmp_path: Path)
     path.write_text(
         json.dumps(
             {
-                "source_id": "common_pile_general",
+                "source_id": "common_pile_wikimedia",
                 "bucket_id": None,
                 "stage": "pilot",
                 "text": "one",
@@ -718,8 +718,8 @@ def test_audit_token_quotas_fails_outside_tolerance(monkeypatch, tmp_path: Path)
         "stage": "pilot",
         "items": [
             {
-                "id": "common_pile_general",
-                "source_id": "common_pile_general",
+                "id": "common_pile_wikimedia",
+                "source_id": "common_pile_wikimedia",
                 "bucket_id": None,
                 "token_quota": 2,
             }

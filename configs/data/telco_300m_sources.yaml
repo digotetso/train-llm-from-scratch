@@ -1,7 +1,7 @@
 version: 1
 
 sources:
-  - id: common_pile_general
+  - id: common_pile_arxiv_abstracts
     hf_name: common-pile/comma_v0.1_training_dataset
     hf_config: null
     split: train
@@ -11,23 +11,199 @@ sources:
     license_review: required
     text_field: text
     document_id_field: null
-    collection: common-pile-general
+    collection: arxiv_abstracts
     collection_field: null
     license_field: null
     token_count_field: null
     data_files:
       - arxiv_abstracts/*.jsonl.gz
-      - doab/*.jsonl.gz
-      - libretexts/*.jsonl.gz
-      - oercommons/*.jsonl.gz
-      - peS2o/*.jsonl.gz
-      - pre_1929_books/*.jsonl.gz
-      - pressbooks/*.jsonl.gz
-      - project_gutenberg/*.jsonl.gz
-      - public_domain_review/*.jsonl.gz
-      - pubmed/*.jsonl.gz
-      - stackexchange/*.jsonl.gz
-      - wikimedia/*.jsonl.gz
+    buckets: []
+
+  - id: common_pile_doab
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: doab
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [doab/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_libretexts
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: libretexts
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [libretexts/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_oercommons
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: oercommons
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [oercommons/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_pes2o
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: peS2o
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [peS2o/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_pre_1929_books
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: pre_1929_books
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [pre_1929_books/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_pressbooks
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: pressbooks
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [pressbooks/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_project_gutenberg
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: project_gutenberg
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [project_gutenberg/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_public_domain_review
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: public_domain_review
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [public_domain_review/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_pubmed
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: pubmed
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [pubmed/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_stackexchange
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: stackexchange
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [stackexchange/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_wikimedia
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_general
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: wikimedia
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [wikimedia/*.jsonl.gz]
     buckets: []
 
   - id: telco_common_corpus
@@ -73,7 +249,7 @@ sources:
           - Wikidata-Telecom
         weight: 0.02
 
-  - id: common_pile_structured
+  - id: common_pile_github_archive
     hf_name: common-pile/comma_v0.1_training_dataset
     hf_config: null
     split: train
@@ -83,14 +259,46 @@ sources:
     license_review: required
     text_field: text
     document_id_field: null
-    collection: common-pile-structured
+    collection: github_archive
     collection_field: null
     license_field: null
     token_count_field: null
     data_files:
       - github_archive/*.jsonl.gz
-      - python_enhancement_proposals/*.jsonl.gz
-      - stackv2_edu/*.jsonl.gz
+    buckets: []
+
+  - id: common_pile_python_enhancement_proposals
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_structured
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: python_enhancement_proposals
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [python_enhancement_proposals/*.jsonl.gz]
+    buckets: []
+
+  - id: common_pile_stackv2_edu
+    hf_name: common-pile/comma_v0.1_training_dataset
+    hf_config: null
+    split: train
+    revision: 5afc546db324e7f39f297ba757c9a60547151e7c
+    role: pretrain_structured
+    license: Common-Pile-v0.1-open-license-mix
+    license_review: required
+    text_field: text
+    document_id_field: null
+    collection: stackv2_edu
+    collection_field: null
+    license_field: null
+    token_count_field: null
+    data_files: [stackv2_edu/*.jsonl.gz]
     buckets: []
 
   - id: smol_smoltalk

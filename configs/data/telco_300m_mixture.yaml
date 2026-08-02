@@ -12,9 +12,22 @@ stages:
       pretrain_telecom: 37
       pretrain_structured: 6
     source_weights:
-      common_pile_general: 1
+      common_pile_arxiv_abstracts: 200
+      common_pile_doab: 500
+      common_pile_libretexts: 100
+      common_pile_oercommons: 10
+      common_pile_pes2o: 800
+      common_pile_pre_1929_books: 1400
+      common_pile_pressbooks: 100
+      common_pile_project_gutenberg: 1000
+      common_pile_public_domain_review: 1
+      common_pile_pubmed: 389
+      common_pile_stackexchange: 2000
+      common_pile_wikimedia: 3500
       telco_common_corpus: 1
-      common_pile_structured: 1
+      common_pile_github_archive: 550
+      common_pile_python_enhancement_proposals: 4
+      common_pile_stackv2_edu: 446
 
   main:
     total_tokens: 10000000000
@@ -23,9 +36,22 @@ stages:
       pretrain_telecom: 30
       pretrain_structured: 5
     source_weights:
-      common_pile_general: 1
+      common_pile_arxiv_abstracts: 200
+      common_pile_doab: 500
+      common_pile_libretexts: 100
+      common_pile_oercommons: 10
+      common_pile_pes2o: 800
+      common_pile_pre_1929_books: 1400
+      common_pile_pressbooks: 100
+      common_pile_project_gutenberg: 1000
+      common_pile_public_domain_review: 1
+      common_pile_pubmed: 389
+      common_pile_stackexchange: 2000
+      common_pile_wikimedia: 3500
       telco_common_corpus: 1
-      common_pile_structured: 1
+      common_pile_github_archive: 550
+      common_pile_python_enhancement_proposals: 4
+      common_pile_stackv2_edu: 446
 
   cooldown:
     total_tokens: 2000000000
@@ -34,6 +60,19 @@ stages:
       pretrain_telecom: 35
       pretrain_structured: 5
     source_weights:
-      common_pile_general: 1
+      common_pile_arxiv_abstracts: 200
+      common_pile_doab: 500
+      common_pile_libretexts: 100
+      common_pile_oercommons: 10
+      common_pile_pes2o: 800
+      common_pile_pre_1929_books: 1400
+      common_pile_pressbooks: 100
+      common_pile_project_gutenberg: 1000
+      common_pile_public_domain_review: 1
+      common_pile_pubmed: 389
+      common_pile_stackexchange: 2000
+      common_pile_wikimedia: 3500
       telco_common_corpus: 1
-      common_pile_structured: 1
+      common_pile_github_archive: 550
+      common_pile_python_enhancement_proposals: 4
+      common_pile_stackv2_edu: 446
