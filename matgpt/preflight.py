@@ -16,6 +16,7 @@ import torch
 
 from matgpt.config import config_to_yaml, validate_config
 from matgpt.data.prepare import effective_validation_split
+from matgpt.data.sources import PRETRAIN_ROLES, load_source_registry
 from matgpt.model.gpt import GPT, GPTConfig, count_parameters
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.training.dataset import metadata_path_for_split
@@ -111,24 +112,81 @@ def _normalized_split_evidence(path: Path) -> dict[str, Any]:
 
 def _check_config(cfg: dict[str, Any]) -> dict[str, Any]:
     validate_config(cfg)
-    return {"run_name": cfg["run"]["name"]}
+    return {
+        "run_name": cfg["run"]["name"],
+        "config_sha256": sha256_text(config_to_yaml(cfg)),
+    }
 
 
 def _check_source_revision(cfg: dict[str, Any]) -> dict[str, Any]:
-    revision = cfg["dataset"].get("revision")
+    dataset_cfg = cfg["dataset"]
+    revision = dataset_cfg.get("revision")
+    if isinstance(revision, str) and revision.startswith("registry:"):
+        declared_path = Path(revision.removeprefix("registry:"))
+        registry_path = Path(dataset_cfg.get("source_registry_path", declared_path))
+        if declared_path.resolve() != registry_path.resolve():
+            raise ValueError(
+                "dataset.revision registry path does not match "
+                "dataset.source_registry_path"
+            )
+        registry = load_source_registry(registry_path)
+        return {
+            "revision": revision,
+            "registry_path": str(registry_path),
+            "registry_sha256": sha256_file(registry_path),
+            "registry_source_count": len(registry.sources),
+        }
     if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-        raise ValueError(f"dataset.revision must be a 40-character commit hash; observed {revision!r}")
+        raise ValueError(
+            "dataset.revision must be a 40-character commit hash or a pinned "
+            f"registry reference; observed {revision!r}"
+        )
     return {"revision": revision}
+
+
+def _configured_data_splits(dataset_cfg: dict[str, Any]) -> list[str]:
+    training_splits = dataset_cfg.get("training_splits")
+    if training_splits:
+        splits = list(dict.fromkeys(training_splits.values()))
+    else:
+        splits = [dataset_cfg["train_split"]]
+    validation_split = effective_validation_split(dataset_cfg)
+    if validation_split not in splits:
+        splits.append(validation_split)
+    return splits
 
 
 def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
     dataset_cfg = cfg["dataset"]
     normalized = Path(dataset_cfg["normalized_dir"])
     manifest = _read_json(normalized / "manifest.json")
-    if manifest.get("version_or_commit") != dataset_cfg["revision"]:
+    revision = dataset_cfg["revision"]
+    if isinstance(revision, str) and revision.startswith("registry:"):
+        registry_path = Path(dataset_cfg["source_registry_path"])
+        registry = load_source_registry(registry_path)
+        registry_sources = registry.by_id
+        manifest_sources = manifest.get("sources")
+        if not isinstance(manifest_sources, list) or not manifest_sources:
+            raise ValueError("Registry-backed dataset manifest requires sources")
+        for source in manifest_sources:
+            source_id = source.get("id") if isinstance(source, dict) else None
+            if source_id not in registry_sources:
+                raise ValueError(f"Dataset manifest has unknown source {source_id!r}")
+            expected = registry_sources[source_id]
+            if source.get("revision") != expected.revision:
+                raise ValueError(
+                    f"Dataset source {source_id!r} revision does not match registry"
+                )
+            if source.get("role") != expected.role or expected.role not in PRETRAIN_ROLES:
+                raise ValueError(
+                    f"Dataset source {source_id!r} is not approved for pretraining"
+                )
+        if manifest.get("complete") is not True:
+            raise ValueError("Registry-backed dataset manifest is not complete")
+    elif manifest.get("version_or_commit") != revision:
         raise ValueError(
             "Dataset revision mismatch: "
-            f"manifest={manifest.get('version_or_commit')} config={dataset_cfg['revision']}"
+            f"manifest={manifest.get('version_or_commit')} config={revision}"
         )
     stored_hash = manifest.get("manifest_sha256")
     hash_payload = dict(manifest)
@@ -137,7 +195,7 @@ def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Dataset manifest_sha256 does not match manifest content")
     counts = {}
     split_evidence = {}
-    for split in (dataset_cfg["train_split"], effective_validation_split(dataset_cfg)):
+    for split in _configured_data_splits(dataset_cfg):
         observed = _normalized_split_evidence(normalized / f"{split}.jsonl")
         expected = manifest["split_stats"][split]
         for field_name, observed_value in observed.items():
@@ -183,11 +241,16 @@ def _check_dataset_overlap(cfg: dict[str, Any]) -> dict[str, Any]:
         for _, row in _nonempty_jsonl_rows(normalized / f"{validation_split}.jsonl")
     }
     overlaps = []
-    for _, row in _nonempty_jsonl_rows(normalized / f"{dataset_cfg['train_split']}.jsonl"):
-        if row["text_sha256"] in validation_hashes:
-            overlaps.append(row["text_sha256"])
-            if len(overlaps) == 5:
-                break
+    for split in _configured_data_splits(dataset_cfg):
+        if split == validation_split:
+            continue
+        for _, row in _nonempty_jsonl_rows(normalized / f"{split}.jsonl"):
+            if row["text_sha256"] in validation_hashes:
+                overlaps.append(row["text_sha256"])
+                if len(overlaps) == 5:
+                    break
+        if len(overlaps) == 5:
+            break
     if overlaps:
         raise ValueError(f"Exact train/validation overlap detected: {overlaps}")
     return {"overlap_count": 0, "validation_hash_count": len(validation_hashes)}
@@ -232,7 +295,7 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
     sharding_cfg = cfg["sharding"]
     output_root = Path(sharding_cfg["output_dir"]).resolve()
     manifest = _read_json(Path(dataset_cfg["normalized_dir"]) / "manifest.json")
-    for split in (dataset_cfg["train_split"], effective_validation_split(dataset_cfg)):
+    for split in _configured_data_splits(dataset_cfg):
         metadata = _read_json(metadata_path_for_split(sharding_cfg["output_dir"], split))
         stored_hash = metadata.get("metadata_sha256")
         hash_payload = dict(metadata)

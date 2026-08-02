@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from matgpt.data.quality import DataQualityPolicy
+from matgpt.config import clone_config, load_config
+from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.data.sources import load_source_registry
 from matgpt.data.telco_prepare import (
     audit_token_quotas,
@@ -12,6 +14,8 @@ from matgpt.data.telco_prepare import (
     normalize_source_row,
     prepare_telco_corpora,
 )
+from matgpt.preflight import build_preflight_report
+from matgpt.tokenizer.train import train_tokenizer_from_config
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
@@ -202,6 +206,11 @@ def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):
     assert manifest["complete"] is True
     assert manifest["stages"]["pilot"]["requested_tokens"] == 56
     assert manifest["stages"]["pilot"]["estimated_tokens"] >= 56
+    assert set(manifest["split_stats"]) == {"pilot", "validation"}
+    for split in ("pilot", "validation"):
+        assert manifest["split_stats"][split]["document_count"] > 0
+        assert manifest["split_stats"][split]["total_chars"] > 0
+        assert len(manifest["split_stats"][split]["documents_sha256"]) == 64
     assert (output / "pilot.jsonl").exists()
     assert (output / "validation.jsonl").exists()
     assert (output / "manifest.json").exists()
@@ -255,6 +264,58 @@ def test_builder_publishes_main_and_cooldown_together(tmp_path: Path):
         row["content_sha256"] for row in _read_jsonl(output / "validation.jsonl")
     }
     assert validation_hashes.isdisjoint(main_hashes | cooldown_hashes)
+
+
+def test_synthetic_telco_corpus_reaches_shards_and_preflight(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    corpus = tmp_path / "corpus"
+    prepare_telco_corpora(
+        registry=registry,
+        plans=[_tiny_plan()],
+        output_dir=corpus,
+        quality_policy=DataQualityPolicy(
+            enabled=True,
+            min_chars=2,
+            exact_dedup=True,
+        ),
+        buffer_size=3,
+        dataset_loader=_fake_loader_with_calls([]),
+    )
+    cfg = clone_config(load_config("configs/matgpt_telco_300m.yaml"))
+    cfg["run"]["output_dir"] = str(tmp_path / "run")
+    cfg["dataset"].update(
+        {
+            "normalized_dir": str(corpus),
+            "train_split": "pilot",
+            "training_splits": {"pilot": "pilot"},
+        }
+    )
+    cfg["tokenizer"].update(
+        {
+            "vocab_size": 320,
+            "output_dir": str(tmp_path / "tokenizer"),
+            "min_frequency": 1,
+        }
+    )
+    cfg["model"].update({"vocab_size": 320, "context_length": 8})
+    cfg["sharding"].update(
+        {"output_dir": str(tmp_path / "shards"), "shard_size_tokens": 4096}
+    )
+    cfg["training"].update(
+        {
+            "max_tokens": 4096,
+            "data_phases": [
+                {"name": "pilot", "split": "pilot", "until_tokens": 4096}
+            ],
+        }
+    )
+
+    train_tokenizer_from_config(cfg)
+    metadata = tokenize_splits_from_config(cfg)
+    report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0.0)
+
+    assert set(metadata["splits"]) == {"pilot", "validation"}
+    assert report["status"] == "pass"
 
 
 def test_builder_filters_exact_duplicates_and_contamination(tmp_path: Path):

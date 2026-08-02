@@ -103,7 +103,7 @@ training:
   sample_interval_tokens: 50000000
   log_interval_steps: 10
   save_best: true
-  keep_milestones: true
+  keep_milestones: false
   allow_artifact_mismatch: false
   max_consecutive_skipped_updates: 5
   num_workers: 2

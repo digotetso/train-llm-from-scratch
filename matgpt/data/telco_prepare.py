@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -309,6 +310,8 @@ def _write_stage(
     }
     loader_calls: list[dict[str, Any]] = []
     license_counts: Counter[str] = Counter()
+    total_chars = 0
+    documents_digest = hashlib.sha256()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with path.open("w", encoding="utf-8") as handle:
@@ -365,6 +368,11 @@ def _write_stage(
                     encoded_bytes = len(line.encode("utf-8")) + 1
                     validation_stats["estimated_tokens"] += record["estimated_tokens"]
                     validation_stats["documents"] += 1
+                    validation_stats["document_count"] += 1
+                    validation_stats["total_chars"] += len(record["text"])
+                    validation_stats["_documents_digest"].update(
+                        record["text_sha256"].encode("utf-8")
+                    )
                     validation_stats["raw_bytes"] += encoded_bytes
                     validation_stats["items"][_item_id(record)] += 1
                     license_counts[record["license"]] += 1
@@ -372,6 +380,8 @@ def _write_stage(
                 line = json.dumps(record, ensure_ascii=False, sort_keys=True)
                 handle.write(line + "\n")
                 encoded_bytes = len(line.encode("utf-8")) + 1
+                total_chars += len(record["text"])
+                documents_digest.update(record["text_sha256"].encode("utf-8"))
                 stats["estimated_tokens"] += record["estimated_tokens"]
                 stats["documents"] += 1
                 stats["raw_bytes"] += encoded_bytes
@@ -411,6 +421,11 @@ def _write_stage(
             stats["estimated_tokens"] for stats in item_stats.values()
         ),
         "documents": sum(stats["documents"] for stats in item_stats.values()),
+        "document_count": sum(
+            stats["documents"] for stats in item_stats.values()
+        ),
+        "total_chars": total_chars,
+        "documents_sha256": documents_digest.hexdigest(),
         "raw_bytes": path.stat().st_size,
         "sha256": sha256_file(path),
         "items": {item_id: item_stats[item_id] for item_id in sorted(item_stats)},
@@ -468,6 +483,9 @@ def prepare_telco_corpora(
         "validation_fraction": validation_fraction,
         "estimated_tokens": 0,
         "documents": 0,
+        "document_count": 0,
+        "total_chars": 0,
+        "_documents_digest": hashlib.sha256(),
         "raw_bytes": 0,
         "items": Counter(),
     }
@@ -500,6 +518,9 @@ def prepare_telco_corpora(
 
         validation_stats["raw_bytes"] = validation_path.stat().st_size
         validation_stats["sha256"] = sha256_file(validation_path)
+        validation_stats["documents_sha256"] = validation_stats.pop(
+            "_documents_digest"
+        ).hexdigest()
         validation_stats["items"] = dict(sorted(validation_stats["items"].items()))
         if validation_fraction > 0 and validation_stats["documents"] == 0:
             raise ValueError(
@@ -513,6 +534,13 @@ def prepare_telco_corpora(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "stages": {stage: stage_stats[stage] for stage in sorted(stage_stats)},
             "validation": validation_stats,
+            "split_stats": {
+                **{
+                    stage: stage_stats[stage]
+                    for stage in sorted(stage_stats)
+                },
+                "validation": validation_stats,
+            },
             "sources": [
                 {
                     "id": registry.by_id[source_id].id,

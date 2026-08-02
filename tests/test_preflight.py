@@ -9,6 +9,7 @@ from matgpt.config import clone_config, config_to_yaml, load_config
 from matgpt.data.prepare import make_document_record, write_jsonl_records, write_manifest
 from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.preflight import build_preflight_report, run_preflight
+from matgpt.data.sources import load_source_registry
 from matgpt.tokenizer.train import train_tokenizer_from_config
 from matgpt.utils.hashing import sha256_json, sha256_text
 from scripts.preflight_t4 import main as preflight_main
@@ -206,7 +207,121 @@ def test_preflight_passes_complete_synthetic_artifacts(synthetic_preflight_cfg, 
     assert report["status"] == "pass"
     assert all(check["status"] == "pass" for check in report["checks"])
     assert [check["name"] for check in report["checks"]] == CHECK_IDS
+    assert _check(report, "config")["details"]["config_sha256"] == sha256_text(
+        config_to_yaml(synthetic_preflight_cfg)
+    )
     assert (tmp_path / "preflight.json").exists()
+
+
+def test_preflight_checks_every_configured_training_phase(
+    synthetic_preflight_cfg,
+    tmp_path,
+):
+    cfg = synthetic_preflight_cfg
+    normalized = Path(cfg["dataset"]["normalized_dir"])
+    train_rows = [
+        json.loads(line)
+        for line in (normalized / "train.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    main_stats = write_jsonl_records(normalized / "main.jsonl", train_rows[:20])
+    cooldown_rows = [
+        make_document_record(
+            "unit",
+            "cooldown",
+            index,
+            f"Cooldown telecom example {index} discusses routing and radio links.",
+        )
+        for index in range(20)
+    ]
+    cooldown_stats = write_jsonl_records(
+        normalized / "cooldown.jsonl", cooldown_rows
+    )
+    validation_stats = preflight_module._normalized_split_evidence(
+        normalized / "validation.jsonl"
+    )
+    write_manifest(
+        normalized / "manifest.json",
+        dataset_name="unit-phased",
+        version_or_commit=REVISION,
+        license_name="test",
+        stage="base_pretraining",
+        language="en",
+        split_stats={
+            "main": main_stats,
+            "cooldown": cooldown_stats,
+            "validation": validation_stats,
+        },
+        notes="synthetic phased preflight fixture",
+    )
+    cfg["dataset"].update(
+        {
+            "train_split": "main",
+            "training_splits": {"main": "main", "cooldown": "cooldown"},
+        }
+    )
+    cfg["training"]["data_phases"] = [
+        {"name": "main", "split": "main", "until_tokens": 2048},
+        {"name": "cooldown", "split": "cooldown", "until_tokens": 4096},
+    ]
+    train_tokenizer_from_config(cfg)
+    tokenize_splits_from_config(cfg)
+
+    report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0.0)
+
+    assert _check(report, "dataset_manifest")["status"] == "pass"
+    assert _check(report, "dataset_overlap")["status"] == "pass"
+    assert set(_check(report, "shards")["details"]) == {
+        "main",
+        "cooldown",
+        "validation",
+    }
+
+
+def test_preflight_accepts_pinned_registry_dataset_identity(tmp_path):
+    registry_path = Path("configs/data/telco_300m_sources.yaml")
+    registry = load_source_registry(registry_path)
+    normalized = tmp_path / "normalized"
+    split_stats = {}
+    for split in ("main", "cooldown", "validation"):
+        records = [
+            make_document_record(
+                "registry-unit",
+                split,
+                index,
+                f"Unique {split} telecom routing sample {index}.",
+            )
+            for index in range(3)
+        ]
+        split_stats[split] = write_jsonl_records(
+            normalized / f"{split}.jsonl", records
+        )
+    manifest = {
+        "version": 1,
+        "complete": True,
+        "split_stats": split_stats,
+        "sources": [
+            {
+                "id": source.id,
+                "revision": source.revision,
+                "role": source.role,
+            }
+            for source in registry.sources
+            if source.role.startswith("pretrain_")
+        ],
+    }
+    _write_hashed_json(normalized / "manifest.json", manifest, "manifest_sha256")
+    cfg = clone_config(load_config("configs/matgpt_telco_300m.yaml"))
+    cfg["dataset"]["normalized_dir"] = str(normalized)
+
+    source_details = preflight_module._check_source_revision(cfg)
+    manifest_details = preflight_module._check_dataset_manifest(cfg)
+
+    assert source_details["registry_source_count"] == len(registry.sources)
+    assert set(manifest_details["document_counts"]) == {
+        "main",
+        "cooldown",
+        "validation",
+    }
 
 
 def test_preflight_reports_train_validation_overlap(synthetic_preflight_cfg):
