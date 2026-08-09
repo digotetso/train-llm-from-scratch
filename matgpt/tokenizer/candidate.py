@@ -13,6 +13,10 @@ from typing import Any, Mapping
 import yaml
 
 from matgpt.data.mixture import build_mixture_plan
+from matgpt.tokenizer.train import (
+    REQUIRED_VOCAB_SIZE,
+    has_required_special_token_ids,
+)
 from matgpt.utils.hashing import sha256_json
 
 
@@ -61,6 +65,10 @@ class TokenizerCandidateConfig:
     min_telecom_improvement: float
     max_working_gib: int
     min_free_gib: int
+
+    def __post_init__(self) -> None:
+        if self.baseline_label == self.candidate_label:
+            raise ValueError("Tokenizer baseline and candidate labels must differ.")
 
 
 def _positive_integer(value: Any, field: str) -> int:
@@ -225,6 +233,24 @@ def _failure_count(evaluation: Mapping[str, Any], field: str) -> int:
     return value
 
 
+def _valid_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _valid_tokenizer_identity(evaluation: Mapping[str, Any]) -> bool:
+    special_token_ids = evaluation.get("special_token_ids")
+    identity_failures = evaluation.get("tokenizer_identity_failures")
+    return (
+        type(identity_failures) is int
+        and identity_failures == 0
+        and evaluation.get("algorithm") == "byte_level_bpe"
+        and evaluation.get("vocab_size_requested") == REQUIRED_VOCAB_SIZE
+        and evaluation.get("vocab_size_actual") == REQUIRED_VOCAB_SIZE
+        and has_required_special_token_ids(special_token_ids)
+        and _valid_sha256(evaluation.get("tokenizer_sha256"))
+    )
+
+
 def compare_tokenizers(
     baseline: dict[str, Any],
     candidate: dict[str, Any],
@@ -232,6 +258,8 @@ def compare_tokenizers(
 ) -> dict[str, Any]:
     """Compare two evaluations on the same holdout and apply hard guardrails."""
 
+    if config.baseline_label == config.candidate_label:
+        raise ValueError("Tokenizer baseline and candidate labels must differ.")
     baseline_general = _role_tokens(baseline, "pretrain_general")
     candidate_general = _role_tokens(candidate, "pretrain_general")
     baseline_telecom = _role_tokens(baseline, "pretrain_telecom")
@@ -267,20 +295,20 @@ def compare_tokenizers(
         failures.append("probe_p95_regression")
     baseline_holdout = baseline.get("input_files_sha256")
     candidate_holdout = candidate.get("input_files_sha256")
-    if (
-        baseline_holdout is not None
-        and candidate_holdout is not None
-        and baseline_holdout != candidate_holdout
-    ):
+    if not _valid_sha256(baseline_holdout) or not _valid_sha256(candidate_holdout):
+        failures.append("holdout_fingerprint_invalid")
+    elif baseline_holdout != candidate_holdout:
         failures.append("holdout_mismatch")
     baseline_probes = baseline.get("probe_sets_sha256")
     candidate_probes = candidate.get("probe_sets_sha256")
-    if (
-        baseline_probes is not None
-        and candidate_probes is not None
-        and baseline_probes != candidate_probes
-    ):
+    if not _valid_sha256(baseline_probes) or not _valid_sha256(candidate_probes):
+        failures.append("probe_fingerprint_invalid")
+    elif baseline_probes != candidate_probes:
         failures.append("probe_set_mismatch")
+    if not _valid_tokenizer_identity(baseline) or not _valid_tokenizer_identity(
+        candidate
+    ):
+        failures.append("tokenizer_identity_failure")
 
     eligible = not failures
     recommend_candidate = eligible and (
@@ -446,8 +474,10 @@ def write_tokenizer_selection(
         "operator_timestamp": timestamp,
     }
     destination = Path(output_path)
+    if destination.name != "tokenizer_selection.json":
+        raise ValueError("Tokenizer selection output must be tokenizer_selection.json.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(
-        json.dumps(selection, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    with destination.open("x", encoding="utf-8") as handle:
+        json.dump(selection, handle, indent=2, sort_keys=True)
+        handle.write("\n")
     return selection

@@ -16,6 +16,17 @@ from matgpt.tokenizer.candidate import (
 )
 
 
+SPECIAL_TOKEN_IDS = {
+    "<|pad|>": 0,
+    "<|bos|>": 1,
+    "<|eos|>": 2,
+    "<|system|>": 3,
+    "<|user|>": 4,
+    "<|assistant|>": 5,
+    "<|end|>": 6,
+}
+
+
 def test_candidate_recipe_builds_exact_200m_combined_role_plan():
     config = load_tokenizer_candidate_config(
         "configs/data/telco_300m_tokenizer_candidate.yaml"
@@ -67,6 +78,27 @@ def test_candidate_recipe_requires_pilot_mixture_stage(tmp_path: Path):
 
     with pytest.raises(ValueError, match="mixture_stage must be pilot"):
         load_tokenizer_candidate_config(path)
+
+
+def test_candidate_recipe_rejects_equal_labels(tmp_path: Path):
+    raw = yaml.safe_load(
+        Path("configs/data/telco_300m_tokenizer_candidate.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["candidate_label"] = raw["baseline_label"]
+    path = tmp_path / "candidate.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="labels must differ"):
+        load_tokenizer_candidate_config(path)
+
+
+def test_candidate_config_direct_construction_rejects_equal_labels():
+    config = candidate_config()
+
+    with pytest.raises(ValueError, match="labels must differ"):
+        replace(config, candidate_label=config.baseline_label)
 
 
 def test_candidate_sample_plan_requires_pilot_stage_from_direct_config():
@@ -196,6 +228,11 @@ def evaluation(
         "probe_p95_tokens_per_word": probe_p95,
         "round_trip_failures": 0,
         "special_token_failures": 0,
+        "tokenizer_identity_failures": 0,
+        "algorithm": "byte_level_bpe",
+        "vocab_size_requested": 32_768,
+        "vocab_size_actual": 32_768,
+        "special_token_ids": SPECIAL_TOKEN_IDS,
         "tokenizer_sha256": tokenizer_sha256,
         "input_files_sha256": input_files_sha256,
         "probe_sets_sha256": probe_sets_sha256,
@@ -299,6 +336,101 @@ def test_comparison_blocks_different_holdout_or_probe_fingerprints():
     assert "probe_set_mismatch" in report["guardrail_failures"]
 
 
+@pytest.mark.parametrize(
+    ("side", "field", "value", "failure"),
+    [
+        ("baseline", "input_files_sha256", None, "holdout_fingerprint_invalid"),
+        ("candidate", "input_files_sha256", "ABC", "holdout_fingerprint_invalid"),
+        ("baseline", "probe_sets_sha256", None, "probe_fingerprint_invalid"),
+        ("candidate", "probe_sets_sha256", "f" * 63, "probe_fingerprint_invalid"),
+    ],
+)
+def test_comparison_blocks_missing_or_malformed_shared_fingerprints(
+    side: str, field: str, value: str | None, failure: str
+):
+    baseline = evaluation(
+        overall_tokens=10_000,
+        general_tokens=6_000,
+        telecom_tokens=3_000,
+        probe_p95=4.0,
+    )
+    candidate = evaluation(
+        overall_tokens=9_700,
+        general_tokens=5_900,
+        telecom_tokens=2_850,
+        probe_p95=3.9,
+    )
+    target = baseline if side == "baseline" else candidate
+    if value is None:
+        target.pop(field)
+    else:
+        target[field] = value
+
+    report = compare_tokenizers(baseline, candidate, candidate_config())
+
+    assert report["eligible"] is False
+    assert failure in report["guardrail_failures"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("algorithm", "wordpiece"),
+        ("vocab_size_requested", 320),
+        ("vocab_size_actual", 320),
+        ("tokenizer_identity_failures", 1),
+        ("special_token_ids", {"<|pad|>": 0}),
+        (
+            "special_token_ids",
+            {**SPECIAL_TOKEN_IDS, "<|pad|>": False},
+        ),
+    ],
+)
+def test_comparison_blocks_invalid_candidate_tokenizer_identity(
+    field: str, value: object
+):
+    baseline = evaluation(
+        overall_tokens=10_000,
+        general_tokens=6_000,
+        telecom_tokens=3_000,
+        probe_p95=4.0,
+    )
+    candidate = evaluation(
+        overall_tokens=9_700,
+        general_tokens=5_900,
+        telecom_tokens=2_850,
+        probe_p95=3.9,
+    )
+    candidate[field] = value
+
+    report = compare_tokenizers(baseline, candidate, candidate_config())
+
+    assert report["eligible"] is False
+    assert "tokenizer_identity_failure" in report["guardrail_failures"]
+
+
+def test_comparison_rejects_equal_labels_even_if_config_is_mutated():
+    config = candidate_config()
+    object.__setattr__(config, "candidate_label", config.baseline_label)
+
+    with pytest.raises(ValueError, match="labels must differ"):
+        compare_tokenizers(
+            evaluation(
+                overall_tokens=10_000,
+                general_tokens=6_000,
+                telecom_tokens=3_000,
+                probe_p95=4.0,
+            ),
+            evaluation(
+                overall_tokens=9_700,
+                general_tokens=5_900,
+                telecom_tokens=2_850,
+                probe_p95=3.9,
+            ),
+            config,
+        )
+
+
 def test_selection_records_explicit_approved_candidate(tmp_path: Path):
     comparison = compare_tokenizers(
         evaluation(
@@ -316,7 +448,7 @@ def test_selection_records_explicit_approved_candidate(tmp_path: Path):
         ),
         candidate_config(),
     )
-    output_path = tmp_path / "selection.json"
+    output_path = tmp_path / "tokenizer_selection.json"
 
     selection = write_tokenizer_selection(
         comparison,
@@ -355,4 +487,60 @@ def test_selection_refuses_ineligible_candidate(tmp_path: Path):
             comparison,
             "representative_200m",
             tmp_path / "selection.json",
+        )
+
+
+def test_selection_refuses_to_overwrite_existing_approval(tmp_path: Path):
+    comparison = compare_tokenizers(
+        evaluation(
+            overall_tokens=10_000,
+            general_tokens=6_000,
+            telecom_tokens=3_000,
+            probe_p95=4.0,
+        ),
+        evaluation(
+            overall_tokens=9_850,
+            general_tokens=6_030,
+            telecom_tokens=2_900,
+            probe_p95=4.02,
+            tokenizer_sha256="b" * 64,
+        ),
+        candidate_config(),
+    )
+    output_path = tmp_path / "tokenizer_selection.json"
+    output_path.write_text("existing approval\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        write_tokenizer_selection(
+            comparison,
+            "representative_200m",
+            output_path,
+        )
+
+    assert output_path.read_text(encoding="utf-8") == "existing approval\n"
+
+
+def test_selection_requires_dedicated_output_name(tmp_path: Path):
+    comparison = compare_tokenizers(
+        evaluation(
+            overall_tokens=10_000,
+            general_tokens=6_000,
+            telecom_tokens=3_000,
+            probe_p95=4.0,
+        ),
+        evaluation(
+            overall_tokens=9_850,
+            general_tokens=6_030,
+            telecom_tokens=2_900,
+            probe_p95=4.02,
+            tokenizer_sha256="b" * 64,
+        ),
+        candidate_config(),
+    )
+
+    with pytest.raises(ValueError, match="tokenizer_selection.json"):
+        write_tokenizer_selection(
+            comparison,
+            "representative_200m",
+            tmp_path / "tokenizer.json",
         )

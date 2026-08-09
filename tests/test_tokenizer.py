@@ -4,7 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tokenizers import Tokenizer, models
 
+import matgpt.tokenizer.train as tokenizer_train
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.tokenizer.fertility import load_probe_sets, measure_tokenizer_fertility
 from matgpt.tokenizer.train import (
@@ -23,6 +25,7 @@ SPECIAL_TOKENS = [
     "<|assistant|>",
     "<|end|>",
 ]
+REQUIRED_VOCAB_SIZE = 32_768
 
 def write_corpus(path: Path) -> None:
     records = [
@@ -74,7 +77,7 @@ def write_sample_manifest(
     for artifact in sorted(artifacts, key=lambda item: str(item["path"])):
         artifact_digest.update(sha256_json(artifact).encode("utf-8"))
     manifest = {
-        "version": 1,
+        "version": 2,
         "complete": True,
         "accepted_documents": document_counts["fit"],
         "holdout_documents": document_counts["holdout"],
@@ -107,6 +110,36 @@ def sample_record(
         "source_id": source_id,
         "bucket_id": bucket_id,
     }
+
+
+def install_valid_training_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    def train_from_jsonl(
+        input_paths,
+        output_dir,
+        vocab_size,
+        min_frequency,
+        special_tokens,
+        probe_sets_path=None,
+    ):
+        del min_frequency, probe_sets_path
+        documents = sum(
+            1
+            for path in input_paths
+            for line in Path(path).read_text(encoding="utf-8").splitlines()
+            if line
+        )
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        return {
+            "algorithm": "byte_level_bpe",
+            "vocab_size_requested": vocab_size,
+            "vocab_size_actual": REQUIRED_VOCAB_SIZE,
+            "special_token_ids": {
+                token: index for index, token in enumerate(special_tokens)
+            },
+            "num_training_documents": documents,
+        }
+
+    monkeypatch.setattr(tokenizer_train, "train_tokenizer_from_jsonl", train_from_jsonl)
 
 
 def test_train_tokenizer_round_trip_and_special_tokens(tmp_path: Path):
@@ -220,7 +253,10 @@ def test_training_report_includes_configured_fertility_probes(tmp_path: Path):
     assert set(report["fertility"]["groups"]) == {"general", "telecom"}
 
 
-def test_train_tokenizer_from_manifest_reads_all_verified_fit_chunks(tmp_path: Path):
+def test_train_tokenizer_from_manifest_reads_all_verified_fit_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_valid_training_double(monkeypatch)
     manifest = write_sample_manifest(
         tmp_path,
         fit_records=[
@@ -233,7 +269,7 @@ def test_train_tokenizer_from_manifest_reads_all_verified_fit_chunks(tmp_path: P
     report = train_tokenizer_from_manifest(
         manifest,
         tmp_path / "tokenizer",
-        vocab_size=320,
+        vocab_size=REQUIRED_VOCAB_SIZE,
         min_frequency=1,
         special_tokens=SPECIAL_TOKENS,
     )
@@ -256,7 +292,98 @@ def test_train_tokenizer_from_manifest_rejects_unexpected_fit_entry(tmp_path: Pa
         train_tokenizer_from_manifest(
             manifest,
             tmp_path / "tokenizer",
-            vocab_size=320,
+            vocab_size=REQUIRED_VOCAB_SIZE,
+            min_frequency=1,
+            special_tokens=SPECIAL_TOKENS,
+        )
+
+
+@pytest.mark.parametrize(
+    ("vocab_size", "special_tokens", "message"),
+    [
+        (320, SPECIAL_TOKENS, "vocab_size must be exactly 32768"),
+        (
+            REQUIRED_VOCAB_SIZE,
+            SPECIAL_TOKENS[:-1],
+            "exact ordered special tokens",
+        ),
+    ],
+)
+def test_train_tokenizer_from_manifest_rejects_wrong_tokenizer_recipe(
+    tmp_path: Path,
+    vocab_size: int,
+    special_tokens: list[str],
+    message: str,
+):
+    manifest = write_sample_manifest(
+        tmp_path,
+        fit_records=[[sample_record("RRC connection setup.")]],
+        holdout_records=[],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        train_tokenizer_from_manifest(
+            manifest,
+            tmp_path / "tokenizer",
+            vocab_size=vocab_size,
+            min_frequency=1,
+            special_tokens=special_tokens,
+        )
+
+
+def test_train_tokenizer_from_manifest_rejects_actual_vocabulary_below_32768(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = write_sample_manifest(
+        tmp_path,
+        fit_records=[[sample_record("RRC connection setup.")]],
+        holdout_records=[],
+    )
+
+    def invalid_training(*_args, **_kwargs):
+        return {
+            "algorithm": "byte_level_bpe",
+            "vocab_size_requested": REQUIRED_VOCAB_SIZE,
+            "vocab_size_actual": 320,
+            "special_token_ids": {
+                token: index for index, token in enumerate(SPECIAL_TOKENS)
+            },
+        }
+
+    monkeypatch.setattr(tokenizer_train, "train_tokenizer_from_jsonl", invalid_training)
+
+    with pytest.raises(ValueError, match="vocab_size_actual must be exactly 32768"):
+        train_tokenizer_from_manifest(
+            manifest,
+            tmp_path / "tokenizer",
+            vocab_size=REQUIRED_VOCAB_SIZE,
+            min_frequency=1,
+            special_tokens=SPECIAL_TOKENS,
+        )
+
+
+def test_train_tokenizer_from_manifest_rejects_v1_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_valid_training_double(monkeypatch)
+    manifest_path = write_sample_manifest(
+        tmp_path,
+        fit_records=[[sample_record("RRC connection setup.")]],
+        holdout_records=[],
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = 1
+    manifest.pop("manifest_sha256")
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="version must be 2"):
+        train_tokenizer_from_manifest(
+            manifest_path,
+            tmp_path / "tokenizer",
+            vocab_size=REQUIRED_VOCAB_SIZE,
             min_frequency=1,
             special_tokens=SPECIAL_TOKENS,
         )
@@ -360,6 +487,86 @@ def test_evaluate_tokenizer_records_missing_or_invalid_special_metadata_as_failu
     assert invalid_report["special_token_failure_details"] == [
         {"reason": "missing_or_invalid_special_token_metadata"}
     ]
+
+
+def test_evaluate_tokenizer_rejects_non_empty_special_token_subset(tmp_path: Path):
+    corpus = tmp_path / "train.jsonl"
+    tokenizer_dir = tmp_path / "tokenizer"
+    probes = tmp_path / "probes.yaml"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    metadata = load_tokenizer_metadata(tokenizer_dir)
+    metadata["special_token_ids"] = {"<|pad|>": 0}
+    (tokenizer_dir / "special_tokens.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[[sample_record("Held-out text.")]],
+    )
+
+    report = evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+    assert report["special_token_failures"] > 0
+    assert any(
+        detail.get("reason") == "special_token_set_mismatch"
+        for detail in report["special_token_failure_details"]
+    )
+
+
+def test_evaluate_tokenizer_rejects_forged_byte_level_bpe_metadata(tmp_path: Path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    vocabulary = {
+        **{token: index for index, token in enumerate(SPECIAL_TOKENS)},
+        "[UNK]": 7,
+        **{f"piece_{index}": index for index in range(8, REQUIRED_VOCAB_SIZE)},
+    }
+    tokenizer = Tokenizer(models.WordPiece(vocab=vocabulary, unk_token="[UNK]"))
+    tokenizer.save(str(tokenizer_dir / "tokenizer.json"))
+    (tokenizer_dir / "special_tokens.json").write_text(
+        json.dumps(
+            {
+                "algorithm": "byte_level_bpe",
+                "vocab_size_requested": REQUIRED_VOCAB_SIZE,
+                "vocab_size_actual": REQUIRED_VOCAB_SIZE,
+                "special_token_ids": {
+                    token: index for index, token in enumerate(SPECIAL_TOKENS)
+                },
+                "tokenizer_sha256": sha256_file(tokenizer_dir / "tokenizer.json"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    probes = tmp_path / "probes.yaml"
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[[sample_record("Held-out text.")]],
+    )
+
+    report = evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+    assert report["tokenizer_identity_failures"] > 0
+    assert "algorithm" in report["tokenizer_identity_failure_details"]
 
 
 def test_fertility_rejects_invalid_token_ids():

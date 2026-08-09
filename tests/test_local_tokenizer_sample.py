@@ -121,6 +121,7 @@ def test_sample_holdout_is_persistently_disjoint_and_progress_reports_quota(
             "SELECT COUNT(*) FROM seen_hashes"
         ).fetchone()[0]
 
+    assert manifest["version"] == 2
     assert isinstance(manifest["fit_content_sha256"], str)
     assert len(manifest["fit_content_sha256"]) == 64
     assert isinstance(manifest["holdout_content_sha256"], str)

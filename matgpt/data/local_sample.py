@@ -334,7 +334,7 @@ def _manifest(
         artifact_digest.update(sha256_json(artifact).encode("utf-8"))
         artifact_count += 1
     manifest: dict[str, object] = {
-        "version": 1,
+        "version": 2,
         "complete": True,
         "stage": str(request.plan["stage"]),
         "plan_sha256": str(request.plan["plan_sha256"]),

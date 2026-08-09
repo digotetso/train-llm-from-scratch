@@ -23,6 +23,31 @@ from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 _CHUNK_NAME = re.compile(r"^(fit|holdout)_(\d{5,})\.jsonl$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_FAILURE_DETAILS = 100
+REQUIRED_VOCAB_SIZE = 32_768
+REQUIRED_SPECIAL_TOKENS = (
+    "<|pad|>",
+    "<|bos|>",
+    "<|eos|>",
+    "<|system|>",
+    "<|user|>",
+    "<|assistant|>",
+    "<|end|>",
+)
+REQUIRED_SPECIAL_TOKEN_IDS = {
+    token: index for index, token in enumerate(REQUIRED_SPECIAL_TOKENS)
+}
+
+
+def has_required_special_token_ids(value: object) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == set(REQUIRED_SPECIAL_TOKEN_IDS)
+        and all(
+            type(value[token]) is int
+            and value[token] == required_id
+            for token, required_id in REQUIRED_SPECIAL_TOKEN_IDS.items()
+        )
+    )
 
 
 def _require_non_negative_integer(value: object, field_name: str) -> int:
@@ -108,8 +133,8 @@ def _load_verified_sample_manifest(
         raise ValueError(f"Sample manifest is invalid JSON: {path}") from error
     if not isinstance(manifest, dict):
         raise ValueError("Sample manifest must contain a JSON object.")
-    if manifest.get("version") not in {1, 2}:
-        raise ValueError("Sample manifest version must be 1 or 2.")
+    if manifest.get("version") != 2:
+        raise ValueError("Sample manifest version must be 2.")
     if manifest.get("complete") is not True:
         raise ValueError("Sample manifest must be complete before tokenizer use.")
 
@@ -308,6 +333,10 @@ def train_tokenizer_from_manifest(
 ) -> dict[str, object]:
     """Train from every fit chunk after verifying the bounded sample manifest."""
 
+    if vocab_size != REQUIRED_VOCAB_SIZE:
+        raise ValueError("Tokenizer vocab_size must be exactly 32768.")
+    if tuple(special_tokens) != REQUIRED_SPECIAL_TOKENS:
+        raise ValueError("Tokenizer requires the exact ordered special tokens.")
     manifest, paths_by_split = _load_verified_sample_manifest(manifest_path)
     if not paths_by_split["fit"]:
         raise ValueError("Sample manifest contains no fit chunks.")
@@ -319,6 +348,14 @@ def train_tokenizer_from_manifest(
         special_tokens,
         probe_sets_path,
     )
+    if report.get("algorithm") != "byte_level_bpe":
+        raise ValueError("Tokenizer algorithm must be byte_level_bpe.")
+    if report.get("vocab_size_requested") != REQUIRED_VOCAB_SIZE:
+        raise ValueError("Tokenizer vocab_size_requested must be exactly 32768.")
+    if report.get("vocab_size_actual") != REQUIRED_VOCAB_SIZE:
+        raise ValueError("Tokenizer vocab_size_actual must be exactly 32768.")
+    if not has_required_special_token_ids(report.get("special_token_ids")):
+        raise ValueError("Tokenizer special token IDs do not match the required order.")
     report["fitting_manifest_sha256"] = manifest["manifest_sha256"]
     report_path = Path(output_dir) / "tokenizer_report.json"
     report_path.write_text(
@@ -416,14 +453,24 @@ def _special_token_failures(
     if not isinstance(recorded, Mapping) or not recorded:
         return [{"reason": "missing_special_token_ids"}]
     failures: list[dict[str, object]] = []
+    if not has_required_special_token_ids(recorded):
+        failures.append(
+            {
+                "reason": "special_token_set_mismatch",
+                "expected": REQUIRED_SPECIAL_TOKEN_IDS,
+                "recorded": dict(recorded),
+            }
+        )
     vocabulary_size = tokenizer.get_vocab_size()
-    for token, recorded_id in sorted(recorded.items()):
+    for token, required_id in REQUIRED_SPECIAL_TOKEN_IDS.items():
+        recorded_id = recorded.get(token)
         actual_id = tokenizer.token_to_id(str(token))
         if (
             not isinstance(recorded_id, int)
             or isinstance(recorded_id, bool)
             or recorded_id < 0
             or recorded_id >= vocabulary_size
+            or recorded_id != required_id
             or actual_id != recorded_id
         ):
             failures.append(
@@ -433,6 +480,29 @@ def _special_token_failures(
                     "actual_id": actual_id,
                 }
             )
+    return failures
+
+
+def _tokenizer_identity_failures(
+    tokenizer: Tokenizer, metadata: Mapping[str, Any]
+) -> list[str]:
+    failures: list[str] = []
+    if (
+        metadata.get("algorithm") != "byte_level_bpe"
+        or type(tokenizer.model).__name__ != "BPE"
+        or type(tokenizer.pre_tokenizer).__name__ != "ByteLevel"
+        or type(tokenizer.decoder).__name__ != "ByteLevel"
+    ):
+        failures.append("algorithm")
+    if metadata.get("vocab_size_requested") != REQUIRED_VOCAB_SIZE:
+        failures.append("vocab_size_requested")
+    if metadata.get("vocab_size_actual") != REQUIRED_VOCAB_SIZE:
+        failures.append("vocab_size_actual")
+    if tokenizer.get_vocab_size() != REQUIRED_VOCAB_SIZE:
+        failures.append("tokenizer_vocab_size")
+    special_token_ids = metadata.get("special_token_ids")
+    if not has_required_special_token_ids(special_token_ids):
+        failures.append("special_token_ids")
     return failures
 
 
@@ -531,6 +601,9 @@ def evaluate_tokenizer_on_jsonl(
         special_token_failure_details = _special_token_failures(
             tokenizer, tokenizer_metadata
         )
+    tokenizer_identity_failure_details = _tokenizer_identity_failures(
+        tokenizer, tokenizer_metadata
+    )
     overall_report = overall.report()
     probe_report = probe_overall.report()
     probe_sets_sha256 = sha256_file(probe_sets_path)
@@ -551,6 +624,12 @@ def evaluate_tokenizer_on_jsonl(
         "round_trip_failure_details": round_trip_failure_details,
         "special_token_failures": len(special_token_failure_details),
         "special_token_failure_details": special_token_failure_details,
+        "tokenizer_identity_failures": len(tokenizer_identity_failure_details),
+        "tokenizer_identity_failure_details": tokenizer_identity_failure_details,
+        "algorithm": tokenizer_metadata.get("algorithm"),
+        "vocab_size_requested": tokenizer_metadata.get("vocab_size_requested"),
+        "vocab_size_actual": tokenizer_metadata.get("vocab_size_actual"),
+        "special_token_ids": tokenizer_metadata.get("special_token_ids"),
         "input_file_checksums": input_file_checksums,
         "input_files_sha256": sha256_json(input_file_checksums),
         "probe_sets_sha256": probe_sets_sha256,
