@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,12 @@ import pytest
 
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.tokenizer.fertility import load_probe_sets, measure_tokenizer_fertility
-from matgpt.tokenizer.train import train_tokenizer_from_jsonl
+from matgpt.tokenizer.train import (
+    evaluate_tokenizer_on_jsonl,
+    train_tokenizer_from_jsonl,
+    train_tokenizer_from_manifest,
+)
+from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 
 SPECIAL_TOKENS = [
     "<|pad|>",
@@ -28,6 +34,79 @@ def write_corpus(path: Path) -> None:
         "\n".join(json.dumps(record) for record in records) + "\n",
         encoding="utf-8",
     )
+
+
+def write_sample_manifest(
+    root: Path,
+    *,
+    fit_records: list[list[dict[str, object]]],
+    holdout_records: list[list[dict[str, object]]],
+) -> Path:
+    artifacts: list[dict[str, object]] = []
+    content_digests = {"fit": hashlib.sha256(), "holdout": hashlib.sha256()}
+    document_counts = {"fit": 0, "holdout": 0}
+    for split, chunks in (("fit", fit_records), ("holdout", holdout_records)):
+        split_dir = root / split
+        split_dir.mkdir(parents=True, exist_ok=True)
+        for index, records in enumerate(chunks):
+            path = split_dir / f"{split}_{index:05d}.jsonl"
+            path.write_text(
+                "".join(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                    for record in records
+                ),
+                encoding="utf-8",
+            )
+            artifacts.append(
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "size": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
+            for record in records:
+                content_digests[split].update(
+                    str(record["content_sha256"]).encode("utf-8")
+                )
+                document_counts[split] += 1
+
+    artifact_digest = hashlib.sha256()
+    for artifact in sorted(artifacts, key=lambda item: str(item["path"])):
+        artifact_digest.update(sha256_json(artifact).encode("utf-8"))
+    manifest = {
+        "version": 1,
+        "complete": True,
+        "accepted_documents": document_counts["fit"],
+        "holdout_documents": document_counts["holdout"],
+        "fit_content_sha256": content_digests["fit"].hexdigest(),
+        "holdout_content_sha256": content_digests["holdout"].hexdigest(),
+        "artifact_count": len(artifacts),
+        "artifacts_sha256": artifact_digest.hexdigest(),
+    }
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
+def sample_record(
+    text: str,
+    *,
+    role: str = "pretrain_general",
+    source_id: str = "sample_source",
+    bucket_id: str | None = None,
+) -> dict[str, object]:
+    digest = sha256_text(text)
+    return {
+        "text": text,
+        "content_sha256": digest,
+        "text_sha256": digest,
+        "role": role,
+        "source_id": source_id,
+        "bucket_id": bucket_id,
+    }
 
 
 def test_train_tokenizer_round_trip_and_special_tokens(tmp_path: Path):
@@ -139,6 +218,148 @@ def test_training_report_includes_configured_fertility_probes(tmp_path: Path):
     )
     assert report["fertility"] == persisted["fertility"]
     assert set(report["fertility"]["groups"]) == {"general", "telecom"}
+
+
+def test_train_tokenizer_from_manifest_reads_all_verified_fit_chunks(tmp_path: Path):
+    manifest = write_sample_manifest(
+        tmp_path,
+        fit_records=[
+            [sample_record("RRC connection setup.")],
+            [sample_record("A router forwards packets.")],
+        ],
+        holdout_records=[[sample_record("Held-out routing document.")]],
+    )
+
+    report = train_tokenizer_from_manifest(
+        manifest,
+        tmp_path / "tokenizer",
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+
+    assert report["num_training_documents"] == 2
+    assert report["fitting_manifest_sha256"] == json.loads(
+        manifest.read_text(encoding="utf-8")
+    )["manifest_sha256"]
+
+
+def test_train_tokenizer_from_manifest_rejects_unexpected_fit_entry(tmp_path: Path):
+    manifest = write_sample_manifest(
+        tmp_path,
+        fit_records=[[sample_record("RRC connection setup.")]],
+        holdout_records=[],
+    )
+    (tmp_path / "fit" / "notes.txt").write_text("not a chunk", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected sample entry"):
+        train_tokenizer_from_manifest(
+            manifest,
+            tmp_path / "tokenizer",
+            vocab_size=320,
+            min_frequency=1,
+            special_tokens=SPECIAL_TOKENS,
+        )
+
+
+def test_evaluate_tokenizer_reports_streamed_holdout_and_probe_metrics(
+    tmp_path: Path,
+):
+    corpus = tmp_path / "train.jsonl"
+    tokenizer_dir = tmp_path / "tokenizer"
+    probes = tmp_path / "probes.yaml"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n"
+        "  telecom:\n    - RRC connection.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[
+            [
+                sample_record(
+                    "A router forwards packets.",
+                    role="pretrain_general",
+                    source_id="general_source",
+                )
+            ],
+            [
+                sample_record(
+                    "The gNodeB establishes an RRC connection.",
+                    role="pretrain_telecom",
+                    source_id="telco_source",
+                    bucket_id="ran",
+                )
+            ],
+        ],
+    )
+
+    report = evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+    assert report["documents"] == 2
+    assert report["roles"]["pretrain_general"]["documents"] == 1
+    assert report["roles"]["pretrain_telecom"]["documents"] == 1
+    assert report["sources"]["telco_source"]["documents"] == 1
+    assert report["buckets"]["ran"]["documents"] == 1
+    assert report["p50_tokens_per_word"] <= report["p95_tokens_per_word"]
+    assert report["probe_metrics"]["groups"]["telecom"]["documents"] == 1
+    assert report["probe_p95_tokens_per_word"] > 0
+    assert report["round_trip_failures"] == 0
+    assert report["special_token_failures"] == 0
+    assert report["sample_manifest_sha256"] == json.loads(
+        manifest.read_text(encoding="utf-8")
+    )["manifest_sha256"]
+    assert len(report["input_file_checksums"]) == 2
+
+
+def test_evaluate_tokenizer_records_missing_or_invalid_special_metadata_as_failure(
+    tmp_path: Path,
+):
+    corpus = tmp_path / "train.jsonl"
+    tokenizer_dir = tmp_path / "tokenizer"
+    probes = tmp_path / "probes.yaml"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    (tokenizer_dir / "special_tokens.json").unlink()
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[[sample_record("Held-out text.")]],
+    )
+
+    report = evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+    assert report["special_token_failures"] == 1
+    assert report["special_token_failure_details"] == [
+        {"reason": "missing_or_invalid_special_token_metadata"}
+    ]
+
+    (tokenizer_dir / "special_tokens.json").write_text("[]\n", encoding="utf-8")
+    invalid_report = evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+    assert invalid_report["special_token_failures"] == 1
+    assert invalid_report["special_token_failure_details"] == [
+        {"reason": "missing_or_invalid_special_token_metadata"}
+    ]
 
 
 def test_fertility_rejects_invalid_token_ids():
