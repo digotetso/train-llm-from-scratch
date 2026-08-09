@@ -117,8 +117,7 @@ def test_mark_published_tracks_each_artifact_before_the_unit(tmp_path: Path):
         journal.mark_published(
             "fit-00000",
             "fit_00000.jsonl",
-            "5" * 64,
-            "2026-08-09T12:00:00Z",
+            "3" * 64,
         )
 
         assert journal.units()[0].published is False
@@ -129,16 +128,62 @@ def test_mark_published_tracks_each_artifact_before_the_unit(tmp_path: Path):
             """,
             ("fit-00000", "fit_00000.jsonl"),
         ).fetchone()
-        assert tuple(artifact) == (1, "5" * 64, "2026-08-09T12:00:00Z")
+        assert artifact["published"] == 1
+        assert artifact["destination_sha256"] == "3" * 64
+        assert artifact["published_at"]
 
         journal.mark_published(
             "fit-00000",
             "fit_00000.index",
-            "6" * 64,
-            "2026-08-09T12:01:00Z",
+            "4" * 64,
         )
 
         assert journal.units()[0].published is True
+
+
+def test_mark_published_rejects_destination_hash_unlike_committed_source(
+    tmp_path: Path,
+):
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        journal.commit_unit(_unit())
+
+        with pytest.raises(ValueError, match="checksum does not match committed source"):
+            journal.mark_published("fit-00000", "fit_00000.jsonl", "5" * 64)
+
+        assert journal.unpublished_artifacts() == (
+            {
+                "unit_id": "fit-00000",
+                "path": "fit_00000.jsonl",
+                "size": 80,
+                "sha256": "3" * 64,
+            },
+        )
+
+
+def test_artifact_returns_committed_identity_and_unpublished_order(tmp_path: Path):
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                unit_id="fit-00001",
+                artifacts=(
+                    {"path": "b.jsonl", "size": 2, "sha256": "b" * 64},
+                    {"path": "a.jsonl", "size": 1, "sha256": "a" * 64},
+                ),
+            )
+        )
+
+        assert journal.artifact("fit-00001", "a.jsonl") == {
+            "unit_id": "fit-00001",
+            "path": "a.jsonl",
+            "size": 1,
+            "sha256": "a" * 64,
+            "published": False,
+            "destination_sha256": None,
+        }
+        assert tuple(item["path"] for item in journal.unpublished_artifacts()) == (
+            "a.jsonl",
+            "b.jsonl",
+        )
 
 
 @pytest.mark.parametrize("artifact_path", ("/artifact.jsonl", "a/../artifact.jsonl"))

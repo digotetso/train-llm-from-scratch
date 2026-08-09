@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator
 
@@ -295,6 +296,50 @@ class BuildJournal:
             is not None
         )
 
+    def artifact(self, unit_id: str, relative_path: str) -> dict[str, object]:
+        """Return one committed artifact identity or reject an unknown artifact."""
+
+        relative_path = _normalized_relative_posix_path(relative_path)
+        row = self.connection.execute(
+            """
+            SELECT unit_id, relative_path, size, sha256, published, destination_sha256
+            FROM artifacts
+            WHERE unit_id = ? AND relative_path = ?
+            """,
+            (unit_id, relative_path),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown artifact")
+        return {
+            "unit_id": str(row["unit_id"]),
+            "path": str(row["relative_path"]),
+            "size": int(row["size"]),
+            "sha256": str(row["sha256"]),
+            "published": bool(row["published"]),
+            "destination_sha256": row["destination_sha256"],
+        }
+
+    def unpublished_artifacts(self) -> tuple[dict[str, object], ...]:
+        """Return all unrecorded artifact publications in deterministic order."""
+
+        rows = self.connection.execute(
+            """
+            SELECT unit_id, relative_path, size, sha256
+            FROM artifacts
+            WHERE published = 0
+            ORDER BY unit_id, relative_path
+            """
+        )
+        return tuple(
+            {
+                "unit_id": str(row["unit_id"]),
+                "path": str(row["relative_path"]),
+                "size": int(row["size"]),
+                "sha256": str(row["sha256"]),
+            }
+            for row in rows
+        )
+
     def _hashes_for_unit(self, unit_id: str) -> tuple[str, ...]:
         rows = self.connection.execute(
             """
@@ -311,20 +356,22 @@ class BuildJournal:
         unit_id: str,
         relative_path: str,
         destination_sha256: str,
-        published_at: str,
     ) -> None:
         """Record one artifact publication and complete its unit when all are done."""
 
+        relative_path = _normalized_relative_posix_path(relative_path)
         with self.connection:
             artifact = self.connection.execute(
                 """
-                SELECT published, destination_sha256 FROM artifacts
+                SELECT published, sha256, destination_sha256 FROM artifacts
                 WHERE unit_id = ? AND relative_path = ?
                 """,
                 (unit_id, relative_path),
             ).fetchone()
             if artifact is None:
                 raise ValueError("unknown artifact")
+            if artifact["sha256"] != destination_sha256:
+                raise ValueError("destination checksum does not match committed source hash")
             if artifact["published"]:
                 if artifact["destination_sha256"] != destination_sha256:
                     raise ValueError("artifact was already published with another hash")
@@ -335,7 +382,12 @@ class BuildJournal:
                 SET published = 1, destination_sha256 = ?, published_at = ?
                 WHERE unit_id = ? AND relative_path = ?
                 """,
-                (destination_sha256, published_at, unit_id, relative_path),
+                (
+                    destination_sha256,
+                    datetime.now(UTC).isoformat(),
+                    unit_id,
+                    relative_path,
+                ),
             )
             self.connection.execute(
                 """
