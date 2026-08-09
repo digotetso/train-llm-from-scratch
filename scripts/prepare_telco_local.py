@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -28,6 +29,7 @@ from matgpt.tokenizer.train import (
     evaluate_tokenizer_on_jsonl,
     train_tokenizer_from_manifest,
 )
+from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 STAGES = (
@@ -36,6 +38,18 @@ STAGES = (
     "tokenizer_compare",
     "tokenizer_select",
 )
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_CONFIGS = {
+    "--sources": REPOSITORY_ROOT / "configs/data/telco_300m_sources.yaml",
+    "--mixture": REPOSITORY_ROOT / "configs/data/telco_300m_mixture.yaml",
+    "--candidate-config": (
+        REPOSITORY_ROOT / "configs/data/telco_300m_tokenizer_candidate.yaml"
+    ),
+    "--model-config": REPOSITORY_ROOT / "configs/matgpt_telco_300m.yaml",
+}
+OPEN_TELCO_SOURCES = ("open_telco_lite", "open_telco_full")
+OPEN_TELCO_CONFIGS = ("oranbench", "sixg_bench", "srsranbench", "teleqna")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,6 +129,16 @@ def _required_path(value: str | None, option: str, *, directory: bool = False) -
     return path.resolve()
 
 
+def _approved_config(value: str, option: str) -> Path:
+    supplied = _required_path(value, option)
+    canonical = CANONICAL_CONFIGS[option]
+    if sha256_file(supplied) != sha256_file(canonical):
+        raise ValueError(
+            f"{option} does not match the approved repository config: {canonical}"
+        )
+    return supplied
+
+
 def _load_json_object(path: Path, label: str) -> dict[str, Any]:
     def reject_constant(value: str) -> None:
         raise ValueError(f"{label} contains invalid JSON constant {value}.")
@@ -137,6 +161,131 @@ def _write_json_exclusive(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _manifest_sha256(payload: Mapping[str, Any], label: str) -> str:
+    digest = payload.get("manifest_sha256")
+    if not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None:
+        raise ValueError(f"{label} manifest_sha256 must be a lowercase SHA-256.")
+    return digest
+
+
+def _verify_open_telco_manifest(
+    manifest_path: Path,
+    *,
+    source_id: str,
+    evidence_by_config: Mapping[str, Path],
+    registry: Any,
+) -> None:
+    manifest = _load_json_object(manifest_path, f"{source_id} manifest")
+    if manifest.get("version") != 1 or manifest.get("complete") is not True:
+        raise ValueError(f"{source_id} manifest must be complete version 1 evidence.")
+    expected_digest = _manifest_sha256(manifest, source_id)
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    if sha256_json(unsigned) != expected_digest:
+        raise ValueError(f"{source_id} manifest checksum mismatch.")
+
+    source = registry.by_id[source_id]
+    expected_identity = {
+        "dataset_id": source.hf_name,
+        "source_id": source.id,
+        "revision": source.revision,
+        "role": source.role,
+        "license": source.license,
+    }
+    for field, expected in expected_identity.items():
+        if manifest.get(field) != expected:
+            raise ValueError(f"{source_id} manifest {field} mismatch.")
+
+    configs = manifest.get("configs")
+    if not isinstance(configs, Mapping) or set(configs) != set(OPEN_TELCO_CONFIGS):
+        raise ValueError(f"{source_id} manifest must contain all four configs.")
+    for config in OPEN_TELCO_CONFIGS:
+        entry = configs.get(config)
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{source_id} manifest config {config} is invalid.")
+        path = evidence_by_config[config]
+        examples = entry.get("examples")
+        if (
+            entry.get("path") != path.name
+            or not isinstance(examples, int)
+            or isinstance(examples, bool)
+            or examples < 1
+            or entry.get("raw_bytes") != path.stat().st_size
+            or entry.get("sha256") != sha256_file(path)
+        ):
+            raise ValueError(f"{source_id} manifest config {config} mismatch.")
+
+
+def _verified_contamination_paths(
+    supplied_paths: Sequence[str], registry: Any
+) -> list[Path]:
+    if len(supplied_paths) != len(OPEN_TELCO_SOURCES) * len(OPEN_TELCO_CONFIGS):
+        raise ValueError(
+            "tokenizer_sample requires all eight Open Telco Lite/Full "
+            "--contamination-patterns files."
+        )
+    paths = [
+        _required_path(path, "--contamination-patterns") for path in supplied_paths
+    ]
+    if len(set(paths)) != len(paths):
+        raise ValueError("Contamination evidence paths must be unique.")
+
+    grouped: dict[str, dict[str, Path]] = {
+        source_id: {} for source_id in OPEN_TELCO_SOURCES
+    }
+    roots: dict[str, Path] = {}
+    for path in paths:
+        if path.suffix != ".jsonl" or path.stem not in OPEN_TELCO_CONFIGS:
+            raise ValueError(f"Unexpected Open Telco contamination file: {path}")
+        manifest_path = path.parent / "manifest.json"
+        if manifest_path.exists():
+            manifest = _load_json_object(manifest_path, "Open Telco manifest")
+            source_id = manifest.get("source_id")
+        else:
+            source_id = path.parent.name
+        if source_id not in grouped:
+            raise ValueError(f"Cannot identify Lite/Full contamination evidence: {path}")
+        previous_root = roots.setdefault(source_id, path.parent)
+        if previous_root != path.parent:
+            raise ValueError(f"{source_id} contamination files must share one directory.")
+        if path.stem in grouped[source_id]:
+            raise ValueError(f"Duplicate {source_id} config evidence: {path.stem}")
+        if path.stat().st_size < 1 or not load_contamination_patterns([path]):
+            raise ValueError(f"Contamination evidence must be non-empty: {path}")
+        grouped[source_id][path.stem] = path
+
+    for source_id in OPEN_TELCO_SOURCES:
+        evidence = grouped[source_id]
+        if set(evidence) != set(OPEN_TELCO_CONFIGS):
+            raise ValueError(f"{source_id} requires all four config JSONL files.")
+        manifest_path = roots[source_id] / "manifest.json"
+        if manifest_path.exists():
+            if manifest_path.is_symlink() or not manifest_path.is_file():
+                raise ValueError(f"{source_id} manifest must be a real file.")
+            _verify_open_telco_manifest(
+                manifest_path,
+                source_id=source_id,
+                evidence_by_config=evidence,
+                registry=registry,
+            )
+    return [
+        grouped[source_id][config]
+        for source_id in OPEN_TELCO_SOURCES
+        for config in OPEN_TELCO_CONFIGS
+    ]
+
+
+def _canonical_sample_manifest(
+    supplied: str | None, work_dir: Path, option: str
+) -> tuple[Path, str]:
+    manifest = _required_path(supplied, option)
+    canonical = work_dir / "tokenizer_sample" / "manifest.json"
+    if manifest != canonical.resolve():
+        raise ValueError(f"{option} must be the canonical work-root sample manifest.")
+    payload = _load_json_object(manifest, "Tokenizer sample manifest")
+    return manifest, _manifest_sha256(payload, "Tokenizer sample")
+
+
 def _quality_policy(
     model_config: dict[str, Any], contamination_paths: Sequence[str]
 ) -> DataQualityPolicy:
@@ -157,14 +306,9 @@ def _sample_stage(
     candidate_config: TokenizerCandidateConfig,
     model_config: dict[str, Any],
 ) -> dict[str, Any]:
-    if not args.contamination_patterns:
-        raise ValueError(
-            "tokenizer_sample requires at least one --contamination-patterns file."
-        )
-    contamination_paths = [
-        _required_path(path, "--contamination-patterns")
-        for path in args.contamination_patterns
-    ]
+    contamination_paths = _verified_contamination_paths(
+        args.contamination_patterns, registry
+    )
     work_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = work_dir / "tokenizer_sample"
     state_dir = work_dir / "state"
@@ -192,16 +336,19 @@ def _sample_stage(
 def _candidate_stage(
     args: argparse.Namespace,
     *,
+    work_dir: Path,
     drive_dir: Path,
     candidate_config: TokenizerCandidateConfig,
     model_config: dict[str, Any],
 ) -> dict[str, Any]:
     destination = drive_dir / "tokenizers" / candidate_config.candidate_label
-    if destination.exists() or destination.is_symlink():
-        raise FileExistsError(f"Candidate destination already exists: {destination}")
-    sample_manifest = _required_path(args.sample_manifest, "--sample-manifest")
+    sample_manifest, sample_manifest_sha256 = _canonical_sample_manifest(
+        args.sample_manifest, work_dir, "--sample-manifest"
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.mkdir(exist_ok=False)
     tokenizer_config = model_config["tokenizer"]
-    return dict(
+    report = dict(
         train_tokenizer_from_manifest(
             sample_manifest,
             destination,
@@ -211,11 +358,21 @@ def _candidate_stage(
             tokenizer_config.get("probe_sets_path"),
         )
     )
+    persisted = _load_json_object(
+        destination / "tokenizer_report.json", "Candidate tokenizer report"
+    )
+    for candidate_report in (report, persisted):
+        if candidate_report.get("fitting_manifest_sha256") != sample_manifest_sha256:
+            raise ValueError("Candidate tokenizer fitting manifest fingerprint mismatch.")
+    if persisted != report:
+        raise ValueError("Persisted candidate tokenizer report mismatch.")
+    return report
 
 
 def _comparison_stage(
     args: argparse.Namespace,
     *,
+    work_dir: Path,
     drive_dir: Path,
     candidate_config: TokenizerCandidateConfig,
     model_config: dict[str, Any],
@@ -226,19 +383,57 @@ def _comparison_stage(
     baseline = _required_path(
         args.baseline_tokenizer, "--baseline-tokenizer", directory=True
     )
+    canonical_candidate = drive_dir / "tokenizers" / candidate_config.candidate_label
     candidate = _required_path(
         args.candidate_tokenizer, "--candidate-tokenizer", directory=True
     )
-    holdout = _required_path(args.holdout_manifest, "--holdout-manifest")
+    if candidate != canonical_candidate.resolve():
+        raise ValueError(
+            "--candidate-tokenizer must be the canonical candidate destination."
+        )
+    if baseline == candidate:
+        raise ValueError("Baseline and candidate tokenizer directories must differ.")
+    holdout, sample_manifest_sha256 = _canonical_sample_manifest(
+        args.holdout_manifest, work_dir, "--holdout-manifest"
+    )
+    candidate_report = _load_json_object(
+        candidate / "tokenizer_report.json", "Candidate tokenizer report"
+    )
+    if candidate_report.get("fitting_manifest_sha256") != sample_manifest_sha256:
+        raise ValueError("Candidate tokenizer fitting manifest fingerprint mismatch.")
+    candidate_report_sha256 = candidate_report.get("tokenizer_sha256")
+    if (
+        not isinstance(candidate_report_sha256, str)
+        or SHA256_PATTERN.fullmatch(candidate_report_sha256) is None
+        or candidate_report_sha256 != sha256_file(candidate / "tokenizer.json")
+    ):
+        raise ValueError("Candidate tokenizer report fingerprint mismatch.")
     probes = _required_path(
         model_config["tokenizer"].get("probe_sets_path"),
         "model tokenizer.probe_sets_path",
     )
     baseline_evaluation = evaluate_tokenizer_on_jsonl(baseline, [holdout], probes)
     candidate_evaluation = evaluate_tokenizer_on_jsonl(candidate, [holdout], probes)
+    if baseline_evaluation.get("tokenizer_sha256") == candidate_evaluation.get(
+        "tokenizer_sha256"
+    ):
+        raise ValueError("Baseline and candidate tokenizer fingerprints must differ.")
+    for side, evaluation in (
+        ("baseline", baseline_evaluation),
+        ("candidate", candidate_evaluation),
+    ):
+        if evaluation.get("sample_manifest_sha256") != sample_manifest_sha256:
+            raise ValueError(f"{side} evaluation sample manifest fingerprint mismatch.")
+    if candidate_evaluation.get("tokenizer_sha256") != candidate_report_sha256:
+        raise ValueError("Candidate evaluation tokenizer fingerprint mismatch.")
     comparison = compare_tokenizers(
         baseline_evaluation, candidate_evaluation, candidate_config
     )
+    if comparison.get("labels") != {
+        "baseline": candidate_config.baseline_label,
+        "candidate": candidate_config.candidate_label,
+    }:
+        raise ValueError("Tokenizer comparison side labels mismatch.")
     _write_json_exclusive(destination, comparison)
     return comparison
 
@@ -265,10 +460,14 @@ def _selection_stage(
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     work_dir, drive_dir = _resolved_roots(args.work_dir, args.drive_dir)
-    registry = load_source_registry(args.sources)
-    mixture = load_mixture_config(args.mixture)
-    candidate_config = load_tokenizer_candidate_config(args.candidate_config)
-    model_config = load_config(args.model_config)
+    sources_path = _approved_config(args.sources, "--sources")
+    mixture_path = _approved_config(args.mixture, "--mixture")
+    candidate_path = _approved_config(args.candidate_config, "--candidate-config")
+    model_path = _approved_config(args.model_config, "--model-config")
+    registry = load_source_registry(sources_path)
+    mixture = load_mixture_config(mixture_path)
+    candidate_config = load_tokenizer_candidate_config(candidate_path)
+    model_config = load_config(model_path)
 
     if args.stage == "tokenizer_sample":
         return _sample_stage(
@@ -282,6 +481,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.stage == "tokenizer_candidate":
         return _candidate_stage(
             args,
+            work_dir=work_dir,
             drive_dir=drive_dir,
             candidate_config=candidate_config,
             model_config=model_config,
@@ -289,6 +489,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.stage == "tokenizer_compare":
         return _comparison_stage(
             args,
+            work_dir=work_dir,
             drive_dir=drive_dir,
             candidate_config=candidate_config,
             model_config=model_config,

@@ -94,6 +94,11 @@ using the CLI directly, include them on every invocation exactly as shown:
 --drive-dir <existing-streamed-drive-publish-root>
 ```
 
+The CLI hashes all four YAML inputs and requires byte identity with these
+checked repository files. A byte-identical copy is accepted; an edited or
+semantically similar alternate file is rejected before sampling, training, or
+evaluation begins.
+
 The notebook at `notebooks/prepare_matgpt_telco_300m_local.ipynb` keeps these
 paths visible at the top, previews the exact expanded command, and streams
 stdout/stderr live with `subprocess.Popen`.
@@ -120,6 +125,12 @@ uv run python scripts/prepare_telco_local.py \
   --contamination-patterns <local-work-root>/evaluation/open_telco_full/srsranbench.jsonl \
   --contamination-patterns <local-work-root>/evaluation/open_telco_full/sixg_bench.jsonl
 ```
+
+All eight unique files are mandatory and each must yield at least one normalized
+pattern. A missing, duplicate, empty, or unexpectedly named file fails before
+the sample builder is called. When either evaluation directory contains its
+generated `manifest.json`, the CLI also verifies its checksum, pinned source
+identity, exact four-config set, counts, byte sizes, and file checksums.
 
 Expected local outputs:
 
@@ -160,6 +171,12 @@ Expected durable output is
 refuses an existing candidate directory and never overwrites the preserved
 `pilot_20m` tokenizer.
 
+`--sample-manifest` must resolve exactly to
+`<local-work-root>/tokenizer_sample/manifest.json`. Before fitting, the CLI
+atomically claims the canonical candidate directory. The persisted tokenizer
+report must bind back to that sample manifest fingerprint; a failed or
+interrupted fit leaves the claimed directory in place for operator review.
+
 Candidate fitting is not resumable. If it is interrupted, preserve the partial
 directory for diagnosis, move it aside only after review, and rerun into the
 now-absent canonical destination. Never overwrite files in place.
@@ -189,6 +206,12 @@ Expected output is `<streamed-drive-publish-root>/comparison.json`. It includes
 both evaluations, shared holdout/probe fingerprints, tokenizer fingerprints,
 hard guardrail failures, eligibility, and a recommendation. Existing output is
 refused so an earlier decision record cannot be silently replaced.
+
+The candidate argument must resolve exactly to
+`<streamed-drive-publish-root>/tokenizers/representative_200m`, and its report,
+tokenizer checksum, and canonical sample-manifest fingerprint must agree. The
+CLI rejects swapped sides and equal baseline/candidate tokenizer fingerprints
+before writing comparison evidence.
 
 ## Stage 4: review, then `tokenizer_select`
 

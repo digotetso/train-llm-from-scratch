@@ -14,6 +14,7 @@ from matgpt.tokenizer.candidate import (
     load_tokenizer_candidate_config,
     write_tokenizer_selection,
 )
+from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 SPECIAL_TOKEN_IDS = {
@@ -212,6 +213,7 @@ def evaluation(
     tokenizer_sha256: str = "a" * 64,
     input_files_sha256: str = "c" * 64,
     probe_sets_sha256: str = "d" * 64,
+    sample_manifest_sha256: str = "e" * 64,
 ) -> dict[str, object]:
     return {
         "tokens": overall_tokens,
@@ -236,6 +238,7 @@ def evaluation(
         "tokenizer_sha256": tokenizer_sha256,
         "input_files_sha256": input_files_sha256,
         "probe_sets_sha256": probe_sets_sha256,
+        "sample_manifest_sha256": sample_manifest_sha256,
     }
 
 
@@ -570,6 +573,57 @@ def _local_cli_common_args(tmp_path: Path) -> tuple[list[str], Path, Path]:
     )
 
 
+def _complete_contamination_evidence(
+    tmp_path: Path,
+    *,
+    empty: tuple[str, str] | None = None,
+    with_manifests: bool = False,
+) -> list[str]:
+    registry = load_source_registry("configs/data/telco_300m_sources.yaml")
+    paths: list[Path] = []
+    for dataset in ("lite", "full"):
+        root = tmp_path / f"open_telco_{dataset}"
+        root.mkdir(parents=True)
+        configs: dict[str, dict[str, object]] = {}
+        for config in ("oranbench", "sixg_bench", "srsranbench", "teleqna"):
+            path = root / f"{config}.jsonl"
+            text = "" if empty == (dataset, config) else f'{json.dumps({"prompt": f"{dataset} {config} evidence"})}\n'
+            path.write_text(text, encoding="utf-8")
+            configs[config] = {
+                "path": path.name,
+                "examples": 0 if not text else 1,
+                "raw_bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+            paths.append(path)
+        if with_manifests:
+            source = registry.by_id[f"open_telco_{dataset}"]
+            manifest = {
+                "version": 1,
+                "complete": True,
+                "created_at": "2026-08-09T00:00:00+00:00",
+                "dataset_id": source.hf_name,
+                "source_id": source.id,
+                "revision": source.revision,
+                "role": source.role,
+                "license": source.license,
+                "configs": configs,
+            }
+            manifest["manifest_sha256"] = sha256_json(manifest)
+            (root / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    return [str(path) for path in paths]
+
+
+def _with_contamination(arguments: list[str], paths: list[str]) -> list[str]:
+    result = list(arguments)
+    for path in paths:
+        result.extend(["--contamination-patterns", path])
+    return result
+
+
 def test_local_cli_rejects_overlapping_work_and_drive_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -612,10 +666,153 @@ def test_local_cli_requires_contamination_evidence_before_sample(
     assert not work_dir.exists()
 
 
+def test_local_cli_requires_all_eight_contamination_files_before_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    paths = _complete_contamination_evidence(tmp_path / "evidence")
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths[:-1])]
+    )
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
+def test_local_cli_rejects_empty_contamination_file_before_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    paths = _complete_contamination_evidence(
+        tmp_path / "evidence", empty=("full", "teleqna")
+    )
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths)]
+    )
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "canonical"),
+    (
+        ("--sources", "configs/data/telco_300m_sources.yaml"),
+        ("--mixture", "configs/data/telco_300m_mixture.yaml"),
+        (
+            "--candidate-config",
+            "configs/data/telco_300m_tokenizer_candidate.yaml",
+        ),
+        ("--model-config", "configs/matgpt_telco_300m.yaml"),
+    ),
+)
+def test_local_cli_rejects_alternate_config_identity_before_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    canonical: str,
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    altered = tmp_path / Path(canonical).name
+    altered.write_bytes(Path(canonical).read_bytes() + b"\n")
+    common[common.index(option) + 1] = str(altered)
+    paths = _complete_contamination_evidence(tmp_path / "evidence")
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths)]
+    )
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
+def test_local_cli_cross_checks_available_contamination_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    paths = _complete_contamination_evidence(
+        tmp_path / "evidence", with_manifests=True
+    )
+    manifest_path = Path(paths[0]).parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["configs"]["oranbench"]["sha256"] = "0" * 64
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256")
+    manifest["manifest_sha256"] = sha256_json(unsigned)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths)]
+    )
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
+def test_local_cli_accepts_complete_manifest_bound_contamination_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    captured_patterns: list[str] = []
+
+    def fake_sample(request, **_kwargs):
+        captured_patterns.extend(request.quality_policy.contamination_patterns)
+        return {"complete": True}
+
+    monkeypatch.setattr(prepare_telco_local, "build_tokenizer_sample", fake_sample)
+    common, _, _ = _local_cli_common_args(tmp_path)
+    paths = _complete_contamination_evidence(
+        tmp_path / "evidence", with_manifests=True
+    )
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths)]
+    )
+
+    assert result == 0
+    assert len(captured_patterns) == 8
+
+
 def test_local_cli_refuses_to_overwrite_candidate_directory(tmp_path: Path):
     from scripts.prepare_telco_local import main
 
-    common, _, drive_dir = _local_cli_common_args(tmp_path)
+    common, work_dir, drive_dir = _local_cli_common_args(tmp_path)
+    sample_manifest = _write_canonical_sample_manifest(work_dir)
     candidate_dir = drive_dir / "tokenizers" / "representative_200m"
     candidate_dir.mkdir(parents=True)
     marker = candidate_dir / "keep.txt"
@@ -627,12 +824,334 @@ def test_local_cli_refuses_to_overwrite_candidate_directory(tmp_path: Path):
             "tokenizer_candidate",
             *common,
             "--sample-manifest",
-            str(tmp_path / "missing-manifest.json"),
+            str(sample_manifest),
         ]
     )
 
     assert result != 0
     assert marker.read_text(encoding="utf-8") == "existing candidate\n"
+
+
+def _write_canonical_sample_manifest(work_dir: Path, digest: str = "a" * 64) -> Path:
+    path = work_dir / "tokenizer_sample" / "manifest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"manifest_sha256": digest}), encoding="utf-8")
+    return path
+
+
+def test_local_cli_candidate_requires_canonical_sample_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_training(*_args, **_kwargs):
+        raise AssertionError("test must not reach tokenizer training")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "train_tokenizer_from_manifest", reject_training
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    canonical = _write_canonical_sample_manifest(work_dir)
+    copied = tmp_path / "copied-manifest.json"
+    copied.write_bytes(canonical.read_bytes())
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_candidate",
+            *common,
+            "--sample-manifest",
+            str(copied),
+        ]
+    )
+
+    assert result != 0
+
+
+def test_local_cli_atomically_claims_candidate_before_training(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, work_dir, drive_dir = _local_cli_common_args(tmp_path)
+    sample_manifest = _write_canonical_sample_manifest(work_dir)
+    expected_digest = "a" * 64
+
+    def fake_training(
+        _manifest,
+        output_dir,
+        _vocab_size,
+        _min_frequency,
+        _special_tokens,
+        _probe_sets,
+    ):
+        destination = Path(output_dir)
+        assert destination.is_dir()
+        report = {
+            "fitting_manifest_sha256": expected_digest,
+            "tokenizer_sha256": "b" * 64,
+        }
+        (destination / "tokenizer_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        return report
+
+    monkeypatch.setattr(
+        prepare_telco_local, "train_tokenizer_from_manifest", fake_training
+    )
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_candidate",
+            *common,
+            "--sample-manifest",
+            str(sample_manifest),
+        ]
+    )
+
+    assert result == 0
+    assert (drive_dir / "tokenizers" / "representative_200m").is_dir()
+
+
+def test_local_cli_candidate_atomic_claim_loses_race_without_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, work_dir, drive_dir = _local_cli_common_args(tmp_path)
+    sample_manifest = _write_canonical_sample_manifest(work_dir)
+    destination = drive_dir / "tokenizers" / "representative_200m"
+    original_manifest_check = prepare_telco_local._canonical_sample_manifest
+
+    def insert_competing_destination(*args, **kwargs):
+        result = original_manifest_check(*args, **kwargs)
+        destination.mkdir(parents=True)
+        (destination / "competitor.txt").write_text("keep\n", encoding="utf-8")
+        return result
+
+    def reject_training(*_args, **_kwargs):
+        raise AssertionError("losing racer must not train or overwrite")
+
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "_canonical_sample_manifest",
+        insert_competing_destination,
+    )
+    monkeypatch.setattr(
+        prepare_telco_local, "train_tokenizer_from_manifest", reject_training
+    )
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_candidate",
+            *common,
+            "--sample-manifest",
+            str(sample_manifest),
+        ]
+    )
+
+    assert result != 0
+    assert (destination / "competitor.txt").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_local_cli_candidate_preserves_claim_when_manifest_binding_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, work_dir, drive_dir = _local_cli_common_args(tmp_path)
+    sample_manifest = _write_canonical_sample_manifest(work_dir)
+
+    def fake_training(
+        _manifest,
+        output_dir,
+        _vocab_size,
+        _min_frequency,
+        _special_tokens,
+        _probe_sets,
+    ):
+        report = {
+            "fitting_manifest_sha256": "0" * 64,
+            "tokenizer_sha256": "b" * 64,
+        }
+        (Path(output_dir) / "tokenizer_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        return report
+
+    monkeypatch.setattr(
+        prepare_telco_local, "train_tokenizer_from_manifest", fake_training
+    )
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_candidate",
+            *common,
+            "--sample-manifest",
+            str(sample_manifest),
+        ]
+    )
+
+    destination = drive_dir / "tokenizers" / "representative_200m"
+    assert result != 0
+    assert destination.is_dir()
+    assert (destination / "tokenizer_report.json").is_file()
+
+
+def _comparison_cli_fixture(
+    tmp_path: Path,
+) -> tuple[list[str], Path, Path, Path, str, str]:
+    common, work_dir, drive_dir = _local_cli_common_args(tmp_path)
+    sample_manifest = _write_canonical_sample_manifest(work_dir)
+    baseline_dir = tmp_path / "pilot_20m"
+    baseline_dir.mkdir()
+    (baseline_dir / "tokenizer.json").write_bytes(b"baseline tokenizer")
+    baseline_sha256 = sha256_file(baseline_dir / "tokenizer.json")
+    candidate_dir = drive_dir / "tokenizers" / "representative_200m"
+    candidate_dir.mkdir(parents=True)
+    (candidate_dir / "tokenizer.json").write_bytes(b"candidate tokenizer")
+    candidate_sha256 = sha256_file(candidate_dir / "tokenizer.json")
+    (candidate_dir / "tokenizer_report.json").write_text(
+        json.dumps(
+            {
+                "fitting_manifest_sha256": "a" * 64,
+                "tokenizer_sha256": candidate_sha256,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return (
+        common,
+        sample_manifest,
+        baseline_dir,
+        candidate_dir,
+        baseline_sha256,
+        candidate_sha256,
+    )
+
+
+def test_local_cli_comparison_rejects_swapped_tokenizer_sides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_evaluation(*_args, **_kwargs):
+        raise AssertionError("test must not evaluate swapped tokenizer sides")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "evaluate_tokenizer_on_jsonl", reject_evaluation
+    )
+    common, manifest, baseline, candidate, _, _ = _comparison_cli_fixture(tmp_path)
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_compare",
+            *common,
+            "--baseline-tokenizer",
+            str(candidate),
+            "--candidate-tokenizer",
+            str(baseline),
+            "--holdout-manifest",
+            str(manifest),
+        ]
+    )
+
+    assert result != 0
+
+
+def test_local_cli_comparison_rejects_identical_tokenizer_fingerprints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, manifest, baseline, candidate, _, candidate_sha = (
+        _comparison_cli_fixture(tmp_path)
+    )
+
+    def fake_evaluation(_tokenizer_dir, _inputs, _probes):
+        return evaluation(
+            overall_tokens=10_000,
+            general_tokens=6_000,
+            telecom_tokens=3_000,
+            probe_p95=4.0,
+            tokenizer_sha256=candidate_sha,
+            sample_manifest_sha256="a" * 64,
+        )
+
+    monkeypatch.setattr(
+        prepare_telco_local, "evaluate_tokenizer_on_jsonl", fake_evaluation
+    )
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_compare",
+            *common,
+            "--baseline-tokenizer",
+            str(baseline),
+            "--candidate-tokenizer",
+            str(candidate),
+            "--holdout-manifest",
+            str(manifest),
+        ]
+    )
+
+    assert result != 0
+    assert not (Path(common[-1]) / "comparison.json").exists()
+
+
+def test_local_cli_comparison_preserves_configured_side_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, manifest, baseline, candidate, baseline_sha, candidate_sha = (
+        _comparison_cli_fixture(tmp_path)
+    )
+
+    def fake_evaluation(tokenizer_dir, _inputs, _probes):
+        is_candidate = Path(tokenizer_dir).resolve() == candidate.resolve()
+        return evaluation(
+            overall_tokens=9_850 if is_candidate else 10_000,
+            general_tokens=6_030 if is_candidate else 6_000,
+            telecom_tokens=2_900 if is_candidate else 3_000,
+            probe_p95=4.02 if is_candidate else 4.0,
+            tokenizer_sha256=candidate_sha if is_candidate else baseline_sha,
+            sample_manifest_sha256="a" * 64,
+        )
+
+    monkeypatch.setattr(
+        prepare_telco_local, "evaluate_tokenizer_on_jsonl", fake_evaluation
+    )
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_compare",
+            *common,
+            "--baseline-tokenizer",
+            str(baseline),
+            "--candidate-tokenizer",
+            str(candidate),
+            "--holdout-manifest",
+            str(manifest),
+        ]
+    )
+
+    comparison = json.loads(
+        (Path(common[-1]) / "comparison.json").read_text(encoding="utf-8")
+    )
+    assert result == 0
+    assert comparison["labels"] == {
+        "baseline": "pilot_20m",
+        "candidate": "representative_200m",
+    }
+    assert comparison["fingerprints"]["baseline_tokenizer_sha256"] == baseline_sha
+    assert comparison["fingerprints"]["candidate_tokenizer_sha256"] == candidate_sha
 
 
 def test_local_cli_requires_explicit_selection_approval(tmp_path: Path):
