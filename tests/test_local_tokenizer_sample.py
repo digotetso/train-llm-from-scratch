@@ -1,8 +1,15 @@
+import sqlite3
+import tracemalloc
 from pathlib import Path
 
 import pytest
 
-from matgpt.data.local_sample import LocalSampleRequest, build_tokenizer_sample
+from matgpt.data.local_sample import (
+    LocalSampleRequest,
+    _write_chunks,
+    build_tokenizer_sample,
+)
+from matgpt.data.local_state import BuildJournal
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.data.sources import load_source_registry
 
@@ -89,7 +96,9 @@ def test_interrupted_sample_resumes_byte_identically(tmp_path: Path):
     assert _files(request.output_dir) == _files(clean_request.output_dir)
 
 
-def test_sample_holdout_is_disjoint_and_progress_reports_quota(tmp_path: Path):
+def test_sample_holdout_is_persistently_disjoint_and_progress_reports_quota(
+    tmp_path: Path,
+):
     registry = load_source_registry("configs/data/telco_300m_sources.yaml")
     tiny_plan = _tiny_plan()
     events = []
@@ -107,12 +116,71 @@ def test_sample_holdout_is_disjoint_and_progress_reports_quota(tmp_path: Path):
         dataset_loader=_fake_telco_loader,
         progress_sink=events.append,
     )
-    fit_hashes = set(manifest["fit_content_sha256"])
-    holdout_hashes = set(manifest["holdout_content_sha256"])
+    with sqlite3.connect(request.state_path) as connection:
+        persisted_hashes = connection.execute(
+            "SELECT COUNT(*) FROM seen_hashes"
+        ).fetchone()[0]
 
-    assert fit_hashes.isdisjoint(holdout_hashes)
+    assert isinstance(manifest["fit_content_sha256"], str)
+    assert len(manifest["fit_content_sha256"]) == 64
+    assert isinstance(manifest["holdout_content_sha256"], str)
+    assert len(manifest["holdout_content_sha256"]) == 64
+    assert manifest["accepted_documents"] > 0
+    assert manifest["holdout_documents"] > 0
+    assert persisted_hashes == (
+        manifest["accepted_documents"] + manifest["holdout_documents"]
+    )
     assert events[-1].accepted_estimated_tokens >= tiny_plan["total_tokens"]
     assert events[-1].requested_estimated_tokens == tiny_plan["total_tokens"]
+
+
+def test_resume_does_not_use_materializing_journal_units(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    registry = load_source_registry("configs/data/telco_300m_sources.yaml")
+    request = LocalSampleRequest(
+        registry=registry,
+        plan=_tiny_plan(),
+        output_dir=tmp_path / "sample",
+        state_path=tmp_path / "state.sqlite3",
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
+        chunk_bytes=300,
+        progress_interval_seconds=0,
+    )
+    build_tokenizer_sample(request, dataset_loader=_fake_telco_loader)
+
+    def reject_materialization(_journal):
+        raise AssertionError("resume must stream journal units")
+
+    monkeypatch.setattr(BuildJournal, "units", reject_materialization)
+
+    resumed = build_tokenizer_sample(request, dataset_loader=_fake_telco_loader)
+
+    assert resumed["complete"] is True
+
+
+def test_chunk_writer_does_not_retain_all_encoded_chunk_payloads(tmp_path: Path):
+    shared_text = "x" * 524_288
+    records = [
+        {"content_sha256": f"{index:064x}", "text": shared_text}
+        for index in range(12)
+    ]
+    tracemalloc.start()
+    try:
+        artifacts, next_index = _write_chunks(
+            tmp_path,
+            "fit",
+            records,
+            chunk_bytes=530_000,
+            start_index=0,
+        )
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert len(artifacts) == 12
+    assert next_index == 12
+    assert peak_bytes < 4_000_000
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
@@ -10,7 +11,7 @@ import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from matgpt.data.contamination import pattern_fingerprint
 from matgpt.data.local_state import BuildIdentity, BuildJournal, UnitCommit
@@ -28,7 +29,7 @@ from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 _CHUNK_NAME = re.compile(r"^(fit|holdout)_(\d{5,})\.jsonl$")
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -58,10 +59,11 @@ class ProgressEvent:
 @dataclass
 class _SampleState:
     item_tokens: dict[str, int]
-    fit_hashes: list[str]
-    holdout_hashes: list[str]
+    fit_documents: int
+    holdout_documents: int
+    fit_content_digest: Any
+    holdout_content_digest: Any
     source_cursors: dict[str, int]
-    artifacts: list[dict[str, object]]
     next_chunk: dict[str, int]
 
     @property
@@ -70,7 +72,7 @@ class _SampleState:
 
     @property
     def accepted_documents(self) -> int:
-        return len(self.fit_hashes)
+        return self.fit_documents
 
 
 ProgressSink = Callable[[ProgressEvent], object]
@@ -134,15 +136,7 @@ def _build_identity(request: LocalSampleRequest) -> BuildIdentity:
     )
 
 
-def _artifact_paths(units: Iterable[UnitCommit]) -> set[str]:
-    return {
-        str(artifact["path"])
-        for unit in units
-        for artifact in unit.artifacts
-    }
-
-
-def _cleanup_uncommitted_files(output_dir: Path, committed_paths: set[str]) -> None:
+def _cleanup_uncommitted_files(output_dir: Path, journal: BuildJournal) -> None:
     for split in ("fit", "holdout"):
         split_dir = output_dir / split
         if not split_dir.exists():
@@ -150,7 +144,7 @@ def _cleanup_uncommitted_files(output_dir: Path, committed_paths: set[str]) -> N
         for path in split_dir.iterdir():
             relative = path.relative_to(output_dir).as_posix()
             if path.name.endswith(".tmp") or (
-                _CHUNK_NAME.fullmatch(path.name) and relative not in committed_paths
+                _CHUNK_NAME.fullmatch(path.name) and not journal.has_artifact(relative)
             ):
                 path.unlink()
     temporary_manifest = output_dir / "manifest.json.tmp"
@@ -177,19 +171,19 @@ def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
 
 def _load_state(
     output_dir: Path,
-    units: tuple[UnitCommit, ...],
+    journal: BuildJournal,
     items: Mapping[str, Mapping[str, Any]],
 ) -> _SampleState:
-    committed_paths = _artifact_paths(units)
-    _cleanup_uncommitted_files(output_dir, committed_paths)
+    _cleanup_uncommitted_files(output_dir, journal)
     item_tokens = {item_id: 0 for item_id in items}
-    fit_hashes: list[str] = []
-    holdout_hashes: list[str] = []
+    fit_documents = 0
+    holdout_documents = 0
+    fit_content_digest = hashlib.sha256()
+    holdout_content_digest = hashlib.sha256()
     source_cursors: dict[str, int] = {}
-    artifacts: list[dict[str, object]] = []
     next_chunk = {"fit": 0, "holdout": 0}
 
-    for unit in units:
+    for unit in journal.iter_units():
         source_cursors[unit.source_id] = max(
             source_cursors.get(unit.source_id, 0), unit.row_cursor
         )
@@ -204,7 +198,6 @@ def _load_state(
                 or sha256_file(path) != str(artifact["sha256"])
             ):
                 raise ValueError(f"Committed artifact failed integrity check: {relative}")
-            artifacts.append(dict(artifact))
             match = _CHUNK_NAME.fullmatch(path.name)
             if match is None or path.parent.name != match.group(1):
                 raise ValueError(f"Committed sample artifact has invalid path: {relative}")
@@ -222,9 +215,11 @@ def _load_state(
                     estimated_tokens = int(record["estimated_tokens"])
                     item_tokens[item_id] += estimated_tokens
                     unit_fit_tokens += estimated_tokens
-                    fit_hashes.append(digest)
+                    fit_content_digest.update(digest.encode("utf-8"))
+                    fit_documents += 1
                 else:
-                    holdout_hashes.append(digest)
+                    holdout_content_digest.update(digest.encode("utf-8"))
+                    holdout_documents += 1
         if unit_hashes != set(unit.accepted_hashes):
             raise ValueError(f"Committed unit hash mismatch: {unit.unit_id}")
         if unit_fit_tokens != unit.quota_tokens:
@@ -232,10 +227,11 @@ def _load_state(
 
     return _SampleState(
         item_tokens=item_tokens,
-        fit_hashes=fit_hashes,
-        holdout_hashes=holdout_hashes,
+        fit_documents=fit_documents,
+        holdout_documents=holdout_documents,
+        fit_content_digest=fit_content_digest,
+        holdout_content_digest=holdout_content_digest,
         source_cursors=source_cursors,
-        artifacts=artifacts,
         next_chunk=next_chunk,
     )
 
@@ -256,25 +252,14 @@ def _write_chunks(
 ) -> tuple[list[dict[str, object]], int]:
     if not records:
         return [], start_index
-    chunks: list[bytes] = []
-    pending = bytearray()
-    for record in records:
-        line = _line_bytes(record)
-        if pending and len(pending) + len(line) > chunk_bytes:
-            chunks.append(bytes(pending))
-            pending.clear()
-        pending.extend(line)
-        if len(pending) >= chunk_bytes:
-            chunks.append(bytes(pending))
-            pending.clear()
-    if pending:
-        chunks.append(bytes(pending))
-
     split_dir = output_dir / split
     split_dir.mkdir(parents=True, exist_ok=True)
     artifacts: list[dict[str, object]] = []
-    for offset, payload in enumerate(chunks):
-        index = start_index + offset
+    next_index = start_index
+
+    def flush_chunk(payload: bytes) -> None:
+        nonlocal next_index
+        index = next_index
         final_path = split_dir / f"{split}_{index:05d}.jsonl"
         temporary_path = final_path.with_suffix(".jsonl.tmp")
         with temporary_path.open("wb") as handle:
@@ -289,7 +274,21 @@ def _write_chunks(
                 "sha256": sha256_file(final_path),
             }
         )
-    return artifacts, start_index + len(chunks)
+        next_index += 1
+
+    pending = bytearray()
+    for record in records:
+        line = _line_bytes(record)
+        if pending and len(pending) + len(line) > chunk_bytes:
+            flush_chunk(bytes(pending))
+            pending.clear()
+        pending.extend(line)
+        if len(pending) >= chunk_bytes:
+            flush_chunk(bytes(pending))
+            pending.clear()
+    if pending:
+        flush_chunk(bytes(pending))
+    return artifacts, next_index
 
 
 def _emit_progress(
@@ -327,8 +326,13 @@ def _manifest(
     request: LocalSampleRequest,
     identity: BuildIdentity,
     state: _SampleState,
+    journal: BuildJournal,
 ) -> dict[str, object]:
-    artifacts = sorted(state.artifacts, key=lambda artifact: str(artifact["path"]))
+    artifact_count = 0
+    artifact_digest = hashlib.sha256()
+    for artifact in journal.iter_artifacts():
+        artifact_digest.update(sha256_json(artifact).encode("utf-8"))
+        artifact_count += 1
     manifest: dict[str, object] = {
         "version": 1,
         "complete": True,
@@ -338,11 +342,12 @@ def _manifest(
         "requested_estimated_tokens": int(request.plan["total_tokens"]),
         "accepted_estimated_tokens": state.accepted_estimated_tokens,
         "accepted_documents": state.accepted_documents,
-        "holdout_documents": len(state.holdout_hashes),
+        "holdout_documents": state.holdout_documents,
         "chunk_bytes": request.chunk_bytes,
-        "fit_content_sha256": state.fit_hashes,
-        "holdout_content_sha256": state.holdout_hashes,
-        "artifacts": artifacts,
+        "fit_content_sha256": state.fit_content_digest.hexdigest(),
+        "holdout_content_sha256": state.holdout_content_digest.hexdigest(),
+        "artifact_count": artifact_count,
+        "artifacts_sha256": artifact_digest.hexdigest(),
         "item_estimated_tokens": {
             item_id: state.item_tokens[item_id] for item_id in sorted(state.item_tokens)
         },
@@ -387,7 +392,7 @@ def build_tokenizer_sample(
     last_cursor = 0
 
     with BuildJournal.open(request.state_path, identity) as journal:
-        state = _load_state(output_dir, journal.units(), items)
+        state = _load_state(output_dir, journal, items)
         quality_filter = QualityFilter(request.quality_policy)
         last_cursor = state.source_cursors.get(last_source_id, 0)
 
@@ -466,7 +471,6 @@ def build_tokenizer_sample(
                     estimated_tokens = int(record["estimated_tokens"])
                     fit_records.append(record)
                     state.item_tokens[item_id] += estimated_tokens
-                    state.fit_hashes.append(digest)
                     unit_tokens += estimated_tokens
                     if all(
                         state.item_tokens[planned]
@@ -513,11 +517,17 @@ def build_tokenizer_sample(
                             path.unlink()
                     raise
 
-                state.holdout_hashes.extend(
-                    str(record["content_sha256"]) for record in holdout_records
-                )
+                for record in fit_records:
+                    state.fit_content_digest.update(
+                        str(record["content_sha256"]).encode("utf-8")
+                    )
+                state.fit_documents += len(fit_records)
+                for record in holdout_records:
+                    state.holdout_content_digest.update(
+                        str(record["content_sha256"]).encode("utf-8")
+                    )
+                state.holdout_documents += len(holdout_records)
                 state.source_cursors[source_id] = window.next_raw_cursor
-                state.artifacts.extend(artifacts)
                 last_source_id = source_id
                 last_cursor = window.next_raw_cursor
                 now = time.monotonic()
@@ -560,7 +570,7 @@ def build_tokenizer_sample(
                     f"{stage!r}: {details}"
                 )
 
-        manifest = _manifest(request, identity, state)
+        manifest = _manifest(request, identity, state, journal)
         _write_manifest(output_dir, manifest)
         _emit_progress(
             progress_sink,

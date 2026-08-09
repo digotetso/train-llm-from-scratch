@@ -6,7 +6,7 @@ import json
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from matgpt.utils.hashing import sha256_json
 
@@ -110,6 +110,12 @@ class BuildJournal:
                 PRIMARY KEY (unit_id, relative_path),
                 FOREIGN KEY (unit_id) REFERENCES units(unit_id)
             );
+
+            CREATE INDEX IF NOT EXISTS seen_hashes_unit_id_idx
+            ON seen_hashes(unit_id, content_sha256);
+
+            CREATE INDEX IF NOT EXISTS artifacts_relative_path_idx
+            ON artifacts(relative_path);
             """
         )
 
@@ -222,8 +228,8 @@ class BuildJournal:
         )
         return {str(row["content_sha256"]) for row in rows}
 
-    def units(self) -> tuple[UnitCommit, ...]:
-        """Return all committed units in deterministic order."""
+    def iter_units(self) -> Iterator[UnitCommit]:
+        """Stream committed units in deterministic order, one bounded unit at a time."""
 
         rows = self.connection.execute(
             """
@@ -233,8 +239,8 @@ class BuildJournal:
             ORDER BY unit_id
             """
         )
-        return tuple(
-            UnitCommit(
+        for row in rows:
+            yield UnitCommit(
                 unit_id=str(row["unit_id"]),
                 stage=str(row["stage"]),
                 source_id=str(row["source_id"]),
@@ -244,7 +250,37 @@ class BuildJournal:
                 artifacts=tuple(json.loads(str(row["artifacts_json"]))),
                 published=bool(row["published"]),
             )
-            for row in rows
+
+    def units(self) -> tuple[UnitCommit, ...]:
+        """Return all committed units; prefer ``iter_units`` for large builds."""
+
+        return tuple(self.iter_units())
+
+    def iter_artifacts(self) -> Iterator[dict[str, object]]:
+        """Stream committed artifact identities in relative-path order."""
+
+        rows = self.connection.execute(
+            """
+            SELECT relative_path, size, sha256 FROM artifacts
+            ORDER BY relative_path
+            """
+        )
+        for row in rows:
+            yield {
+                "path": str(row["relative_path"]),
+                "size": int(row["size"]),
+                "sha256": str(row["sha256"]),
+            }
+
+    def has_artifact(self, relative_path: str) -> bool:
+        """Return whether a normalized artifact path is durably committed."""
+
+        return (
+            self.connection.execute(
+                "SELECT 1 FROM artifacts WHERE relative_path = ? LIMIT 1",
+                (relative_path,),
+            ).fetchone()
+            is not None
         )
 
     def _hashes_for_unit(self, unit_id: str) -> tuple[str, ...]:

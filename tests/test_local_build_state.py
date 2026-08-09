@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,25 @@ def test_journal_commits_hashes_cursor_and_artifacts_atomically(tmp_path: Path):
         assert journal.committed_hashes(("1" * 64, "9" * 64)) == {"1" * 64}
         assert journal.units()[0].row_cursor == 123
         assert journal.units()[0].published is False
+
+
+def test_journal_streams_committed_units_lazily(tmp_path: Path):
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        journal.commit_unit(_unit(unit_id="fit-00000"))
+        journal.commit_unit(
+            _unit(
+                unit_id="fit-00001",
+                accepted_hashes=("4" * 64,),
+            )
+        )
+
+        units = journal.iter_units()
+
+        assert isinstance(units, Iterator)
+        assert next(units).unit_id == "fit-00000"
+        assert next(units).unit_id == "fit-00001"
+        with pytest.raises(StopIteration):
+            next(units)
 
 
 def test_journal_refuses_changed_build_identity(tmp_path: Path):
