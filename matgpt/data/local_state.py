@@ -386,6 +386,30 @@ class BuildJournal:
             for row in rows
         )
 
+    def published_artifacts(self) -> tuple[dict[str, object], ...]:
+        """Return recorded artifact publications for post-commit release recovery."""
+
+        rows = self.connection.execute(
+            """
+            SELECT unit_id, relative_path, size, sha256, destination_relative_path,
+                   destination_sha256
+            FROM artifacts
+            WHERE published = 1
+            ORDER BY unit_id, relative_path
+            """
+        )
+        return tuple(
+            {
+                "unit_id": str(row["unit_id"]),
+                "path": str(row["relative_path"]),
+                "size": int(row["size"]),
+                "sha256": str(row["sha256"]),
+                "destination_relative_path": row["destination_relative_path"],
+                "destination_sha256": row["destination_sha256"],
+            }
+            for row in rows
+        )
+
     def _hashes_for_unit(self, unit_id: str) -> tuple[str, ...]:
         rows = self.connection.execute(
             """

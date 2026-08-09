@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import matgpt.data.local_publish as local_publish
 from matgpt.data.local_publish import (
     DrivePublisher,
     StoragePolicy,
@@ -398,3 +399,78 @@ def test_status_reports_pressure_without_raising(tmp_path: Path):
 
     assert status["storage"].active_bytes == 4
     assert status["pressure"] == "free disk floor would be crossed"
+
+
+def test_fresh_reconcile_releases_source_after_committed_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    target = destination / "text" / artifact.name
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"committed\n")
+    state_path = tmp_path / "state.sqlite3"
+    digest = hashlib.sha256(b"committed\n").hexdigest()
+    with BuildJournal.open(state_path, _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                artifacts=(
+                    {"path": artifact.name, "size": artifact.stat().st_size, "sha256": digest},
+                )
+            )
+        )
+        journal.record_destination("fit-00000", artifact.name, f"text/{artifact.name}")
+        journal.mark_published("fit-00000", artifact.name, digest)
+
+    fsynced_directories: list[Path] = []
+    real_fsync_directory = local_publish._fsync_directory
+    monkeypatch.setattr(
+        local_publish,
+        "_fsync_directory",
+        lambda directory: (
+            fsynced_directories.append(Path(directory)),
+            real_fsync_directory(directory),
+        )[1],
+    )
+    with BuildJournal.open(state_path, _identity()) as journal:
+        recovered = _publisher(local, destination, journal=journal).reconcile()
+
+    assert recovered[0].destination_sha256 == digest
+    assert not artifact.exists()
+    assert local in fsynced_directories
+
+
+@pytest.mark.parametrize("destination_bytes", (None, b"corrupt\n"))
+def test_fresh_reconcile_retains_source_when_committed_destination_is_unusable(
+    tmp_path: Path, destination_bytes: bytes | None
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    state_path = tmp_path / "state.sqlite3"
+    digest = hashlib.sha256(b"committed\n").hexdigest()
+    with BuildJournal.open(state_path, _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                artifacts=(
+                    {"path": artifact.name, "size": artifact.stat().st_size, "sha256": digest},
+                )
+            )
+        )
+        journal.record_destination("fit-00000", artifact.name, f"text/{artifact.name}")
+        journal.mark_published("fit-00000", artifact.name, digest)
+    if destination_bytes is not None:
+        target = destination / "text" / artifact.name
+        target.parent.mkdir(parents=True)
+        target.write_bytes(destination_bytes)
+
+    with BuildJournal.open(state_path, _identity()) as journal:
+        with pytest.raises((ValueError, FileNotFoundError), match="checksum mismatch|does not exist"):
+            _publisher(local, destination, journal=journal).reconcile()
+
+    assert artifact.read_bytes() == b"committed\n"

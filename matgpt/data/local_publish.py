@@ -155,6 +155,33 @@ class DrivePublisher:
                     unit_id=str(artifact["unit_id"]),
                 )
             )
+        for artifact in self.journal.published_artifacts():
+            source = self.local_root / str(artifact["path"])
+            if not source.exists():
+                continue
+            destination_relative_path = artifact["destination_relative_path"]
+            if not isinstance(destination_relative_path, str):
+                raise ValueError("published artifact has no destination mapping")
+            destination = self._destination_path(destination_relative_path)
+            self._ensure_destination_root()
+            with self._publication_lock():
+                destination_sha256 = self._verified_destination(
+                    destination,
+                    int(artifact["size"]),
+                    str(artifact["sha256"]),
+                )
+            publication = Publication(
+                source=str(source),
+                source_relative_path=str(artifact["path"]),
+                destination=str(destination),
+                destination_relative_path=destination_relative_path,
+                size=int(artifact["size"]),
+                sha256=str(artifact["sha256"]),
+                destination_sha256=destination_sha256,
+                unit_id=str(artifact["unit_id"]),
+            )
+            self._record_then_release(publication)
+            recovered.append(publication)
         return tuple(recovered)
 
     def status(self) -> dict[str, object]:
