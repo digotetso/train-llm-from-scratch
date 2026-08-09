@@ -26,3 +26,10 @@ def test_pattern_fingerprint_is_order_independent_and_content_sensitive():
         ["alpha", "beta"]
     )
     assert pattern_fingerprint(["alpha"]) != pattern_fingerprint(["beta"])
+
+
+def test_aho_matcher_retains_no_per_pattern_payloads_after_compilation():
+    matcher = AhoCorasickContaminationMatcher(["alpha", "beta"])
+
+    assert not hasattr(matcher, "patterns")
+    assert all(value is None for _, value in matcher.automaton.items())

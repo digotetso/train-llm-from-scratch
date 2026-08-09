@@ -39,10 +39,10 @@ class AhoCorasickContaminationMatcher:
     engine = "pyahocorasick"
 
     def __init__(self, patterns: Iterable[str]) -> None:
-        self.patterns = _canonical_patterns(patterns)
+        canonical = _canonical_patterns(patterns)
         self.automaton = ahocorasick.Automaton()
-        for index, pattern in enumerate(self.patterns):
-            self.automaton.add_word(pattern, (index, pattern))
+        for pattern in canonical:
+            self.automaton.add_word(pattern, None)
         self.automaton.make_automaton()
 
     def contains(self, folded_text: str) -> bool:
