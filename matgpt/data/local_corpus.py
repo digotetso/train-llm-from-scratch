@@ -8,6 +8,7 @@ import json
 import os
 import re
 import signal
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -34,6 +35,7 @@ from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
 
 _STOP_REQUESTED = False
+_EVIDENCE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -72,12 +74,24 @@ class LocalCorpusResult:
     manifest: Mapping[str, object] | None
 
 
+@dataclass
+class _ProgressRuntime:
+    monotonic_clock: Callable[[], float]
+    callback: Callable[[Mapping[str, Any]], object] | None
+    started_at: float
+    elapsed_base: float
+    last_emitted_at: float | None
+    last_emitted_tokens: int
+
+
 def _build_local_corpus(
     request: LocalCorpusRequest,
     *,
     dataset_loader=None,
     on_unit_committed: Callable[[UnitCommit], object] | None = None,
     stop_after_quota_tokens: int | None = None,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    progress_callback: Callable[[Mapping[str, Any]], object] | None = None,
 ) -> LocalCorpusResult:
     """Build deterministic source windows without re-encoding accepted rows."""
 
@@ -103,6 +117,9 @@ def _build_local_corpus(
         )
         publisher.reconcile()
         counters, cursors, cumulative = _state(journal)
+        progress_runtime = _progress_runtime(
+            cumulative, monotonic_clock, progress_callback
+        )
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
         _restore_quality(quality, cumulative.get("quality", {}))
         for plan in request.plans:
@@ -114,8 +131,21 @@ def _build_local_corpus(
                 if all(counters.get((stage, key), 0) >= int(items[key]["token_quota"]) for key in source_items):
                     continue
                 raw_cursor = cursors.get((stage, source_id), 0)
+
+                def observe_raw_row(row: Mapping[str, Any]) -> None:
+                    raw_text = row.get(source.text_field) if source.text_field else ""
+                    text = "" if raw_text is None else str(raw_text)
+                    cumulative["raw"]["documents"] += 1
+                    cumulative["raw"]["chars"] += len(text)
+                    cumulative["raw"]["bytes"] += _json_line_size(row)
+                    cumulative["read"] = dict(cumulative["raw"])
+
                 dataset = _retrying_dataset(
-                    loader, source, request.retry_delays, start_raw_cursor=raw_cursor
+                    loader,
+                    source,
+                    request.retry_delays,
+                    start_raw_cursor=raw_cursor,
+                    on_raw_row=observe_raw_row,
                 )
                 pending_fit: list[dict[str, Any]] = []
                 pending_holdout: list[dict[str, Any]] = []
@@ -123,16 +153,20 @@ def _build_local_corpus(
                 pending_seen: set[str] = set()
                 pending_tokens = 0
                 pending_raw_bytes = 0
-                observed_raw_cursor = raw_cursor
+                pending_token_bytes = 0
                 for window in iter_deterministic_source_windows(
                     source, dataset, stage, quality, seed=int(plan["seed"]),
                     buffer_size=int(plan["buffer_size"]), start_raw_cursor=raw_cursor,
                 ):
                     # The cursor counts raw source rows; normalized records are
                     # tracked separately so empty/rejected input is not hidden.
-                    cumulative["read"]["documents"] += window.next_raw_cursor - observed_raw_cursor
-                    observed_raw_cursor = window.next_raw_cursor
-                    cumulative["normalized_documents"] = cumulative.get("normalized_documents", 0) + len(window.records)
+                    cumulative["normalized"]["documents"] += len(window.records)
+                    cumulative["normalized"]["chars"] += sum(
+                        len(str(row["text"])) for row in window.records
+                    )
+                    cumulative["normalized"]["bytes"] += sum(
+                        len(str(row["text"]).encode("utf-8")) for row in window.records
+                    )
                     committed = journal.committed_hashes(str(row["content_sha256"]) for row in window.records)
                     accepted: list[dict[str, Any]] = []
                     pending: set[str] = set()
@@ -140,13 +174,16 @@ def _build_local_corpus(
                         item_id = _item_id(row)
                         if item_id not in items:
                             raise ValueError(f"Source {source_id!r} produced unplanned item {item_id!r}.")
-                        if counters.get((stage, item_id), 0) >= int(items[item_id]["token_quota"]):
-                            continue
                         digest = str(row["content_sha256"])
                         if digest in committed or digest in pending or digest in pending_seen:
                             quality.record_rejection("duplicate_exact")
                             continue
                         if not quality.accept(row):
+                            continue
+                        if counters.get((stage, item_id), 0) >= int(
+                            items[item_id]["token_quota"]
+                        ):
+                            _quota_discarded(cumulative, row, None)
                             continue
                         pending.add(digest)
                         accepted.append(row)
@@ -164,6 +201,7 @@ def _build_local_corpus(
                             if counters.get((stage, item_id), 0) >= int(
                                 items[item_id]["token_quota"]
                             ):
+                                _quota_discarded(cumulative, row, len(encoded_row.ids))
                                 continue
                             if is_validation_record(row, float(plan.get("validation_fraction", 0.0))):
                                 row["source_split"] = row["split"]
@@ -171,7 +209,15 @@ def _build_local_corpus(
                                 row["token_ids"] = list(encoded_row.ids)
                                 holdout.append(row)
                                 accepted_hashes.append(str(row["content_sha256"]))
-                                _accepted(cumulative, row, len(encoded_row.ids), "holdout")
+                                _accepted(
+                                    cumulative,
+                                    row,
+                                    len(encoded_row.ids),
+                                    "holdout",
+                                    stage=stage,
+                                    requested_tokens=int(items[item_id]["token_quota"]),
+                                    actual_tokens=counters.get((stage, item_id), 0),
+                                )
                                 continue
                             row["source_split"] = row["split"]
                             row["split"] = "fit"
@@ -180,14 +226,26 @@ def _build_local_corpus(
                             accepted_hashes.append(str(row["content_sha256"]))
                             counters[(stage, item_id)] = counters.get((stage, item_id), 0) + len(encoded_row.ids)
                             window_tokens += len(encoded_row.ids)
-                            _accepted(cumulative, row, len(encoded_row.ids), "fit")
+                            _accepted(
+                                cumulative,
+                                row,
+                                len(encoded_row.ids),
+                                "fit",
+                                stage=stage,
+                                requested_tokens=int(items[item_id]["token_quota"]),
+                                actual_tokens=counters[(stage, item_id)],
+                            )
                     pending_fit.extend(fit)
                     pending_holdout.extend(holdout)
                     pending_hashes.extend(accepted_hashes)
                     pending_seen.update(accepted_hashes)
                     pending_tokens += window_tokens
-                    pending_raw_bytes += sum(len(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1 for row in fit + holdout)
-                    pending_bytes = pending_raw_bytes + sum((len(row["token_ids"]) + 1) * 2 for row in fit + holdout)
+                    pending_raw_bytes += sum(_json_line_size(row) for row in fit + holdout)
+                    pending_token_bytes += sum(
+                        (len(row["token_ids"]) + 1) * 2 for row in fit + holdout
+                    )
+                    pending_bytes = pending_raw_bytes + pending_token_bytes
+                    _sync_quality_evidence(cumulative, quality)
                     source_complete = all(
                         counters.get((stage, key), 0) >= int(items[key]["token_quota"])
                         for key in source_items
@@ -207,6 +265,32 @@ def _build_local_corpus(
                         or _STOP_REQUESTED
                         or (stop_after_quota_tokens is not None and sum(counters.values()) >= stop_after_quota_tokens)
                     ):
+                        _write_progress(
+                            local_root,
+                            LocalCorpusProgress(
+                                stage=stage,
+                                source_id=source_id,
+                                row_cursor=window.next_raw_cursor,
+                                accepted_quota_tokens=sum(counters.values()),
+                                status="running",
+                            ),
+                            cumulative=cumulative,
+                            publisher=publisher,
+                            interval_seconds=request.progress_interval_seconds,
+                            runtime=progress_runtime,
+                            current=_current_progress_context(
+                                stage, source_id, window.records, items, counters
+                            ),
+                            pending_unit=_pending_unit(
+                                pending_fit,
+                                pending_holdout,
+                                pending_tokens,
+                                pending_raw_bytes,
+                                pending_token_bytes,
+                                raw_cursor,
+                                window.next_raw_cursor,
+                            ),
+                        )
                         continue
                     publisher.check_capacity(
                         pending_bytes + _journal_overhead_bytes(pending_hashes)
@@ -214,13 +298,16 @@ def _build_local_corpus(
                     artifacts = _seal_unit(local_root, stage, source_id, window.next_raw_cursor, pending_fit, pending_holdout, tokenizer, request)
                     artifacts = [{**artifact, "destination_path": str(artifact["path"])} for artifact in artifacts]
                     cursors[(stage, source_id)] = window.next_raw_cursor
+                    _snapshot_progress_state(
+                        cumulative, progress_runtime, sum(counters.values())
+                    )
                     _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, window.next_raw_cursor, pending_tokens, artifacts)
                     unit = UnitCommit(
                         unit_id=f"{stage}-{source_id}-{window.next_raw_cursor:020d}",
                         stage=stage, source_id=source_id, row_cursor=window.next_raw_cursor,
                         quota_tokens=pending_tokens, accepted_hashes=tuple(sorted(pending_hashes)),
                         artifacts=tuple(artifacts), state={
-                            "version": 1,
+                            "version": _EVIDENCE_SCHEMA_VERSION,
                             "item_counters": {key: value for (saved_stage, key), value in counters.items() if saved_stage == stage},
                             "cumulative": cumulative,
                         },
@@ -234,6 +321,7 @@ def _build_local_corpus(
                     pending_seen.clear()
                     pending_tokens = 0
                     pending_raw_bytes = 0
+                    pending_token_bytes = 0
                     if on_unit_committed is not None:
                         on_unit_committed(unit)
                     total = sum(counters.values())
@@ -245,7 +333,13 @@ def _build_local_corpus(
                             row_cursor=window.next_raw_cursor,
                             accepted_quota_tokens=total,
                             status="running",
-                        ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
+                        ), cumulative=cumulative, publisher=publisher,
+                        interval_seconds=request.progress_interval_seconds,
+                        runtime=progress_runtime,
+                        current=_current_progress_context(
+                            stage, source_id, window.records, items, counters
+                        ),
+                        pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                     )
                     if stop_after_quota_tokens is not None and total >= stop_after_quota_tokens:
                         _write_progress(
@@ -256,7 +350,13 @@ def _build_local_corpus(
                                 row_cursor=window.next_raw_cursor,
                                 accepted_quota_tokens=total,
                                 status="calibration_complete",
-                            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
+                            ), cumulative=cumulative, publisher=publisher,
+                            interval_seconds=request.progress_interval_seconds,
+                            runtime=progress_runtime,
+                            current=_current_progress_context(
+                                stage, source_id, window.records, items, counters
+                            ),
+                            pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                         )
                         return LocalCorpusResult("calibration_complete", identity.sha256, total, None)
                     if _STOP_REQUESTED:
@@ -268,7 +368,13 @@ def _build_local_corpus(
                                 row_cursor=window.next_raw_cursor,
                                 accepted_quota_tokens=total,
                                 status="stopped_cleanly",
-                            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
+                            ), cumulative=cumulative, publisher=publisher,
+                            interval_seconds=request.progress_interval_seconds,
+                            runtime=progress_runtime,
+                            current=_current_progress_context(
+                                stage, source_id, window.records, items, counters
+                            ),
+                            pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                         )
                         return LocalCorpusResult("stopped_cleanly", identity.sha256, total, None)
                     if all(
@@ -290,7 +396,23 @@ def _build_local_corpus(
                 row_cursor=0,
                 accepted_quota_tokens=total,
                 status="provisional_complete",
-            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
+            ), cumulative=cumulative, publisher=publisher,
+            interval_seconds=request.progress_interval_seconds,
+            runtime=progress_runtime,
+            current={
+                "stage": str(request.plans[-1]["stage"]),
+                "source_id": "complete",
+                "bucket_id": None,
+                "item_id": None,
+                "item_requested_tokens": 0,
+                "item_actual_tokens": 0,
+                "stage_requested_tokens": int(request.plans[-1]["total_tokens"]),
+                "stage_actual_tokens": sum(
+                    value for (saved_stage, _item), value in counters.items()
+                    if saved_stage == str(request.plans[-1]["stage"])
+                ),
+            },
+            pending_unit=_pending_unit([], [], 0, 0, 0, 0, 0),
         )
         return LocalCorpusResult("provisional_complete", identity.sha256, total, manifest)
 
@@ -301,6 +423,8 @@ def build_local_corpus(
     dataset_loader=None,
     on_unit_committed: Callable[[UnitCommit], object] | None = None,
     stop_after_quota_tokens: int | None = None,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    progress_callback: Callable[[Mapping[str, Any]], object] | None = None,
 ) -> LocalCorpusResult:
     """Build a provisional, deterministic corpus and restore SIGINT on exit."""
 
@@ -310,6 +434,8 @@ def build_local_corpus(
             dataset_loader=dataset_loader,
             on_unit_committed=on_unit_committed,
             stop_after_quota_tokens=stop_after_quota_tokens,
+            monotonic_clock=monotonic_clock,
+            progress_callback=progress_callback,
         )
 
 
@@ -320,6 +446,8 @@ def _validate_request(request: LocalCorpusRequest) -> None:
         raise ValueError("batch and artifact bounds must be positive")
     if request.max_working_bytes < 0 or request.min_free_bytes < 0:
         raise ValueError("storage bounds must be non-negative")
+    if request.progress_interval_seconds < 0:
+        raise ValueError("progress interval must be non-negative")
     quality = request.quality_policy
     if (
         quality.enabled is not True
@@ -364,7 +492,7 @@ def _identity(
     selection_sha: str,
     comparison_sha: str,
 ) -> BuildIdentity:
-    return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens, "selection_sha256": selection_sha, "comparison_sha256": comparison_sha}))
+    return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens, "evidence_schema_version": _EVIDENCE_SCHEMA_VERSION, "selection_sha256": selection_sha, "comparison_sha256": comparison_sha}))
 
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -390,7 +518,14 @@ def _load_with_retries(loader, source, delays):
     raise RuntimeError("unreachable")
 
 
-def _retrying_dataset(loader, source, delays, *, start_raw_cursor: int):
+def _retrying_dataset(
+    loader,
+    source,
+    delays,
+    *,
+    start_raw_cursor: int,
+    on_raw_row: Callable[[Mapping[str, Any]], object] | None = None,
+):
     """Reopen a transiently interrupted stream at its exact consumed raw offset.
 
     This tracks source rows, not accepted records; a failed partially filled
@@ -409,6 +544,8 @@ def _retrying_dataset(loader, source, delays, *, start_raw_cursor: int):
             for row in dataset:
                 cursor += 1
                 attempt = 0
+                if on_raw_row is not None:
+                    on_raw_row(row)
                 yield row
             return
         except BaseException as error:
@@ -429,21 +566,47 @@ def _state(journal: BuildJournal):
             for item, value in values.items():
                 if isinstance(value, int): counters[(unit.stage, str(item))] = value
         saved = unit.state.get("cumulative")
-        if isinstance(saved, Mapping) and int(saved.get("accepted", {}).get("tokens", -1)) >= int(cumulative["accepted"]["tokens"]):
+        if isinstance(saved, Mapping) and int(saved.get("committed_units", 0)) >= int(cumulative["committed_units"]):
             cumulative = json.loads(json.dumps(saved))
     return counters, cursors, cumulative
 
 
 def _empty_cumulative() -> dict[str, Any]:
     return {
+        "committed_units": 0,
+        "raw": {"documents": 0, "chars": 0, "bytes": 0},
         "read": {"documents": 0, "chars": 0, "bytes": 0},
+        "normalized": {"documents": 0, "chars": 0, "bytes": 0},
         "accepted": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
         "heldout": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
-        "rejected": {"empty_text": 0, "duplicate_exact": 0, "benchmark_contamination": 0, "quality": 0},
-        "licenses": {}, "validation": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0, "digest": None},
-        "fit": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
+        "corpus": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0, "raw_bytes": 0, "packed_tokens": 0},
+        "quota_discarded": {
+            "documents": 0,
+            "encoded_documents": 0,
+            "unencoded_documents": 0,
+            "tokens": 0,
+            "chars": 0,
+            "bytes": 0,
+        },
+        "rejected": {
+            "empty_text": 0,
+            "too_short": 0,
+            "too_long": 0,
+            "duplicate_exact": 0,
+            "benchmark_contamination": 0,
+            "quality": 0,
+        },
+        "licenses": {},
+        "validation": {
+            "documents": 0, "tokens": 0, "packed_tokens": 0,
+            "chars": 0, "bytes": 0, "raw_bytes": 0,
+            "digest": "0" * 64,
+            "identity_order_sha256": "0" * 64,
+            "content_order_sha256": "0" * 64,
+        },
+        "fit": {"documents": 0, "tokens": 0, "packed_tokens": 0, "chars": 0, "bytes": 0, "raw_bytes": 0},
         "item_quotas": {}, "source_cursors": {}, "packed": {"raw_units": 0, "shards": 0, "raw_bytes": 0, "token_bytes": 0},
-        "quality": {}, "last_document": {}, "overshoot": {}, "last_unit": None,
+        "quality": {}, "items": {}, "last_document": {}, "overshoot": {}, "last_unit": None,
     }
 
 
@@ -458,36 +621,117 @@ def _restore_quality(quality: QualityFilter, saved: object) -> None:
         quality.rejection_reasons.update({str(key): int(value) for key, value in reasons.items()})
 
 
-def _accepted(cumulative: dict[str, Any], row: Mapping[str, Any], tokens: int, split: str) -> None:
+def _accepted(
+    cumulative: dict[str, Any],
+    row: Mapping[str, Any],
+    tokens: int,
+    split: str,
+    *,
+    stage: str,
+    requested_tokens: int,
+    actual_tokens: int,
+) -> None:
     text = str(row.get("text", ""))
-    raw_bytes = len(text.encode("utf-8"))
+    text_bytes = len(text.encode("utf-8"))
+    raw_bytes = _json_line_size(row)
+    packed_tokens = tokens + 1
     target = cumulative["heldout"] if split == "holdout" else cumulative["accepted"]
-    for name, value in (("documents", 1), ("tokens", tokens), ("chars", len(text)), ("bytes", raw_bytes)):
+    for name, value in (("documents", 1), ("tokens", tokens), ("chars", len(text)), ("bytes", text_bytes)):
         target[name] += value
-    if split == "fit":
-        for name, value in (("documents", 1), ("tokens", tokens), ("chars", len(text)), ("bytes", raw_bytes)):
-            cumulative["fit"][name] += value
+    split_target = cumulative["validation"] if split == "holdout" else cumulative["fit"]
+    for name, value in (
+        ("documents", 1), ("tokens", tokens), ("packed_tokens", packed_tokens),
+        ("chars", len(text)), ("bytes", text_bytes), ("raw_bytes", raw_bytes),
+    ):
+        split_target[name] += value
+    for name, value in (
+        ("documents", 1), ("tokens", tokens), ("packed_tokens", packed_tokens),
+        ("chars", len(text)), ("bytes", text_bytes), ("raw_bytes", raw_bytes),
+    ):
+        cumulative["corpus"][name] += value
     license_name = str(row.get("license", ""))
     cumulative["licenses"][license_name] = cumulative["licenses"].get(license_name, 0) + 1
     item = _item_id(row)
     cumulative["last_document"][item] = str(row.get("document_id", row.get("content_sha256", "")))
+    item_key = f"{stage}:{item}"
+    cumulative["items"][item_key] = {
+        "requested_tokens": requested_tokens,
+        "actual_tokens": actual_tokens,
+        "last_document_tokens": tokens,
+        "overshoot_tokens": max(0, actual_tokens - requested_tokens),
+    }
+    cumulative["overshoot"][item_key] = max(0, actual_tokens - requested_tokens)
+    if split == "holdout":
+        identity = ":".join(
+            (
+                str(row.get("stage", "")),
+                str(row.get("source_id", "")),
+                str(row.get("bucket_id", "")),
+                str(row.get("document_id", "")),
+                str(row.get("content_sha256", "")),
+            )
+        )
+        cumulative["validation"]["identity_order_sha256"] = _chain_digest(
+            str(cumulative["validation"]["identity_order_sha256"]), identity
+        )
+        cumulative["validation"]["digest"] = cumulative["validation"][
+            "identity_order_sha256"
+        ]
+        cumulative["validation"]["content_order_sha256"] = _chain_digest(
+            str(cumulative["validation"]["content_order_sha256"]),
+            str(row.get("content_sha256", "")),
+        )
+
+
+def _quota_discarded(
+    cumulative: dict[str, Any], row: Mapping[str, Any], tokens: int | None
+) -> None:
+    text = str(row.get("text", ""))
+    for name, value in (
+        ("documents", 1),
+        ("chars", len(text)),
+        ("bytes", len(text.encode("utf-8"))),
+    ):
+        cumulative["quota_discarded"][name] += value
+    if tokens is None:
+        cumulative["quota_discarded"]["unencoded_documents"] += 1
+    else:
+        cumulative["quota_discarded"]["encoded_documents"] += 1
+        cumulative["quota_discarded"]["tokens"] += tokens
+
+
+def _chain_digest(previous: str, value: str) -> str:
+    return hashlib.sha256(bytes.fromhex(previous) + value.encode("utf-8")).hexdigest()
+
+
+def _json_line_size(row: Mapping[str, Any]) -> int:
+    return len(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1
 
 
 def _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, cursor, unit_tokens, artifacts) -> None:
-    report = quality.report()
-    cumulative["quality"] = report
-    reasons = report["rejection_reasons"]
-    for name in cumulative["rejected"]:
-        cumulative["rejected"][name] = int(reasons.get(name, 0))
+    _sync_quality_evidence(cumulative, quality)
     cumulative["item_quotas"] = {f"{saved_stage}:{item}": value for (saved_stage, item), value in sorted(counters.items())}
     cumulative["source_cursors"] = {f"{saved_stage}:{source}": value for (saved_stage, source), value in sorted(cursors.items())}
-    cumulative["validation"] = dict(cumulative["heldout"])
-    cumulative["validation"]["digest"] = sha256_json(cumulative["validation"])
+    cumulative["committed_units"] += 1
     cumulative["packed"]["raw_units"] += 1
     cumulative["packed"]["shards"] += sum(1 for artifact in artifacts if str(artifact["path"]).endswith(".bin"))
     cumulative["packed"]["raw_bytes"] += sum(int(artifact["size"]) for artifact in artifacts if str(artifact["path"]).endswith(".jsonl"))
     cumulative["packed"]["token_bytes"] += sum(int(artifact["size"]) for artifact in artifacts if str(artifact["path"]).endswith(".bin"))
     cumulative["last_unit"] = {"stage": stage, "source_id": source_id, "row_cursor": cursor, "quota_tokens": unit_tokens}
+
+
+def _sync_quality_evidence(cumulative, quality) -> None:
+    report = quality.report()
+    cumulative["quality"] = report
+    categories = {
+        "empty_text", "too_short", "too_long", "duplicate_exact",
+        "benchmark_contamination", "quality",
+    }
+    categories.update(str(name) for name in report["rejection_reasons"])
+    cumulative["rejected"] = {
+        name: int(report["rejection_reasons"].get(name, 0))
+        for name in sorted(categories)
+    }
 
 
 def _seal_unit(root, stage, source_id, cursor, fit, holdout, tokenizer, request):
@@ -548,6 +792,69 @@ def _verify_published_units(journal: BuildJournal) -> None:
         raise RuntimeError(f"provisional corpus has unpublished unit artifacts: {pending}")
 
 
+def _progress_runtime(
+    cumulative: Mapping[str, Any],
+    monotonic_clock: Callable[[], float],
+    callback: Callable[[Mapping[str, Any]], object] | None,
+) -> _ProgressRuntime:
+    now = float(monotonic_clock())
+    saved = cumulative.get("progress", {})
+    if not isinstance(saved, Mapping):
+        saved = {}
+    return _ProgressRuntime(
+        monotonic_clock=monotonic_clock,
+        callback=callback,
+        started_at=now,
+        elapsed_base=float(saved.get("elapsed_seconds", 0.0)),
+        last_emitted_at=None,
+        last_emitted_tokens=int(saved.get("accepted_quota_tokens", 0)),
+    )
+
+
+def _snapshot_progress_state(
+    cumulative: dict[str, Any], runtime: _ProgressRuntime, accepted_tokens: int
+) -> None:
+    now = float(runtime.monotonic_clock())
+    cumulative["progress"] = {
+        "elapsed_seconds": runtime.elapsed_base + max(0.0, now - runtime.started_at),
+        "accepted_quota_tokens": accepted_tokens,
+    }
+
+
+def _current_progress_context(stage, source_id, records, items, counters):
+    row = records[-1] if records else None
+    item_id = _item_id(row) if row is not None else None
+    item = items.get(item_id, {}) if item_id is not None else {}
+    return {
+        "stage": stage,
+        "source_id": source_id,
+        "bucket_id": row.get("bucket_id") if row is not None else None,
+        "item_id": item_id,
+        "item_requested_tokens": int(item.get("token_quota", 0)),
+        "item_actual_tokens": counters.get((stage, item_id), 0) if item_id else 0,
+        "stage_requested_tokens": sum(int(value["token_quota"]) for value in items.values()),
+        "stage_actual_tokens": sum(
+            value for (saved_stage, _item), value in counters.items()
+            if saved_stage == stage
+        ),
+    }
+
+
+def _pending_unit(
+    fit, holdout, quota_tokens, raw_bytes, token_bytes, start_cursor, end_cursor
+):
+    return {
+        "documents": len(fit) + len(holdout),
+        "fit_documents": len(fit),
+        "validation_documents": len(holdout),
+        "quota_tokens": quota_tokens,
+        "raw_bytes": raw_bytes,
+        "token_bytes": token_bytes,
+        "start_raw_cursor": start_cursor,
+        "next_raw_cursor": end_cursor,
+    }
+
+
 def _write_progress(
     root: Path,
     progress: LocalCorpusProgress,
@@ -555,7 +862,10 @@ def _write_progress(
     cumulative: Mapping[str, Any] | None = None,
     publisher: DrivePublisher | None = None,
     interval_seconds: float = 0.0,
-) -> None:
+    runtime: _ProgressRuntime | None = None,
+    current: Mapping[str, Any] | None = None,
+    pending_unit: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any] | None:
     """Atomically persist operator-visible state without changing build identity."""
 
     partial = root / "progress.json.partial"
@@ -563,32 +873,96 @@ def _write_progress(
     if partial.exists():
         partial.unlink()
     cumulative = cumulative or _empty_cumulative()
-    now = time.time()
-    previous = float(cumulative.get("progress", {}).get("last_emitted_at", 0.0))
-    if progress.status == "running" and interval_seconds > 0 and now - previous < interval_seconds:
-        return
+    runtime = runtime or _progress_runtime(cumulative, time.monotonic, None)
+    monotonic_now = float(runtime.monotonic_clock())
+    if (
+        progress.status == "running"
+        and interval_seconds > 0
+        and runtime.last_emitted_at is not None
+        and monotonic_now - runtime.last_emitted_at < interval_seconds
+    ):
+        return None
+    elapsed = runtime.elapsed_base + max(0.0, monotonic_now - runtime.started_at)
+    since_last = (
+        max(0.0, monotonic_now - runtime.last_emitted_at)
+        if runtime.last_emitted_at is not None else elapsed
+    )
+    token_delta = progress.accepted_quota_tokens - runtime.last_emitted_tokens
+    overall_rate = progress.accepted_quota_tokens / elapsed if elapsed > 0 else 0.0
+    rolling_rate = token_delta / since_last if since_last > 0 else overall_rate
+    current = dict(current or {})
+    stage_requested = int(current.get("stage_requested_tokens", 0))
+    stage_actual = int(current.get("stage_actual_tokens", 0))
+    remaining = max(0, stage_requested - stage_actual)
+    eta_rate = rolling_rate if rolling_rate > 0 else overall_rate
     status = publisher.status() if publisher is not None else {}
     storage = status.get("storage")
+    unpublished = tuple(status.get("unpublished_artifacts", ()))
+    published = (
+        publisher.journal.published_artifacts()
+        if publisher is not None and publisher.journal is not None else ()
+    )
+    units_verified = bool(
+        publisher is not None
+        and publisher.journal is not None
+        and published
+        and not unpublished
+        and all(unit.published for unit in publisher.journal.iter_units())
+    )
     payload = {
         **asdict(progress),
-        "updated_at": now,
+        "updated_at": time.time(),
+        "current": {
+            "stage": current.get("stage", progress.stage),
+            "source_id": current.get("source_id", progress.source_id),
+            "bucket_id": current.get("bucket_id"),
+            "item_id": current.get("item_id"),
+        },
+        "item_quota": {
+            "requested_tokens": int(current.get("item_requested_tokens", 0)),
+            "actual_tokens": int(current.get("item_actual_tokens", 0)),
+        },
+        "stage_quota": {
+            "requested_tokens": stage_requested,
+            "actual_tokens": stage_actual,
+        },
         "item_quotas": cumulative.get("item_quotas", {}),
-        "stage_quotas": cumulative.get("item_quotas", {}),
+        "stage_quotas": {
+            "requested_tokens": stage_requested,
+            "actual_tokens": stage_actual,
+        },
         "read": cumulative.get("read", {}),
+        "raw": cumulative.get("raw", {}),
+        "normalized": cumulative.get("normalized", {}),
         "accepted": cumulative.get("accepted", {}),
         "heldout": cumulative.get("heldout", {}),
+        "corpus": cumulative.get("corpus", {}),
+        "quota_discarded": cumulative.get("quota_discarded", {}),
         "rejected": cumulative.get("rejected", {}),
         "quality": cumulative.get("quality", {}),
         "last_unit": cumulative.get("last_unit"),
+        "pending_unit": dict(pending_unit or {}),
         "storage": {
             "active_bytes": getattr(storage, "active_bytes", 0),
             "free_bytes": getattr(storage, "free_bytes", 0),
-            "unpublished_bytes": sum(int(item["size"]) for item in status.get("unpublished_artifacts", ())),
-            "published_bytes": sum(int(item["size"]) for item in journal_artifacts(publisher)),
+            "unpublished_bytes": sum(int(item["size"]) for item in unpublished),
+            "published_bytes": sum(int(item["size"]) for item in published),
         },
-        "throughput": {"overall_tokens_per_second": 0.0, "rolling_tokens_per_second": 0.0, "elapsed_seconds": 0.0, "eta_seconds": None},
+        "throughput": {
+            "overall_tokens_per_second": overall_rate,
+            "rolling_tokens_per_second": rolling_rate,
+            "elapsed_seconds": elapsed,
+            "eta_seconds": (
+                remaining / eta_rate
+                if remaining and eta_rate > 0
+                else (0.0 if not remaining else None)
+            ),
+        },
         "rss_bytes": _rss_bytes(),
-        "drive": {"verified": bool(publisher is not None), "status": "journal_consistent" if publisher is not None else "unavailable"},
+        "drive": {
+            "verified": units_verified,
+            "status": "journal_consistent" if units_verified else "pending_or_unavailable",
+        },
     }
     with open_exclusive_nofollow(partial, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
@@ -601,9 +975,22 @@ def _write_progress(
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    print(f"corpus {progress.status}: {progress.stage}/{progress.source_id} cursor={progress.row_cursor} tokens={progress.accepted_quota_tokens}")
+    print(
+        f"corpus {progress.status}: {progress.stage}/{progress.source_id} "
+        f"cursor={progress.row_cursor} tokens={progress.accepted_quota_tokens} "
+        f"pending={int(payload['pending_unit'].get('documents', 0))} "
+        f"rate={overall_rate:.2f}tok/s"
+    )
     if isinstance(cumulative, dict):
-        cumulative.setdefault("progress", {})["last_emitted_at"] = now
+        cumulative["progress"] = {
+            "elapsed_seconds": elapsed,
+            "accepted_quota_tokens": progress.accepted_quota_tokens,
+        }
+    runtime.last_emitted_at = monotonic_now
+    runtime.last_emitted_tokens = progress.accepted_quota_tokens
+    if runtime.callback is not None:
+        runtime.callback(json.loads(json.dumps(payload)))
+    return payload
 
 
 def journal_artifacts(publisher: DrivePublisher | None) -> tuple[dict[str, object], ...]:
@@ -615,7 +1002,8 @@ def journal_artifacts(publisher: DrivePublisher | None) -> tuple[dict[str, objec
 def _rss_bytes() -> int:
     try:
         import resource
-        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value if sys.platform == "darwin" else value * 1024
     except (ImportError, AttributeError):
         return 0
 

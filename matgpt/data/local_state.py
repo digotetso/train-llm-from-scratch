@@ -200,7 +200,7 @@ class BuildJournal:
                     INSERT INTO units(
                         unit_id, stage, source_id, row_cursor, quota_tokens,
                         artifacts_json, state_json, published
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         unit.unit_id,
@@ -210,6 +210,7 @@ class BuildJournal:
                         unit.quota_tokens,
                         artifacts_json,
                         json.dumps(unit.state, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                        int(not artifacts),
                     ),
                 )
                 self.connection.executemany(

@@ -13,7 +13,7 @@ from matgpt.data.local_publish import StoragePressure
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.data.sources import load_source_registry
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
-from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
@@ -79,6 +79,42 @@ def _artifact_bytes(root: Path) -> dict[str, bytes]:
     return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file() and path.suffix in {".jsonl", ".bin"}}
 
 
+def _last_cumulative(request: LocalCorpusRequest) -> dict:
+    import sqlite3
+
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        row = connection.execute(
+            "SELECT state_json FROM units ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    return json.loads(row[0])["cumulative"]
+
+
+def _single_source_plan(
+    stage: str, *, token_quota: int = 20, validation_fraction: float = 0.4,
+    buffer_size: int = 2,
+) -> dict:
+    item = {
+        "id": "common_pile_wikimedia",
+        "source_id": "common_pile_wikimedia",
+        "bucket_id": None,
+        "role": "pretrain_general",
+        "token_quota": token_quota,
+    }
+    return {
+        "version": 1,
+        "stage": stage,
+        "seed": 42,
+        "total_tokens": token_quota,
+        "quota_tolerance": 0.03,
+        "validation_fraction": validation_fraction,
+        "buffer_size": buffer_size,
+        "role_quotas": {"pretrain_general": token_quota},
+        "items": [item],
+        "plan_sha256": (stage + "0" * 64)[:64],
+    }
+
+
 def _sigint_child(root: str, queue) -> None:
     """Process target: deliver a genuine SIGINT while a corpus unit is running."""
 
@@ -137,6 +173,11 @@ def test_forced_interruption_resumes_byte_identically(tmp_path: Path):
 
     assert resumed.manifest["content_sha256"] == clean.manifest["content_sha256"]
     assert _artifact_bytes(resumed_request.destination_root) == _artifact_bytes(clean_request.destination_root)
+    resumed_evidence = _last_cumulative(resumed_request)
+    clean_evidence = _last_cumulative(clean_request)
+    resumed_evidence.pop("progress", None)
+    clean_evidence.pop("progress", None)
+    assert resumed_evidence == clean_evidence
 
 
 def test_calibration_stop_resumes_same_identity(tmp_path: Path):
@@ -149,6 +190,212 @@ def test_calibration_stop_resumes_same_identity(tmp_path: Path):
 
     assert completed.status == "provisional_complete"
     assert completed.build_identity_sha256 == calibrated.build_identity_sha256
+
+
+def test_two_stage_calibration_resume_matches_uninterrupted_content_and_bytes(tmp_path: Path):
+    plans = [_tiny_plan("main"), _tiny_plan("cooldown")]
+    resumed_request = make_corpus_request(tmp_path / "resumed", plans=plans)
+
+    calibrated = build_local_corpus(
+        resumed_request, dataset_loader=_loader, stop_after_quota_tokens=24
+    )
+    resumed = build_local_corpus(resumed_request, dataset_loader=_loader)
+
+    clean_request = make_corpus_request(tmp_path / "clean", plans=plans)
+    clean = build_local_corpus(clean_request, dataset_loader=_loader)
+
+    assert calibrated.status == "calibration_complete"
+    assert resumed.manifest["content_sha256"] == clean.manifest["content_sha256"]
+    assert _artifact_bytes(resumed_request.destination_root) == _artifact_bytes(
+        clean_request.destination_root
+    )
+
+
+def test_streaming_validation_evidence_restores_identically_after_restart(tmp_path: Path):
+    plan = _single_source_plan(
+        "main", token_quota=40, validation_fraction=0.8, buffer_size=2
+    )
+    resumed_request = replace(
+        make_corpus_request(tmp_path / "resumed-evidence", plans=[plan]),
+        raw_unit_bytes=600,
+        shard_size_tokens=1_000_000,
+    )
+    commits = 0
+
+    def interrupt_after_first(_unit):
+        nonlocal commits
+        commits += 1
+        if commits == 1:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        build_local_corpus(
+            resumed_request,
+            dataset_loader=_loader,
+            on_unit_committed=interrupt_after_first,
+        )
+    resumed = build_local_corpus(resumed_request, dataset_loader=_loader)
+
+    clean_request = replace(
+        make_corpus_request(tmp_path / "clean-evidence", plans=[plan]),
+        raw_unit_bytes=600,
+        shard_size_tokens=1_000_000,
+    )
+    clean = build_local_corpus(clean_request, dataset_loader=_loader)
+    resumed_evidence = _last_cumulative(resumed_request)
+    clean_evidence = _last_cumulative(clean_request)
+    resumed_evidence.pop("progress", None)
+    clean_evidence.pop("progress", None)
+
+    assert resumed.status == clean.status == "provisional_complete"
+    assert resumed_evidence["validation"]["documents"] > 0
+    assert resumed_evidence == clean_evidence
+    assert _artifact_bytes(resumed_request.destination_root) == _artifact_bytes(
+        clean_request.destination_root
+    )
+
+
+def test_atomic_unit_state_contains_truthful_streaming_cumulative_evidence(tmp_path: Path):
+    def text_for_split(index: int, *, heldout: bool) -> str:
+        candidate = 0
+        while True:
+            text = f"unique evidence document {index} candidate {candidate}"
+            fraction = int(sha256_text(text)[:16], 16) / float(16**16)
+            if (fraction < 0.4) is heldout:
+                return text
+            candidate += 1
+
+    rows = [
+        {"text": ""},
+        {"text": "x"},
+        {"text": "heldout contamination evidence appears here"},
+        {"text": text_for_split(0, heldout=True)},
+        {"text": text_for_split(1, heldout=True)},
+        {"text": text_for_split(2, heldout=False)},
+        {"text": text_for_split(3, heldout=False)},
+        *({"text": f"unused evidence document {index}"} for index in range(80)),
+    ]
+
+    def evidence_loader(hf_name: str, **kwargs):
+        if hf_name == "common-pile/comma_v0.1_training_dataset":
+            return iter(rows)
+        return _loader(hf_name, **kwargs)
+
+    plan = _single_source_plan(
+        "main", token_quota=1, validation_fraction=0.4, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path, plans=[plan])
+    result = build_local_corpus(request, dataset_loader=evidence_loader)
+    cumulative = _last_cumulative(request)
+    cursor = cumulative["source_cursors"]["main:common_pile_wikimedia"]
+    consumed = rows[:cursor]
+
+    assert result.status == "provisional_complete"
+    assert cumulative["raw"] == {
+        "documents": cursor,
+        "chars": sum(len(str(row["text"])) for row in consumed),
+        "bytes": sum(
+            len(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1
+            for row in consumed
+        ),
+    }
+    normalized = [str(row["text"]) for row in consumed if str(row["text"]).strip()]
+    assert cumulative["normalized"] == {
+        "documents": cursor - 1,
+        "chars": sum(len(text) for text in normalized),
+        "bytes": sum(len(text.encode("utf-8")) for text in normalized),
+    }
+    assert cumulative["quality"]["total_documents"] == cursor
+    assert cumulative["corpus"]["documents"] == (
+        cumulative["fit"]["documents"] + cumulative["validation"]["documents"]
+    )
+    assert cumulative["quality"]["accepted_documents"] == (
+        cumulative["corpus"]["documents"] + cumulative["quota_discarded"]["documents"]
+    )
+    assert cumulative["quota_discarded"]["documents"] == 1
+    assert {
+        name: count for name, count in cumulative["rejected"].items() if count
+    } == cumulative["quality"]["rejection_reasons"]
+    assert cumulative["validation"]["documents"] > 0
+    assert len(cumulative["validation"]["identity_order_sha256"]) == 64
+    assert len(cumulative["validation"]["content_order_sha256"]) == 64
+    assert cumulative["validation"]["packed_tokens"] == (
+        cumulative["validation"]["tokens"] + cumulative["validation"]["documents"]
+    )
+    assert cumulative["fit"]["packed_tokens"] == (
+        cumulative["fit"]["tokens"] + cumulative["fit"]["documents"]
+    )
+    raw_fit_bytes = sum(path.stat().st_size for path in request.destination_root.rglob("fit.jsonl"))
+    raw_validation_bytes = sum(path.stat().st_size for path in request.destination_root.rglob("holdout.jsonl"))
+    assert cumulative["fit"]["raw_bytes"] == raw_fit_bytes
+    assert cumulative["validation"]["raw_bytes"] == raw_validation_bytes
+    assert sum(cumulative["licenses"].values()) == cumulative["corpus"]["documents"]
+    item = cumulative["items"]["main:common_pile_wikimedia"]
+    assert item["last_document_tokens"] > 0
+    assert item["requested_tokens"] == 1
+    assert item["actual_tokens"] == result.accepted_quota_tokens
+    assert item["overshoot_tokens"] == result.accepted_quota_tokens - 1
+
+
+def test_interval_progress_reports_truthful_unsealed_window_state(
+    tmp_path: Path, capsys
+):
+    plan = _single_source_plan(
+        "main", token_quota=60, validation_fraction=0.0, buffer_size=2
+    )
+    request = replace(
+        make_corpus_request(tmp_path, plans=[plan]),
+        raw_unit_bytes=1_000_000,
+        shard_size_tokens=1_000_000,
+        progress_interval_seconds=10.0,
+    )
+    ticks = iter(float(value) for value in range(0, 10_000, 5))
+    events = []
+
+    result = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        monotonic_clock=lambda: next(ticks),
+        progress_callback=events.append,
+    )
+
+    assert result.status == "provisional_complete"
+    running = [event for event in events if event["status"] == "running"]
+    assert len(running) >= 2
+    unsealed = next(event for event in running if event["last_unit"] is None)
+    assert unsealed["current"] == {
+        "stage": "main",
+        "source_id": "common_pile_wikimedia",
+        "bucket_id": None,
+        "item_id": "common_pile_wikimedia",
+    }
+    assert unsealed["pending_unit"]["documents"] > 0
+    assert unsealed["item_quota"]["requested_tokens"] == 60
+    assert unsealed["item_quota"]["actual_tokens"] > 0
+    assert unsealed["stage_quota"]["requested_tokens"] == 60
+    assert unsealed["stage_quota"]["actual_tokens"] > 0
+    assert unsealed["throughput"]["elapsed_seconds"] > 0
+    assert unsealed["throughput"]["overall_tokens_per_second"] > 0
+    assert unsealed["throughput"]["rolling_tokens_per_second"] > 0
+    assert unsealed["throughput"]["eta_seconds"] is not None
+    assert unsealed["rss_bytes"] > 0
+    assert set(unsealed["storage"]) == {
+        "active_bytes", "free_bytes", "unpublished_bytes", "published_bytes"
+    }
+    assert unsealed["drive"]["verified"] is False
+    assert not (request.local_root / "progress.json.partial").exists()
+    assert "pending=" in capsys.readouterr().out
+
+    committed_elapsed = _last_cumulative(request)["progress"]["elapsed_seconds"]
+    resumed_events = []
+    resumed = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        monotonic_clock=lambda: next(ticks),
+        progress_callback=resumed_events.append,
+    )
+    assert resumed.status == "provisional_complete"
+    assert resumed_events[-1]["throughput"]["elapsed_seconds"] >= committed_elapsed
 
 
 def test_transient_loader_failure_retries_from_committed_cursor(tmp_path: Path):
@@ -291,6 +538,7 @@ def test_unit_commit_persists_cumulative_evidence_and_progress_schema(tmp_path: 
     progress = json.loads((request.local_root / "progress.json").read_text(encoding="utf-8"))
 
     assert result.status == "calibration_complete"
+    assert state["version"] == 2
     assert state["cumulative"]["accepted"]["tokens"] == result.accepted_quota_tokens
     assert state["cumulative"]["quality"]["contamination_patterns_sha256"]
     assert state["cumulative"]["last_unit"]

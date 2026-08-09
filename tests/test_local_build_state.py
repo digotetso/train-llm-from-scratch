@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from matgpt.data.local_state import BuildIdentity, BuildJournal, UnitCommit
+from matgpt.data.local_publish import DrivePublisher, StoragePolicy
 
 
 def _identity(tokenizer_sha256: str | None = None) -> BuildIdentity:
@@ -203,6 +204,28 @@ def test_destination_mapping_survives_journal_reopen(tmp_path: Path):
         assert journal.unpublished_artifacts()[0]["destination_relative_path"] == (
             "text/fit_00000.jsonl"
         )
+
+
+def test_artifactless_unit_is_durably_published(tmp_path: Path):
+    path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(path, _identity()) as journal:
+        journal.commit_unit(_unit(artifacts=()))
+
+        assert journal.units()[0].published is True
+        assert journal.unpublished_artifacts() == ()
+
+    with BuildJournal.open(path, _identity()) as journal:
+        publisher = DrivePublisher(
+            local_root=tmp_path / "local",
+            destination_root=tmp_path / "drive",
+            policy=StoragePolicy(max_working_bytes=1_000_000, min_free_bytes=0),
+            journal=journal,
+        )
+        assert publisher.reconcile() == ()
+        assert journal.units()[0].published is True
+
+    with pytest.raises(ValueError, match="identity mismatch"):
+        BuildJournal.open(path, _identity(tokenizer_sha256="f" * 64))
 
 
 @pytest.mark.parametrize("artifact_path", ("/artifact.jsonl", "a/../artifact.jsonl"))
