@@ -31,7 +31,11 @@ from matgpt.training.amp import (
 )
 from matgpt.training.artifacts import validate_run_artifacts, write_run_artifacts
 from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint, save_checkpoint
-from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
+from matgpt.training.dataset import (
+    PackedTokenDataset,
+    finalized_split_metadata_artifacts,
+    metadata_path_for_split,
+)
 from matgpt.training.metrics import append_metric, calculate_tokens_per_second
 from matgpt.training.optim import build_optimizer, set_optimizer_lr
 from matgpt.training.schedule import build_training_schedule, learning_rate_at_step
@@ -321,18 +325,33 @@ def run_pretraining(
     eos_id = tokenizer.token_to_id("<|eos|>")
 
     training_splits = _training_split_names(cfg)
+    validation_split = effective_validation_split(cfg["dataset"])
+    required_splits = tuple(dict.fromkeys((*training_splits, validation_split)))
+    finalized = finalized_split_metadata_artifacts(
+        Path(cfg["dataset"]["normalized_dir"]) / "manifest.json",
+        required_splits,
+    )
+    finalized_root, finalized_artifacts = (
+        finalized if finalized is not None else (None, {})
+    )
     train_datasets = {
         split: PackedTokenDataset.from_metadata(
             metadata_path_for_split(cfg["sharding"]["output_dir"], split),
             context_length=cfg["model"]["context_length"],
             seed=cfg["run"]["seed"] + index,
+            metadata_root=cfg["sharding"]["output_dir"],
+            finalized_root=finalized_root,
+            finalized_artifact=finalized_artifacts.get(split),
         )
         for index, split in enumerate(training_splits)
     }
     val_dataset = PackedTokenDataset.from_metadata(
-        metadata_path_for_split(cfg["sharding"]["output_dir"], effective_validation_split(cfg["dataset"])),
+        metadata_path_for_split(cfg["sharding"]["output_dir"], validation_split),
         context_length=cfg["model"]["context_length"],
         seed=cfg["run"]["seed"] + 1,
+        metadata_root=cfg["sharding"]["output_dir"],
+        finalized_root=finalized_root,
+        finalized_artifact=finalized_artifacts.get(validation_split),
     )
 
     extra = {

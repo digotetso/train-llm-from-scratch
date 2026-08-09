@@ -7,9 +7,11 @@ from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 
-from matgpt.config import clone_config, load_config
+from matgpt.config import clone_config, config_to_yaml, load_config
 from matgpt.data.local_corpus import LocalCorpusRequest, build_local_corpus
 from matgpt.data.local_publish import StoragePressure
 from matgpt.data.quality import DataQualityPolicy
@@ -18,6 +20,7 @@ from matgpt.data.telco_prepare import (
     corpus_has_exact_token_quotas,
     iter_corpus_split_records,
 )
+from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
 from matgpt.preflight import build_preflight_report
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
@@ -243,6 +246,57 @@ def test_calibration_refuses_valid_existing_evidence_from_another_build(tmp_path
     assert not (request.destination_root / "manifest.json").exists()
 
 
+def test_calibration_resume_after_post_commit_crash_does_not_read_source_or_finalize(
+    tmp_path: Path,
+):
+    import sqlite3
+
+    plan = _single_source_plan(
+        "main", token_quota=40, validation_fraction=0.0, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path, plans=[plan])
+
+    def crash_after_commit(_unit) -> None:
+        raise RuntimeError("crash-after-commit")
+
+    with pytest.raises(RuntimeError, match="crash-after-commit"):
+        build_local_corpus(
+            request,
+            dataset_loader=_loader,
+            on_unit_committed=crash_after_commit,
+            stop_after_quota_tokens=1,
+        )
+
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        unit_count = int(connection.execute("SELECT COUNT(*) FROM units").fetchone()[0])
+
+    def unexpected_source_read(*_args, **_kwargs):
+        raise AssertionError("calibration resume must not read the source")
+
+    resumed = build_local_corpus(
+        request,
+        dataset_loader=unexpected_source_read,
+        stop_after_quota_tokens=1,
+    )
+    report_path = request.destination_root / "calibration_report.json"
+    first_report = report_path.read_bytes()
+    repeated = build_local_corpus(
+        request,
+        dataset_loader=unexpected_source_read,
+        stop_after_quota_tokens=1,
+    )
+
+    assert resumed.status == repeated.status == "calibration_complete"
+    assert resumed.build_identity_sha256 == repeated.build_identity_sha256
+    assert report_path.read_bytes() == first_report
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        resumed_unit_count = int(
+            connection.execute("SELECT COUNT(*) FROM units").fetchone()[0]
+        )
+    assert resumed_unit_count == unit_count
+    assert not (request.destination_root / "manifest.json").exists()
+
+
 def test_finalization_refuses_inconsistent_journaled_quality_counts(tmp_path: Path):
     import sqlite3
 
@@ -369,6 +423,69 @@ def test_finalized_local_corpus_passes_preflight_without_raw_rescan(
     report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
 
     assert report["status"] == "pass", report
+
+
+def test_chunked_preflight_rejects_recomputed_shards_not_bound_to_manifest(
+    tmp_path: Path,
+):
+    plan = _single_source_plan(
+        "main", token_quota=40, validation_fraction=0.4, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path / "corpus-a", plans=[plan])
+    build_local_corpus(request, dataset_loader=_loader)
+    cfg = _local_preflight_config(tmp_path, request)
+    manifest_path = request.destination_root / "manifest.json"
+
+    checkpoint_path = Path(cfg["run"]["output_dir"]) / "checkpoints" / "latest.pt"
+    checkpoint_path.parent.mkdir(parents=True)
+    torch.save(
+        {
+            "extra": {
+                "config_sha256": sha256_text(config_to_yaml(cfg)),
+                "tokenizer_sha256": load_tokenizer_metadata(
+                    request.tokenizer_dir
+                )["tokenizer_sha256"],
+                "dataset_manifest_hash": sha256_file(manifest_path),
+            },
+            "state": {},
+        },
+        checkpoint_path,
+    )
+    same_root = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
+    assert same_root["status"] == "pass", same_root
+
+    alternate_root = tmp_path / "valid-recomputed-shards-b"
+    shutil.copytree(request.destination_root, alternate_root)
+    metadata_path = alternate_root / "main_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    shard_path = alternate_root / metadata["shards"][0]["path"]
+    tokens = np.fromfile(shard_path, dtype=np.uint16)
+    eos_id = load_tokenizer(request.tokenizer_dir).token_to_id("<|eos|>")
+    changed_index = next(
+        index for index, value in enumerate(tokens) if int(value) not in {0, eos_id}
+    )
+    tokens[changed_index] = 0
+    tokens.tofile(shard_path)
+    metadata["shards"][0]["sha256"] = sha256_file(shard_path)
+    metadata.pop("metadata_sha256")
+    metadata["metadata_sha256"] = sha256_json(metadata)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    checkpoint_path.unlink()
+    cfg["sharding"]["output_dir"] = str(alternate_root)
+    mismatched = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
+
+    manifest_check = next(
+        check for check in mismatched["checks"] if check["name"] == "dataset_manifest"
+    )
+    shard_check = next(
+        check for check in mismatched["checks"] if check["name"] == "shards"
+    )
+    assert manifest_check["status"] == "pass"
+    assert shard_check["status"] == "fail"
+    assert "finalized manifest" in shard_check["message"]
 
 
 @pytest.mark.parametrize("failure", ("changed", "traversal"))

@@ -127,6 +127,25 @@ def _build_local_corpus(
         )
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
         _restore_quality(quality, cumulative.get("quality", {}))
+        restored_total = sum(counters.values())
+        if (
+            stop_after_quota_tokens is not None
+            and restored_total >= stop_after_quota_tokens
+        ):
+            _write_calibration_report(
+                request,
+                identity,
+                journal,
+                counters,
+                cumulative,
+                status="calibration_complete",
+            )
+            return LocalCorpusResult(
+                "calibration_complete",
+                identity.content_sha256,
+                restored_total,
+                None,
+            )
         for plan in request.plans:
             stage = str(plan["stage"])
             items = _validated_plan_items(request.registry, plan)
@@ -398,6 +417,19 @@ def _build_local_corpus(
                 missing = [key for key in source_items if counters.get((stage, key), 0) < int(items[key]["token_quota"])]
                 if missing:
                     raise ValueError(f"Source {source_id!r} exhausted before quota")
+        total = sum(counters.values())
+        if stop_after_quota_tokens is not None and total >= stop_after_quota_tokens:
+            _write_calibration_report(
+                request,
+                identity,
+                journal,
+                counters,
+                cumulative,
+                status="calibration_complete",
+            )
+            return LocalCorpusResult(
+                "calibration_complete", identity.content_sha256, total, None
+            )
         manifest = _finalize_corpus(
             request,
             identity,
@@ -407,7 +439,6 @@ def _build_local_corpus(
             tokenizer,
             publisher,
         )
-        total = sum(counters.values())
         _write_progress(
             local_root,
             LocalCorpusProgress(
@@ -1534,7 +1565,10 @@ def _finalize_corpus(
         "license_document_counts": dict(sorted(cumulative.get("licenses", {}).items())),
         "validation": split_stats.get("validation", {}),
         "split_metadata": {
-            split: evidence_records[f"{split}_metadata"]
+            split: {
+                **evidence_records[f"{split}_metadata"],
+                "metadata_sha256": metadata_payloads[split]["metadata_sha256"],
+            }
             for split in sorted(metadata_payloads)
         },
         "calibration_report": evidence_records["calibration_report"],

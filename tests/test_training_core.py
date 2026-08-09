@@ -11,7 +11,7 @@ from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint
 from matgpt.training.dataset import PackedTokenDataset
 from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.optim import build_optimizer, cosine_warmup_lr
-from matgpt.utils.hashing import sha256_file
+from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 def tiny_config(vocab_size: int = 64) -> GPTConfig:
@@ -82,6 +82,60 @@ def test_packed_token_dataset_rejects_traversal_and_checksum_drift(tmp_path: Pat
     shard.write_bytes(shard.read_bytes() + b"\x00\x00")
     with pytest.raises(ValueError, match="size|SHA-256"):
         PackedTokenDataset.from_metadata(metadata_path, context_length=8)
+
+
+def test_packed_token_dataset_consumes_only_manifest_bound_metadata(tmp_path: Path):
+    finalized_root = tmp_path / "finalized-a"
+    finalized_root.mkdir()
+    metadata_path = write_shard_metadata(finalized_root)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["shards"][0]["path"] = "train_00000.bin"
+    metadata["metadata_sha256"] = sha256_json(metadata)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    manifest_artifact = {
+        "path": "train_metadata.json",
+        "size": metadata_path.stat().st_size,
+        "sha256": sha256_file(metadata_path),
+        "metadata_sha256": metadata["metadata_sha256"],
+    }
+
+    accepted = PackedTokenDataset.from_metadata(
+        metadata_path,
+        context_length=8,
+        metadata_root=finalized_root,
+        finalized_root=finalized_root,
+        finalized_artifact=manifest_artifact,
+    )
+
+    alternate_root = tmp_path / "recomputed-b"
+    alternate_root.mkdir()
+    alternate_metadata = alternate_root / metadata_path.name
+    alternate_shard = alternate_root / "train_00000.bin"
+    alternate_metadata.write_bytes(metadata_path.read_bytes())
+    alternate_shard.write_bytes((finalized_root / "train_00000.bin").read_bytes())
+    with pytest.raises(ValueError, match="finalized manifest"):
+        PackedTokenDataset.from_metadata(
+            alternate_metadata,
+            context_length=8,
+            metadata_root=alternate_root,
+            finalized_root=finalized_root,
+            finalized_artifact=manifest_artifact,
+        )
+
+    wrong_internal_fingerprint = dict(manifest_artifact)
+    wrong_internal_fingerprint["metadata_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="internal fingerprint"):
+        PackedTokenDataset.from_metadata(
+            metadata_path,
+            context_length=8,
+            metadata_root=finalized_root,
+            finalized_root=finalized_root,
+            finalized_artifact=wrong_internal_fingerprint,
+        )
+
+    assert accepted.shards[0].path == finalized_root / "train_00000.bin"
 
 
 def test_optimizer_and_lr_schedule():

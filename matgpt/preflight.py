@@ -20,7 +20,10 @@ from matgpt.data.shard import resolve_shard_artifact_path
 from matgpt.data.sources import PRETRAIN_ROLES, load_source_registry
 from matgpt.model.gpt import GPT, GPTConfig, count_parameters
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
-from matgpt.training.dataset import metadata_path_for_split
+from matgpt.training.dataset import (
+    load_verified_shard_metadata,
+    metadata_path_for_split,
+)
 from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.schedule import build_training_schedule
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
@@ -288,11 +291,18 @@ def _check_chunked_dataset_manifest(
             )
             if chunk_path.stat().st_size != int(chunk.get("size", -1)):
                 raise ValueError(f"raw chunk size mismatch: {chunk_path}")
+        metadata_record = split_metadata.get(split)
         _metadata_path, metadata = _verified_json_artifact(
             normalized,
-            split_metadata.get(split),
+            metadata_record,
             internal_hash_field="metadata_sha256",
         )
+        if (
+            not isinstance(metadata_record, dict)
+            or metadata_record.get("metadata_sha256")
+            != metadata.get("metadata_sha256")
+        ):
+            raise ValueError(f"{split} metadata internal fingerprint mismatch")
         if metadata.get("split") != split or metadata.get("total_documents") != count:
             raise ValueError(f"{split} metadata provenance mismatch")
         counts[split] = count
@@ -477,15 +487,30 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
     output_root = require_managed_path(
         output_root, output_root, kind="directory", allow_missing=False
     )
-    manifest = _read_json(Path(dataset_cfg["normalized_dir"]) / "manifest.json")
+    normalized_root = Path(dataset_cfg["normalized_dir"])
+    normalized_root = require_managed_path(
+        normalized_root, normalized_root, kind="directory", allow_missing=False
+    )
+    manifest = _read_json(normalized_root / "manifest.json")
+    is_chunked = manifest.get("storage_format") == "chunked_prebuilt_v1"
+    chunked_metadata = manifest.get("split_metadata")
+    if is_chunked and not isinstance(chunked_metadata, dict):
+        raise ValueError("Chunked corpus manifest has no split metadata")
     for split in _configured_data_splits(dataset_cfg):
         metadata_path = metadata_path_for_split(sharding_cfg["output_dir"], split)
-        metadata = _read_json(metadata_path)
-        stored_hash = metadata.get("metadata_sha256")
-        hash_payload = dict(metadata)
-        hash_payload.pop("metadata_sha256", None)
-        if stored_hash != sha256_json(hash_payload):
-            raise ValueError(f"{split} metadata_sha256 does not match metadata content")
+        finalized_artifact = chunked_metadata.get(split) if is_chunked else None
+        if is_chunked and not isinstance(finalized_artifact, dict):
+            raise ValueError(
+                f"Chunked corpus manifest has no metadata for split {split!r}"
+            )
+        metadata_path, metadata = load_verified_shard_metadata(
+            metadata_path,
+            metadata_root=output_root,
+            finalized_root=normalized_root
+            if finalized_artifact is not None
+            else None,
+            finalized_artifact=finalized_artifact,
+        )
         expected_provenance = {
             "split": split,
             "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
