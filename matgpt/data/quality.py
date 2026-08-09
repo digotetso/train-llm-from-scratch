@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from matgpt.data.contamination import build_contamination_matcher, pattern_fingerprint
 from matgpt.data.normalize import normalize_text
 
 
@@ -62,8 +63,11 @@ class DataQualityPolicy:
 
 
 class QualityFilter:
-    def __init__(self, policy: DataQualityPolicy) -> None:
+    def __init__(self, policy: DataQualityPolicy, contamination_matcher=None) -> None:
         self.policy = policy
+        self.contamination_matcher = contamination_matcher or build_contamination_matcher(
+            policy.contamination_patterns
+        )
 
         # Start with an empty collection of seen document hashes.
         self.seen_hashes: set[str] = set()
@@ -97,7 +101,7 @@ class QualityFilter:
         folded = text.casefold()
 
         # Check whether any known benchmark text appears inside it.
-        if any(pattern in folded for pattern in self.policy.contamination_patterns):
+        if self.contamination_matcher.contains(folded):
             return "benchmark_contamination"
         return None
 
@@ -133,6 +137,10 @@ class QualityFilter:
             "max_chars": self.policy.max_chars,
             "exact_dedup": self.policy.exact_dedup,
             "contamination_patterns": len(self.policy.contamination_patterns),
+            "contamination_engine": self.contamination_matcher.engine,
+            "contamination_patterns_sha256": pattern_fingerprint(
+                self.policy.contamination_patterns
+            ),
             "total_documents": self.total_documents,
             "accepted_documents": self.accepted_documents,
             "rejected_documents": self.rejected_documents,

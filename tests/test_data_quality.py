@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from matgpt.data.contamination import NaiveContaminationMatcher, pattern_fingerprint
 from matgpt.data.prepare import make_document_record
 from matgpt.data.quality import DataQualityPolicy, QualityFilter, load_contamination_patterns
 
@@ -53,3 +54,18 @@ def test_quality_filter_policy_loads_from_dataset_config(tmp_path: Path):
     assert policy.max_chars == 100
     assert policy.exact_dedup is True
     assert policy.contamination_patterns == ["secret eval phrase"]
+
+
+def test_quality_filter_uses_supplied_matcher_and_reports_its_provenance():
+    policy = DataQualityPolicy(enabled=True, contamination_patterns=["policy phrase"])
+    quality_filter = QualityFilter(
+        policy,
+        contamination_matcher=NaiveContaminationMatcher(["custom phrase"]),
+    )
+    record = make_document_record("unit", "train", 0, "Contains CUSTOM PHRASE.")
+
+    assert quality_filter.accept(record) is False
+    assert quality_filter.report()["contamination_engine"] == "naive_reference"
+    assert quality_filter.report()["contamination_patterns_sha256"] == pattern_fingerprint(
+        policy.contamination_patterns
+    )
