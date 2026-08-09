@@ -87,6 +87,26 @@ that tokenizer, and atomically rebuilds the 20M-token corpus using exact token
 counts. The same frozen tokenizer is reused for the exact 12B full-data build,
 avoiding a second vocabulary and an estimate-first 12B pass.
 
+Before preparing the 12B corpus, use the
+[local Telco tokenizer notebook](notebooks/prepare_matgpt_telco_300m_local.ipynb)
+with its [Mac/Drive runbook](docs/runbooks/local-telco-300m-data.md) to build the
+separate representative 200M-token candidate, compare it against the preserved
+20M pilot tokenizer, and record an explicit selection. The notebook delegates
+only to `scripts/prepare_telco_local.py`, streams live output, and cannot start
+model pretraining. Active sample files remain under the local work root;
+candidate and decision evidence use a distinct Google Drive Stream-files root.
+Neither tokenizer is overwritten during comparison or selection.
+
+The approved tokenizer-only order is:
+
+```text
+tokenizer_sample -> tokenizer_candidate -> tokenizer_compare -> tokenizer_select
+```
+
+Selecting `representative_200m` invalidates the old pilot for promotion. Refresh
+the pilot preparation, smoke, pilot, and evaluation gates under the selected
+tokenizer fingerprint before approving any full-data or full-training stage.
+
 Start with the notebook defaults (`RUN_STAGE = "prepare_data"`,
 `DATA_PLAN = "pilot"`). The 20M-token pilot, resume check, evidence review, full
 data authorization, and full training authorization are separate manual gates.

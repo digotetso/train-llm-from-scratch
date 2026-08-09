@@ -544,3 +544,138 @@ def test_selection_requires_dedicated_output_name(tmp_path: Path):
             "representative_200m",
             tmp_path / "tokenizer.json",
         )
+
+
+def _local_cli_common_args(tmp_path: Path) -> tuple[list[str], Path, Path]:
+    work_dir = tmp_path / "local-work"
+    drive_dir = tmp_path / "drive-publish"
+    drive_dir.mkdir()
+    return (
+        [
+            "--sources",
+            "configs/data/telco_300m_sources.yaml",
+            "--mixture",
+            "configs/data/telco_300m_mixture.yaml",
+            "--candidate-config",
+            "configs/data/telco_300m_tokenizer_candidate.yaml",
+            "--model-config",
+            "configs/matgpt_telco_300m.yaml",
+            "--work-dir",
+            str(work_dir),
+            "--drive-dir",
+            str(drive_dir),
+        ],
+        work_dir,
+        drive_dir,
+    )
+
+
+def test_local_cli_rejects_overlapping_work_and_drive_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+
+    common, _, drive_dir = _local_cli_common_args(tmp_path)
+    work_index = common.index("--work-dir") + 1
+    common[work_index] = str(drive_dir)
+
+    result = prepare_telco_local.main(["--stage", "tokenizer_sample", *common])
+
+    assert result != 0
+    assert not (drive_dir / "tokenizer_sample").exists()
+
+
+def test_local_cli_requires_contamination_evidence_before_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+
+    result = prepare_telco_local.main(["--stage", "tokenizer_sample", *common])
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
+def test_local_cli_refuses_to_overwrite_candidate_directory(tmp_path: Path):
+    from scripts.prepare_telco_local import main
+
+    common, _, drive_dir = _local_cli_common_args(tmp_path)
+    candidate_dir = drive_dir / "tokenizers" / "representative_200m"
+    candidate_dir.mkdir(parents=True)
+    marker = candidate_dir / "keep.txt"
+    marker.write_text("existing candidate\n", encoding="utf-8")
+
+    result = main(
+        [
+            "--stage",
+            "tokenizer_candidate",
+            *common,
+            "--sample-manifest",
+            str(tmp_path / "missing-manifest.json"),
+        ]
+    )
+
+    assert result != 0
+    assert marker.read_text(encoding="utf-8") == "existing candidate\n"
+
+
+def test_local_cli_requires_explicit_selection_approval(tmp_path: Path):
+    from scripts.prepare_telco_local import main
+
+    common, _, drive_dir = _local_cli_common_args(tmp_path)
+    comparison = compare_tokenizers(
+        evaluation(
+            overall_tokens=10_000,
+            general_tokens=6_000,
+            telecom_tokens=3_000,
+            probe_p95=4.0,
+        ),
+        evaluation(
+            overall_tokens=9_850,
+            general_tokens=6_030,
+            telecom_tokens=2_900,
+            probe_p95=4.02,
+            tokenizer_sha256="b" * 64,
+        ),
+        candidate_config(),
+    )
+    comparison_path = tmp_path / "comparison.json"
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    arguments = [
+        "--stage",
+        "tokenizer_select",
+        *common,
+        "--comparison",
+        str(comparison_path),
+        "--winner",
+        "representative_200m",
+    ]
+
+    assert main(arguments) != 0
+    assert not (drive_dir / "tokenizer_selection.json").exists()
+
+    assert main([*arguments, "--approve"]) == 0
+    selection = json.loads(
+        (drive_dir / "tokenizer_selection.json").read_text(encoding="utf-8")
+    )
+    assert selection["winner"] == "representative_200m"
+    assert selection["approved"] is True
