@@ -1,8 +1,11 @@
 # Final-review fix report
 
-Date: 2026-08-09  
-Branch: `codex/telco-tokenizer-local-prep-20260809`  
-Starting head: `3a3aea5`  
+Date: 2026-08-09
+
+Branch: `codex/telco-tokenizer-local-prep-20260809`
+
+Starting head: `3a3aea5`
+
 Implementation commit: `91817f3` (`fix: bind tokenizer workflow evidence`)
 
 ## Outcome
