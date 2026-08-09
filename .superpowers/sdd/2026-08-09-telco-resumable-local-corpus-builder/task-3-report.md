@@ -412,3 +412,63 @@ exit 0
    and asserts rolling, overall, elapsed, and ETA relationships.
 
 No real data, Drive publication, training, or evaluation was performed.
+
+## Fix Round 4
+
+Implementation commit: `1c98dac fix: reject aliased corpus evidence roots`.
+
+### RED evidence
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py::test_fresh_build_rejects_symlinked_evidence_root_ancestor_before_state_hooks tests/test_local_corpus.py::test_resume_rejects_symlinked_evidence_root_ancestor_before_journal_open
+FF                                                                       [100%]
+FAILED test_fresh_build_rejects_symlinked_evidence_root_ancestor_before_state_hooks
+AssertionError: path preflight must run before evidence/state hooks
+FAILED test_resume_rejects_symlinked_evidence_root_ancestor_before_journal_open
+AssertionError: resume alias must fail before evidence/state hooks
+2 failed
+```
+
+Both failures occurred at `Path.read_text`, proving the inherited validation
+followed a symlinked root ancestor and read approval evidence before refusing the
+path later in the pipeline.
+
+### GREEN evidence
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py tests/test_local_build_state.py tests/test_local_publish.py tests/test_data_quality.py tests/test_local_tokens.py tests/test_telco_prepare.py tests/test_local_tokenizer_sample.py tests/test_telco_notebook_local.py tests/test_tokenizer_candidate.py
+........................................................................ [ 37%]
+........................................................................ [ 74%]
+.................................................                        [100%]
+193 passed in 20.56s
+
+$ uv run python -m compileall -q matgpt tests
+exit 0
+
+$ git diff --check
+exit 0
+```
+
+### Finding resolution and self-review
+
+- Before any evidence read, cleanup, journal creation/open, or publisher
+  reconciliation, the builder now computes each supplied path's lexical absolute
+  form and requires it to equal its non-strict resolved form. This covers the
+  evidence root, canonical selection/comparison, selected tokenizer directory
+  and required files, destination root, and local journal root. A symlink in any
+  ancestor therefore fails closed rather than being canonicalized into an
+  equivalent approved path.
+- The evidence root must then pass managed-path validation as an existing real
+  directory. All evidence/tokenizer files must be real managed files, while the
+  destination remains a managed non-symlink descendant that may be created by
+  the publisher.
+- Fresh-build and resume tests route every request path through a symlinked
+  ancestor and replace evidence reads, journal open, cleanup, and reconciliation
+  with failure hooks. Both now reject before any hook; the fresh test proves no
+  journal is created and the resume test proves the existing journal's size and
+  modification time do not change. A separate lexical `..` regression proves
+  aliases are rejected rather than normalized into equivalence.
+- Round 3's path-independent content identity and path-bound operational journal
+  identity are unchanged; their cross-root and resume regressions remain green.
+
+No real data, Drive publication, training, or evaluation was performed.
