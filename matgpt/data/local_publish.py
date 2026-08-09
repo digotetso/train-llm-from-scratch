@@ -1,13 +1,16 @@
-"""Capacity guards and crash-safe publication for local corpus artifacts."""
+"""Capacity guards and provider-safe publication for local corpus artifacts."""
 
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, Iterator
 
 from matgpt.data.local_state import BuildJournal
 from matgpt.utils.hashing import sha256_file
@@ -43,7 +46,11 @@ class StoragePressure(RuntimeError):
 
 
 class DrivePublisher:
-    """Copy sealed local artifacts to a distinct durable root with verification."""
+    """Publish sealed artifacts through fsynced partial-to-final renames.
+
+    Operators can call ``preflight_destination_provider`` before a real build;
+    it creates and removes only a random probe below ``destination_root``.
+    """
 
     def __init__(
         self,
@@ -69,28 +76,16 @@ class DrivePublisher:
         self.journal = journal
         self._publications: list[Publication] = []
         require_managed_path(self.local_root, self.local_root, kind="directory")
-        require_managed_path(
-            self.destination_root, self.destination_root, kind="directory"
-        )
+        require_managed_path(self.destination_root, self.destination_root, kind="directory")
 
     def check_capacity(self, next_unit_bytes: int) -> StorageSnapshot:
-        """Return current capacity evidence or stop before a configured limit."""
+        """Enforce capacity guards before accepting another local work unit."""
 
-        if not isinstance(next_unit_bytes, int) or isinstance(next_unit_bytes, bool):
-            raise ValueError("next_unit_bytes must be a non-negative integer")
-        if next_unit_bytes < 0:
-            raise ValueError("next_unit_bytes must be a non-negative integer")
-        active = sum(
-            path.stat().st_size
-            for path in self.local_root.rglob("*")
-            if _managed_regular_file(self.local_root, path)
-        )
-        free = int(self.free_bytes(self.local_root))
-        if free - next_unit_bytes < self.policy.min_free_bytes:
-            raise StoragePressure("free disk floor would be crossed")
-        if active + next_unit_bytes > self.policy.max_working_bytes:
-            raise StoragePressure("local working-set cap would be crossed")
-        return StorageSnapshot(active_bytes=active, free_bytes=free)
+        snapshot = self._storage_snapshot()
+        reason = self._pressure_reason(snapshot, next_unit_bytes)
+        if reason is not None:
+            raise StoragePressure(reason)
+        return snapshot
 
     def publish(
         self,
@@ -99,43 +94,28 @@ class DrivePublisher:
         *,
         unit_id: str | None = None,
     ) -> Publication:
-        """Publish a sealed artifact, verify it, then durably record any release."""
+        """Publish a sealed artifact and record it before any local release."""
 
         source_path, source_relative_path, size, source_sha256 = self._source_identity(
             source, unit_id
         )
-        destination_relative_path = _normalized_relative_posix_path(
-            destination_relative_path
-        )
+        destination_relative_path = _normalized_relative_posix_path(destination_relative_path)
+        if self.journal is not None:
+            if unit_id is None:
+                raise ValueError("unit_id is required when a journal is configured")
+            self.journal.record_destination(unit_id, source_relative_path, destination_relative_path)
         destination = self._destination_path(destination_relative_path)
         self._ensure_destination_root()
         require_managed_path(self.destination_root, destination.parent, kind="directory")
         destination.parent.mkdir(parents=True, exist_ok=True)
         require_managed_path(self.destination_root, destination.parent, kind="directory")
-        require_managed_path(self.destination_root, destination, kind="file")
         partial = Path(f"{destination}.partial")
+        require_managed_path(self.destination_root, destination, kind="file")
         require_managed_path(self.destination_root, partial, kind="file")
-
-        if destination.exists():
-            destination_sha256 = self._verified_destination(destination, size, source_sha256)
-        else:
-            if partial.exists():
-                raise FileExistsError(f"stale partial publication exists: {partial}")
-            self._copy_fsynced(source_path, partial)
-            try:
-                os.link(partial, destination)
-            except FileExistsError:
-                destination_sha256 = self._verified_destination(
-                    destination, size, source_sha256
-                )
-                partial.unlink()
-            else:
-                partial.unlink()
-                _fsync_directory(destination.parent)
-                destination_sha256 = self._verified_destination(
-                    destination, size, source_sha256
-                )
-
+        with self._publication_lock():
+            destination_sha256 = self._complete_destination(
+                source_path, destination, partial, size, source_sha256
+            )
         publication = Publication(
             source=str(source_path),
             source_relative_path=source_relative_path,
@@ -150,28 +130,90 @@ class DrivePublisher:
         self._record_then_release(publication)
         return publication
 
-    def reconcile(self, publication: Publication) -> Publication:
-        """Re-verify a published artifact and finish an interrupted local release."""
+    def reconcile(
+        self, publication: Publication | None = None
+    ) -> Publication | tuple[Publication, ...]:
+        """Finish known work, including pending records after process restart."""
 
-        destination = self._destination_path(publication.destination_relative_path)
-        self._verified_destination(destination, publication.size, publication.sha256)
-        self._record_then_release(publication)
-        return publication
+        if publication is not None:
+            destination = self._destination_path(publication.destination_relative_path)
+            with self._publication_lock():
+                self._verified_destination(destination, publication.size, publication.sha256)
+            self._record_then_release(publication)
+            return publication
+        if self.journal is None:
+            raise ValueError("fresh reconciliation requires a journal")
+        recovered: list[Publication] = []
+        for artifact in self.journal.unpublished_artifacts():
+            destination_relative_path = artifact["destination_relative_path"]
+            if not isinstance(destination_relative_path, str):
+                raise ValueError("pending artifact has no destination mapping")
+            recovered.append(
+                self.publish(
+                    self.local_root / str(artifact["path"]),
+                    destination_relative_path,
+                    unit_id=str(artifact["unit_id"]),
+                )
+            )
+        return tuple(recovered)
 
     def status(self) -> dict[str, object]:
-        """Return capacity evidence and publication work still known to this process."""
+        """Observe storage and pending work without turning pressure into an error."""
 
+        snapshot = self._storage_snapshot()
         return {
-            "storage": self.check_capacity(0),
+            "storage": snapshot,
+            "pressure": self._pressure_reason(snapshot, 0),
             "unpublished_artifacts": (
                 self.journal.unpublished_artifacts() if self.journal is not None else ()
             ),
             "publications": tuple(self._publications),
         }
 
-    def _source_identity(
-        self, source: str | Path, unit_id: str | None
-    ) -> tuple[Path, str, int, str]:
+    def preflight_destination_provider(self) -> dict[str, bool]:
+        """Safely prove the mounted provider supports fsynced atomic rename."""
+
+        self._ensure_destination_root()
+        with self._publication_lock():
+            token = uuid.uuid4().hex
+            partial = self.destination_root / f".publication-probe-{token}.partial"
+            final = self.destination_root / f".publication-probe-{token}"
+            try:
+                with open_exclusive_nofollow(partial, "wb") as handle:
+                    handle.write(b"matgpt-publication-probe\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._move_partial_to_final(partial, final)
+                if final.read_bytes() != b"matgpt-publication-probe\n":
+                    raise ValueError("destination provider rename probe changed bytes")
+            finally:
+                if partial.exists():
+                    partial.unlink()
+                if final.exists():
+                    final.unlink()
+                _fsync_directory(self.destination_root)
+        return {"fsynced_partial_rename": True, "hard_links_required": False}
+
+    def _storage_snapshot(self) -> StorageSnapshot:
+        active = sum(
+            path.stat().st_size
+            for path in self.local_root.rglob("*")
+            if _managed_regular_file(self.local_root, path)
+        )
+        return StorageSnapshot(active_bytes=active, free_bytes=int(self.free_bytes(self.local_root)))
+
+    def _pressure_reason(self, snapshot: StorageSnapshot, next_unit_bytes: int) -> str | None:
+        if not isinstance(next_unit_bytes, int) or isinstance(next_unit_bytes, bool):
+            raise ValueError("next_unit_bytes must be a non-negative integer")
+        if next_unit_bytes < 0:
+            raise ValueError("next_unit_bytes must be a non-negative integer")
+        if snapshot.free_bytes - next_unit_bytes < self.policy.min_free_bytes:
+            return "free disk floor would be crossed"
+        if snapshot.active_bytes + next_unit_bytes > self.policy.max_working_bytes:
+            return "local working-set cap would be crossed"
+        return None
+
+    def _source_identity(self, source: str | Path, unit_id: str | None) -> tuple[Path, str, int, str]:
         source_path = require_managed_path(self.local_root, source, kind="file", allow_missing=False)
         if source_path.name.endswith(".partial"):
             raise ValueError("source artifact must be sealed, not a partial file")
@@ -190,29 +232,51 @@ class DrivePublisher:
             raise ValueError("unit_id requires a configured journal")
         return source_path, source_relative_path, size, source_sha256
 
+    def _complete_destination(self, source: Path, destination: Path, partial: Path, size: int, source_sha256: str) -> str:
+        if destination.exists():
+            return self._verified_destination(destination, size, source_sha256)
+        if partial.exists():
+            if self._matches_identity(partial, size, source_sha256):
+                self._move_partial_to_final(partial, destination)
+            else:
+                self._quarantine(partial)
+                self._copy_fsynced(source, partial)
+                self._move_partial_to_final(partial, destination)
+        else:
+            self._copy_fsynced(source, partial)
+            self._move_partial_to_final(partial, destination)
+        return self._verified_destination(destination, size, source_sha256)
+
     def _destination_path(self, destination_relative_path: str) -> Path:
-        return require_managed_path(
-            self.destination_root,
-            self.destination_root / Path(destination_relative_path),
-            kind="file",
-        )
+        return require_managed_path(self.destination_root, self.destination_root / Path(destination_relative_path), kind="file")
 
     def _ensure_destination_root(self) -> None:
-        require_managed_path(
-            self.destination_root, self.destination_root, kind="directory"
-        )
+        require_managed_path(self.destination_root, self.destination_root, kind="directory")
         self.destination_root.mkdir(parents=True, exist_ok=True)
-        require_managed_path(
-            self.destination_root,
-            self.destination_root,
-            kind="directory",
-            allow_missing=False,
-        )
+        require_managed_path(self.destination_root, self.destination_root, kind="directory", allow_missing=False)
+
+    @contextmanager
+    def _publication_lock(self) -> Iterator[None]:
+        lock_path = self.destination_root / ".matgpt-publication.lock"
+        require_managed_path(self.destination_root, lock_path, kind="file")
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def _move_partial_to_final(self, partial: Path, destination: Path) -> None:
+        require_managed_path(self.destination_root, partial, kind="file", allow_missing=False)
+        require_managed_path(self.destination_root, destination, kind="file")
+        if destination.exists():
+            raise FileExistsError(f"destination already exists: {destination}")
+        os.rename(partial, destination)
+        _fsync_directory(destination.parent)
 
     def _verified_destination(self, destination: Path, size: int, expected_sha256: str) -> str:
-        require_managed_path(
-            self.destination_root, destination, kind="file", allow_missing=False
-        )
+        require_managed_path(self.destination_root, destination, kind="file", allow_missing=False)
         actual_size = destination.stat().st_size
         actual_sha256 = sha256_file(destination)
         if actual_size != size or actual_sha256 != expected_sha256:
@@ -220,25 +284,24 @@ class DrivePublisher:
             raise ValueError("destination checksum mismatch")
         return actual_sha256
 
-    def _quarantine(self, destination: Path) -> None:
-        require_managed_path(
-            self.destination_root, destination, kind="file", allow_missing=False
-        )
-        relative = destination.relative_to(self.destination_root)
+    @staticmethod
+    def _matches_identity(path: Path, size: int, expected_sha256: str) -> bool:
+        return path.stat().st_size == size and sha256_file(path) == expected_sha256
+
+    def _quarantine(self, path: Path) -> None:
+        require_managed_path(self.destination_root, path, kind="file", allow_missing=False)
+        relative = path.relative_to(self.destination_root)
         quarantine_parent = self.destination_root / "quarantine" / relative.parent
         require_managed_path(self.destination_root, quarantine_parent, kind="directory")
         quarantine_parent.mkdir(parents=True, exist_ok=True)
-        require_managed_path(
-            self.destination_root, quarantine_parent, kind="directory", allow_missing=False
-        )
+        require_managed_path(self.destination_root, quarantine_parent, kind="directory", allow_missing=False)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         quarantined = quarantine_parent / f"{relative.name}.{timestamp}"
         while quarantined.exists():
             timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
             quarantined = quarantine_parent / f"{relative.name}.{timestamp}"
-        os.link(destination, quarantined)
-        destination.unlink()
-        _fsync_directory(destination.parent)
+        os.rename(path, quarantined)
+        _fsync_directory(path.parent)
         _fsync_directory(quarantine_parent)
 
     def _record_then_release(self, publication: Publication) -> None:
@@ -246,16 +309,10 @@ class DrivePublisher:
             return
         if publication.unit_id is None:
             raise ValueError("journal publication is missing its unit_id")
-        self.journal.mark_published(
-            publication.unit_id,
-            publication.source_relative_path,
-            publication.destination_sha256,
-        )
+        self.journal.mark_published(publication.unit_id, publication.source_relative_path, publication.destination_sha256)
         source = Path(publication.source)
         if source.exists():
-            source = require_managed_path(
-                self.local_root, source, kind="file", allow_missing=False
-            )
+            source = require_managed_path(self.local_root, source, kind="file", allow_missing=False)
             source.unlink()
             _fsync_directory(source.parent)
 
@@ -281,13 +338,7 @@ def _normalized_relative_posix_path(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("path must be a normalized relative POSIX path")
     path = PurePosixPath(value)
-    if (
-        not value
-        or "\\" in value
-        or path.is_absolute()
-        or ".." in path.parts
-        or str(path) != value
-    ):
+    if not value or "\\" in value or path.is_absolute() or ".." in path.parts or str(path) != value:
         raise ValueError("path must be a normalized relative POSIX path")
     return value
 
@@ -298,8 +349,7 @@ def _managed_regular_file(root: Path, path: Path) -> bool:
 
 
 def _fsync_directory(directory: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(directory, flags)
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)
     finally:

@@ -117,6 +117,7 @@ class BuildJournal:
                 relative_path TEXT NOT NULL,
                 size INTEGER NOT NULL,
                 sha256 TEXT NOT NULL,
+                destination_relative_path TEXT,
                 published INTEGER NOT NULL CHECK (published IN (0, 1)),
                 destination_sha256 TEXT,
                 published_at TEXT,
@@ -131,6 +132,14 @@ class BuildJournal:
             ON artifacts(relative_path);
             """
         )
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(artifacts)")
+        }
+        if "destination_relative_path" not in columns:
+            connection.execute(
+                "ALTER TABLE artifacts ADD COLUMN destination_relative_path TEXT"
+            )
 
     @staticmethod
     def _ensure_identity(connection: sqlite3.Connection, identity: BuildIdentity) -> None:
@@ -302,7 +311,8 @@ class BuildJournal:
         relative_path = _normalized_relative_posix_path(relative_path)
         row = self.connection.execute(
             """
-            SELECT unit_id, relative_path, size, sha256, published, destination_sha256
+            SELECT unit_id, relative_path, size, sha256, published, destination_sha256,
+                   destination_relative_path
             FROM artifacts
             WHERE unit_id = ? AND relative_path = ?
             """,
@@ -317,14 +327,49 @@ class BuildJournal:
             "sha256": str(row["sha256"]),
             "published": bool(row["published"]),
             "destination_sha256": row["destination_sha256"],
+            "destination_relative_path": row["destination_relative_path"],
         }
+
+    def record_destination(
+        self,
+        unit_id: str,
+        relative_path: str,
+        destination_relative_path: str,
+    ) -> None:
+        """Durably bind a pending source artifact to one destination path."""
+
+        relative_path = _normalized_relative_posix_path(relative_path)
+        destination_relative_path = _normalized_relative_posix_path(
+            destination_relative_path
+        )
+        with self.connection:
+            artifact = self.connection.execute(
+                """
+                SELECT destination_relative_path FROM artifacts
+                WHERE unit_id = ? AND relative_path = ?
+                """,
+                (unit_id, relative_path),
+            ).fetchone()
+            if artifact is None:
+                raise ValueError("unknown artifact")
+            existing = artifact["destination_relative_path"]
+            if existing is not None and existing != destination_relative_path:
+                raise ValueError("artifact destination mapping conflict")
+            self.connection.execute(
+                """
+                UPDATE artifacts
+                SET destination_relative_path = ?
+                WHERE unit_id = ? AND relative_path = ?
+                """,
+                (destination_relative_path, unit_id, relative_path),
+            )
 
     def unpublished_artifacts(self) -> tuple[dict[str, object], ...]:
         """Return all unrecorded artifact publications in deterministic order."""
 
         rows = self.connection.execute(
             """
-            SELECT unit_id, relative_path, size, sha256
+            SELECT unit_id, relative_path, size, sha256, destination_relative_path
             FROM artifacts
             WHERE published = 0
             ORDER BY unit_id, relative_path
@@ -336,6 +381,7 @@ class BuildJournal:
                 "path": str(row["relative_path"]),
                 "size": int(row["size"]),
                 "sha256": str(row["sha256"]),
+                "destination_relative_path": row["destination_relative_path"],
             }
             for row in rows
         )

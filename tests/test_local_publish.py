@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -102,7 +103,7 @@ def test_publish_quarantines_mismatched_destination_without_deleting_source(
     assert quarantined[0].read_text(encoding="utf-8") == "corrupt\n"
 
 
-def test_publish_refuses_stale_partial_without_mutating_source(tmp_path: Path):
+def test_publish_recovers_mismatched_stale_partial_without_mutating_source(tmp_path: Path):
     local = tmp_path / "local"
     destination = tmp_path / "drive"
     local.mkdir()
@@ -112,11 +113,13 @@ def test_publish_refuses_stale_partial_without_mutating_source(tmp_path: Path):
     partial.parent.mkdir(parents=True)
     partial.write_text("interrupted\n", encoding="utf-8")
 
-    with pytest.raises(FileExistsError, match="stale partial"):
-        _publisher(local, destination).publish(artifact, "text/chunk.jsonl")
+    published = _publisher(local, destination).publish(artifact, "text/chunk.jsonl")
 
     assert artifact.read_text(encoding="utf-8") == "valid\n"
-    assert partial.read_text(encoding="utf-8") == "interrupted\n"
+    assert Path(published.destination).read_text(encoding="utf-8") == "valid\n"
+    quarantined = tuple((destination / "quarantine").rglob("chunk.jsonl.partial.*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == "interrupted\n"
 
 
 def test_reconcile_refuses_corrupt_destination(tmp_path: Path):
@@ -221,3 +224,177 @@ def test_publisher_refuses_root_with_a_symlinked_ancestor(tmp_path: Path):
 
     with pytest.raises(ValueError, match="symbolic link"):
         _publisher(local, symlinked_parent / "drive")
+
+
+def test_publish_uses_destination_rename_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "chunk.jsonl"
+    artifact.write_text("valid\n", encoding="utf-8")
+    renames: list[tuple[Path, Path]] = []
+    real_rename = os.rename
+
+    def reject_hard_link(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Drive publication must not require hard links")
+
+    def record_rename(source: str | Path, target: str | Path) -> None:
+        renames.append((Path(source), Path(target)))
+        real_rename(source, target)
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    monkeypatch.setattr(os, "rename", record_rename)
+
+    published = _publisher(local, destination).publish(artifact, "text/chunk.jsonl")
+
+    assert (Path(f"{published.destination}.partial"), Path(published.destination)) in renames
+
+
+def test_quarantine_uses_rename_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "chunk.jsonl"
+    artifact.write_text("valid\n", encoding="utf-8")
+    target = destination / "text" / "chunk.jsonl"
+    target.parent.mkdir(parents=True)
+    target.write_text("corrupt\n", encoding="utf-8")
+    renamed: list[tuple[Path, Path]] = []
+    real_rename = os.rename
+
+    monkeypatch.setattr(
+        os,
+        "link",
+        lambda *_args, **_kwargs: pytest.fail("quarantine must not require hard links"),
+    )
+    monkeypatch.setattr(
+        os,
+        "rename",
+        lambda source, target: (renamed.append((Path(source), Path(target))), real_rename(source, target))[1],
+    )
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        _publisher(local, destination).publish(artifact, "text/chunk.jsonl")
+
+    assert renamed[0][0] == target
+    assert "quarantine" in renamed[0][1].parts
+
+
+def test_fresh_publisher_reconciles_a_matching_stale_partial_from_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    state_path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(state_path, _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                artifacts=(
+                    {
+                        "path": artifact.name,
+                        "size": artifact.stat().st_size,
+                        "sha256": hashlib.sha256(b"committed\n").hexdigest(),
+                    },
+                )
+            )
+        )
+        publisher = _publisher(local, destination, journal=journal)
+        monkeypatch.setattr(
+            publisher,
+            "_move_partial_to_final",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("interrupted after fsync")),
+            raising=False,
+        )
+        with pytest.raises(RuntimeError, match="interrupted after fsync"):
+            publisher.publish(artifact, "text/fit_00000.jsonl", unit_id="fit-00000")
+
+    assert (destination / "text" / "fit_00000.jsonl.partial").exists()
+    assert artifact.exists()
+    with BuildJournal.open(state_path, _identity()) as journal:
+        recovered = _publisher(local, destination, journal=journal).reconcile()
+
+    assert recovered[0].destination_sha256 == hashlib.sha256(b"committed\n").hexdigest()
+    assert not artifact.exists()
+    assert (destination / "text" / "fit_00000.jsonl").read_bytes() == b"committed\n"
+
+
+def test_fresh_publisher_quarantines_mismatched_stale_partial_then_republishes(
+    tmp_path: Path,
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    state_path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(state_path, _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                artifacts=(
+                    {
+                        "path": artifact.name,
+                        "size": artifact.stat().st_size,
+                        "sha256": hashlib.sha256(b"committed\n").hexdigest(),
+                    },
+                )
+            )
+        )
+        journal.record_destination("fit-00000", artifact.name, "text/fit_00000.jsonl")
+    partial = destination / "text" / "fit_00000.jsonl.partial"
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"corrupt\n")
+
+    with BuildJournal.open(state_path, _identity()) as journal:
+        recovered = _publisher(local, destination, journal=journal).reconcile()
+
+    assert recovered[0].destination_sha256 == hashlib.sha256(b"committed\n").hexdigest()
+    assert tuple((destination / "quarantine").rglob("fit_00000.jsonl.partial.*"))
+    assert not artifact.exists()
+
+
+def test_fresh_reconcile_refuses_pending_artifact_without_destination_mapping(
+    tmp_path: Path,
+):
+    local = tmp_path / "local"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        journal.commit_unit(
+            _unit(
+                artifacts=(
+                    {
+                        "path": artifact.name,
+                        "size": artifact.stat().st_size,
+                        "sha256": hashlib.sha256(b"committed\n").hexdigest(),
+                    },
+                )
+            )
+        )
+
+        with pytest.raises(ValueError, match="destination mapping"):
+            _publisher(local, tmp_path / "drive", journal=journal).reconcile()
+
+
+def test_status_reports_pressure_without_raising(tmp_path: Path):
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "sealed.bin").write_bytes(b"1234")
+    publisher = DrivePublisher(
+        local_root=local,
+        destination_root=tmp_path / "drive",
+        policy=StoragePolicy(max_working_bytes=3, min_free_bytes=500),
+        free_bytes=lambda _path: 499,
+    )
+
+    status = publisher.status()
+
+    assert status["storage"].active_bytes == 4
+    assert status["pressure"] == "free disk floor would be crossed"

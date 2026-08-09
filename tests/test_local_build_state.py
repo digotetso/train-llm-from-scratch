@@ -156,6 +156,7 @@ def test_mark_published_rejects_destination_hash_unlike_committed_source(
                 "path": "fit_00000.jsonl",
                 "size": 80,
                 "sha256": "3" * 64,
+                "destination_relative_path": None,
             },
         )
 
@@ -179,10 +180,28 @@ def test_artifact_returns_committed_identity_and_unpublished_order(tmp_path: Pat
             "sha256": "a" * 64,
             "published": False,
             "destination_sha256": None,
+            "destination_relative_path": None,
         }
         assert tuple(item["path"] for item in journal.unpublished_artifacts()) == (
             "a.jsonl",
             "b.jsonl",
+        )
+
+
+def test_destination_mapping_survives_journal_reopen(tmp_path: Path):
+    path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(path, _identity()) as journal:
+        journal.commit_unit(_unit())
+        journal.record_destination(
+            "fit-00000", "fit_00000.jsonl", "text/fit_00000.jsonl"
+        )
+
+    with BuildJournal.open(path, _identity()) as journal:
+        assert journal.artifact("fit-00000", "fit_00000.jsonl")[
+            "destination_relative_path"
+        ] == "text/fit_00000.jsonl"
+        assert journal.unpublished_artifacts()[0]["destination_relative_path"] == (
+            "text/fit_00000.jsonl"
         )
 
 
