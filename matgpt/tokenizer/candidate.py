@@ -14,6 +14,13 @@ from matgpt.data.mixture import build_mixture_plan
 
 
 TARGET_SAMPLE_TOKENS = 200_000_000
+REQUIRED_MIXTURE_STAGE = "pilot"
+REQUIRED_MIXTURE_SEED = 42
+REQUIRED_ROLE_QUOTAS = {
+    "pretrain_general": 128_333_333,
+    "pretrain_structured": 10_000_000,
+    "pretrain_telecom": 61_666_667,
+}
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _TOP_LEVEL_KEYS = frozenset(
     {
@@ -117,9 +124,13 @@ def load_tokenizer_candidate_config(path: str | Path) -> TokenizerCandidateConfi
             "Tokenizer candidate config sample_tokens must be exactly 200000000."
         )
 
+    mixture_stage = _safe_label(raw.get("mixture_stage"), "mixture_stage")
+    if mixture_stage != REQUIRED_MIXTURE_STAGE:
+        raise ValueError("Tokenizer candidate config mixture_stage must be pilot.")
+
     return TokenizerCandidateConfig(
         sample_tokens=sample_tokens,
-        mixture_stage=_safe_label(raw.get("mixture_stage"), "mixture_stage"),
+        mixture_stage=mixture_stage,
         baseline_label=_safe_label(raw.get("baseline_label"), "baseline_label"),
         candidate_label=_safe_label(raw.get("candidate_label"), "candidate_label"),
         max_general_regression=_fraction(
@@ -151,9 +162,16 @@ def build_tokenizer_sample_plan(
 ) -> dict[str, Any]:
     """Build the exact pilot-stage mixture plan for the candidate sample."""
 
-    return build_mixture_plan(
+    if config.mixture_stage != REQUIRED_MIXTURE_STAGE:
+        raise ValueError("Tokenizer candidate config mixture_stage must be pilot.")
+    plan = build_mixture_plan(
         registry,
         mixture,
         config.mixture_stage,
         total_tokens=config.sample_tokens,
     )
+    if plan["seed"] != REQUIRED_MIXTURE_SEED:
+        raise ValueError("Tokenizer candidate mixture seed must be 42.")
+    if plan["role_quotas"] != REQUIRED_ROLE_QUOTAS:
+        raise ValueError("Tokenizer candidate mixture role quotas do not match the recipe.")
+    return plan

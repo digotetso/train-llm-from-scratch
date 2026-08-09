@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,63 @@ def test_candidate_recipe_rejects_unknown_keys(tmp_path: Path):
 
     with pytest.raises(ValueError, match="unknown keys"):
         load_tokenizer_candidate_config(path)
+
+
+def test_candidate_recipe_requires_pilot_mixture_stage(tmp_path: Path):
+    raw = yaml.safe_load(
+        Path("configs/data/telco_300m_tokenizer_candidate.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["mixture_stage"] = "main"
+    path = tmp_path / "candidate.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mixture_stage must be pilot"):
+        load_tokenizer_candidate_config(path)
+
+
+def test_candidate_sample_plan_requires_pilot_stage_from_direct_config():
+    config = load_tokenizer_candidate_config(
+        "configs/data/telco_300m_tokenizer_candidate.yaml"
+    )
+
+    with pytest.raises(ValueError, match="mixture_stage must be pilot"):
+        build_tokenizer_sample_plan(
+            load_source_registry("configs/data/telco_300m_sources.yaml"),
+            load_mixture_config("configs/data/telco_300m_mixture.yaml"),
+            replace(config, mixture_stage="main"),
+        )
+
+
+def test_candidate_recipe_rejects_mixture_with_unexpected_seed():
+    config = load_tokenizer_candidate_config(
+        "configs/data/telco_300m_tokenizer_candidate.yaml"
+    )
+    mixture = load_mixture_config("configs/data/telco_300m_mixture.yaml")
+    mixture["seed"] = 7
+
+    with pytest.raises(ValueError, match="seed must be 42"):
+        build_tokenizer_sample_plan(
+            load_source_registry("configs/data/telco_300m_sources.yaml"),
+            mixture,
+            config,
+        )
+
+
+def test_candidate_recipe_rejects_mixture_with_changed_role_weights():
+    config = load_tokenizer_candidate_config(
+        "configs/data/telco_300m_tokenizer_candidate.yaml"
+    )
+    mixture = load_mixture_config("configs/data/telco_300m_mixture.yaml")
+    mixture["stages"]["pilot"]["role_weights"]["pretrain_general"] = 1
+
+    with pytest.raises(ValueError, match="role quotas"):
+        build_tokenizer_sample_plan(
+            load_source_registry("configs/data/telco_300m_sources.yaml"),
+            mixture,
+            config,
+        )
 
 
 @pytest.mark.parametrize(
