@@ -10,13 +10,10 @@ from typing import Mapping, Sequence
 import numpy as np
 from tokenizers import Tokenizer
 
+from matgpt.data.token_dtype import DTYPES, validate_token_ids
 from matgpt.utils.hashing import sha256_file
 
 
-DTYPES = {
-    "uint16": np.uint16,
-    "uint32": np.uint32,
-}
 _WRITE_BLOCK_TOKENS = 1_048_576
 
 
@@ -73,9 +70,8 @@ class PackedShardWriter:
         self.numpy_dtype = np.dtype(DTYPES[dtype])
         self.shard_size_tokens = shard_size_tokens
         self.eos_id = int(eos_id)
-        self._minimum_id = int(np.iinfo(self.numpy_dtype).min)
-        self._maximum_id = int(np.iinfo(self.numpy_dtype).max)
         self._validate_ids((self.eos_id,))
+        self._reject_existing_artifacts()
 
         self._handle = None
         self._partial_path: Path | None = None
@@ -114,7 +110,9 @@ class PackedShardWriter:
         handle.close()
 
         final_path = self._final_path(self._next_index)
-        os.replace(partial_path, final_path)
+        os.link(partial_path, final_path)
+        partial_path.unlink()
+        _fsync_directory(self.output_dir)
         shard = {
             "path": str(final_path),
             "relative_path": final_path.name,
@@ -159,12 +157,29 @@ class PackedShardWriter:
         self._handle = partial_path.open("xb")
         self._partial_path = partial_path
 
+    def _reject_existing_artifacts(self) -> None:
+        if not self.output_dir.exists():
+            return
+        stale_partial = next(self.output_dir.glob(f"{self.split}_*.bin.partial"), None)
+        if stale_partial is not None:
+            raise FileExistsError(f"stale partial shard exists: {stale_partial}")
+        sealed_shard = next(self.output_dir.glob(f"{self.split}_*.bin"), None)
+        if sealed_shard is not None:
+            raise FileExistsError(f"sealed shard exists: {sealed_shard}")
+
     def _final_path(self, index: int) -> Path:
         return self.output_dir / f"{self.split}_{index:05d}.bin"
 
     def _validate_ids(self, ids: Sequence[int]) -> None:
-        values = np.asarray(ids, dtype=np.int64)
-        if values.size and (
-            int(values.min()) < self._minimum_id or int(values.max()) > self._maximum_id
-        ):
-            raise ValueError(f"token IDs must fit {self.dtype}")
+        validate_token_ids(ids, self.dtype)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Persist a completed rename/link in the containing directory."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_descriptor = os.open(directory, flags)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)

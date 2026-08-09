@@ -13,14 +13,9 @@ from typing import Any
 import numpy as np
 
 from matgpt.data.prepare import effective_validation_split
+from matgpt.data.token_dtype import DTYPES, validate_token_ids
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json
-
-
-DTYPES = {
-    "uint16": np.uint16,
-    "uint32": np.uint32,
-}
 
 
 def _flush_shard(
@@ -30,6 +25,7 @@ def _flush_shard(
     shard_index: int,
     dtype: str,
 ) -> dict[str, Any]:
+    validate_token_ids(tokens, dtype)
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{split}_{shard_index:05d}.bin"
     array = np.asarray(tokens, dtype=DTYPES[dtype])
@@ -117,8 +113,13 @@ def tokenize_jsonl_to_shards(
 
     if append_eos and eos_id is None:
         raise ValueError("Tokenizer must define <|eos|> when append_eos is true.")
-    if dtype == "uint16" and tokenizer.get_vocab_size() > 65535:
-        raise ValueError("uint16 shards require tokenizer vocab size <= 65535.")
+    max_token_id = int(np.iinfo(DTYPES[dtype]).max)
+    if tokenizer.get_vocab_size() > max_token_id + 1:
+        raise ValueError(
+            f"{dtype} shards require tokenizer vocab size <= {max_token_id + 1}."
+        )
+    if append_eos:
+        validate_token_ids((eos_id,), dtype)
 
     out = Path(output_dir)
     shard_tokens: list[int] = []
@@ -137,6 +138,7 @@ def tokenize_jsonl_to_shards(
             # Convert those tokens into token IDs.
             # Store the result in ids.
             ids = tokenizer.encode(record["text"]).ids
+            validate_token_ids(ids, dtype)
 
             # Add EOS after every document.
             # Mark the end of the document.

@@ -1,9 +1,12 @@
 import json
+import stat
 from pathlib import Path
 
 import numpy as np
+import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
 
+from matgpt.data import local_tokens
 from matgpt.data.local_tokens import PackedShardWriter, encode_record_batch
 from matgpt.data.shard import tokenize_jsonl_to_shards
 
@@ -79,3 +82,70 @@ def test_streaming_writer_matches_reference_bytes(tmp_path: Path):
     assert actual_bytes == expected_bytes
     assert sum(shard["num_tokens"] for shard in actual) == 7
     assert np.fromfile(actual[0]["path"], dtype=np.uint16).tolist() == [2, 3, 1, 3]
+
+
+def test_restart_refuses_to_overwrite_sealed_shard_bytes(tmp_path: Path):
+    output_dir = tmp_path / "streaming"
+    writer = PackedShardWriter(
+        output_dir=output_dir,
+        split="main",
+        dtype="uint16",
+        shard_size_tokens=4,
+        eos_id=1,
+    )
+    writer.append_document((2, 3))
+    sealed = writer.finalize()[0]
+    original_bytes = Path(sealed["path"]).read_bytes()
+
+    with pytest.raises(FileExistsError, match="sealed shard"):
+        PackedShardWriter(
+            output_dir=output_dir,
+            split="main",
+            dtype="uint16",
+            shard_size_tokens=4,
+            eos_id=1,
+        )
+
+    assert Path(sealed["path"]).read_bytes() == original_bytes
+
+
+def test_restart_refuses_stale_partial_before_mutating_it(tmp_path: Path):
+    output_dir = tmp_path / "streaming"
+    output_dir.mkdir()
+    partial = output_dir / "main_00000.bin.partial"
+    partial.write_bytes(b"uncommitted")
+
+    with pytest.raises(FileExistsError, match="stale partial"):
+        PackedShardWriter(
+            output_dir=output_dir,
+            split="main",
+            dtype="uint16",
+            shard_size_tokens=4,
+            eos_id=1,
+        )
+
+    assert partial.read_bytes() == b"uncommitted"
+    assert not (output_dir / "main_00000.bin").exists()
+
+
+def test_sealing_fsyncs_containing_directory(tmp_path: Path, monkeypatch):
+    real_fsync = local_tokens.os.fsync
+    fsynced_directory_descriptors = []
+
+    def record_fsync(file_descriptor: int) -> None:
+        if stat.S_ISDIR(local_tokens.os.fstat(file_descriptor).st_mode):
+            fsynced_directory_descriptors.append(file_descriptor)
+        real_fsync(file_descriptor)
+
+    monkeypatch.setattr(local_tokens.os, "fsync", record_fsync)
+    writer = PackedShardWriter(
+        output_dir=tmp_path / "streaming",
+        split="main",
+        dtype="uint16",
+        shard_size_tokens=4,
+        eos_id=1,
+    )
+    writer.append_document((2, 3))
+    writer.finalize()
+
+    assert fsynced_directory_descriptors
