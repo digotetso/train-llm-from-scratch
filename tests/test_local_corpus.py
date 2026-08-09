@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import signal
 from collections import Counter
 from dataclasses import replace
@@ -398,6 +399,59 @@ def test_interval_progress_reports_truthful_unsealed_window_state(
     assert resumed_events[-1]["throughput"]["elapsed_seconds"] >= committed_elapsed
 
 
+def test_resumed_rolling_rate_uses_only_new_process_tokens_and_interval(tmp_path: Path):
+    class StepClock:
+        def __init__(self, start: float, step: float):
+            self.current = start
+            self.step = step
+
+        def __call__(self) -> float:
+            value = self.current
+            self.current += self.step
+            return value
+
+    plan = _single_source_plan(
+        "main", token_quota=120, validation_fraction=0.0, buffer_size=2
+    )
+    request = replace(
+        make_corpus_request(tmp_path, plans=[plan]),
+        raw_unit_bytes=1_000_000,
+        shard_size_tokens=1_000_000,
+        progress_interval_seconds=0.0,
+    )
+    calibrated = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        stop_after_quota_tokens=20,
+        monotonic_clock=StepClock(0.0, 10.0),
+    )
+    saved = _last_cumulative(request)["progress"]
+    resumed_events = []
+
+    resumed = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        monotonic_clock=StepClock(100.0, 5.0),
+        progress_callback=resumed_events.append,
+    )
+    first = next(event for event in resumed_events if event["status"] == "running")
+    new_elapsed = first["throughput"]["elapsed_seconds"] - saved["elapsed_seconds"]
+    new_tokens = first["accepted_quota_tokens"] - saved["accepted_quota_tokens"]
+    rolling = first["throughput"]["rolling_tokens_per_second"]
+
+    assert calibrated.status == "calibration_complete"
+    assert saved["accepted_quota_tokens"] < 120
+    assert resumed.status == "provisional_complete"
+    assert new_elapsed > 0
+    assert new_tokens > 0
+    assert rolling == pytest.approx(new_tokens / new_elapsed)
+    assert first["throughput"]["overall_tokens_per_second"] == pytest.approx(
+        first["accepted_quota_tokens"] / first["throughput"]["elapsed_seconds"]
+    )
+    remaining = first["stage_quota"]["requested_tokens"] - first["stage_quota"]["actual_tokens"]
+    assert first["throughput"]["eta_seconds"] == pytest.approx(remaining / rolling)
+
+
 def test_transient_loader_failure_retries_from_committed_cursor(tmp_path: Path):
     attempts = 0
 
@@ -469,6 +523,88 @@ def test_evidence_root_and_atomic_destination_mapping_are_canonical(tmp_path: Pa
     import sqlite3
     with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
         assert connection.execute("SELECT count(*) FROM artifacts WHERE destination_relative_path IS NULL").fetchone()[0] == 0
+
+
+def test_operational_identity_refuses_changed_destination_or_evidence_root_before_reconcile(
+    tmp_path: Path, monkeypatch
+):
+    request = make_corpus_request(tmp_path / "original", plans=[_tiny_plan("main")])
+    build_local_corpus(
+        request, dataset_loader=_loader, stop_after_quota_tokens=24
+    )
+
+    from matgpt.data.local_publish import DrivePublisher
+
+    def unexpected_reconcile(_self):
+        raise AssertionError("identity must fail before destination reconciliation")
+
+    monkeypatch.setattr(DrivePublisher, "reconcile", unexpected_reconcile)
+    changed_destination = replace(
+        request, destination_root=request.evidence_root / "different-drive"
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        build_local_corpus(changed_destination, dataset_loader=_loader)
+
+    copied_root = tmp_path / "copied-evidence"
+    copied_root.mkdir()
+    shutil.copytree(request.tokenizer_dir, copied_root / "tokenizer")
+    shutil.copy2(request.tokenizer_selection_path, copied_root / "tokenizer_selection.json")
+    shutil.copy2(request.evidence_root / "comparison.json", copied_root / "comparison.json")
+    assert sha256_file(copied_root / "tokenizer_selection.json") == sha256_file(
+        request.tokenizer_selection_path
+    )
+    changed_evidence = replace(
+        request,
+        evidence_root=copied_root,
+        tokenizer_dir=copied_root / "tokenizer",
+        tokenizer_selection_path=copied_root / "tokenizer_selection.json",
+        destination_root=copied_root / "drive",
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        build_local_corpus(changed_evidence, dataset_loader=_loader)
+
+
+@pytest.mark.parametrize("evidence_name", ("tokenizer_selection.json", "comparison.json"))
+def test_builder_rejects_symlinked_canonical_evidence_file(
+    tmp_path: Path, evidence_name: str
+):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    canonical = request.evidence_root / evidence_name
+    backing = request.evidence_root / f"real-{evidence_name}"
+    canonical.rename(backing)
+    canonical.symlink_to(backing.name)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        build_local_corpus(request, dataset_loader=_loader)
+
+    assert not (request.local_root / "corpus.sqlite3").exists()
+
+
+def test_builder_rejects_copied_selection_outside_root_and_symlink_destination(
+    tmp_path: Path
+):
+    request = make_corpus_request(tmp_path / "copied", plans=[_tiny_plan("main")])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    copied_selection = outside / "tokenizer_selection.json"
+    shutil.copy2(request.tokenizer_selection_path, copied_selection)
+
+    with pytest.raises(ValueError, match="directly below evidence_root"):
+        build_local_corpus(
+            replace(request, tokenizer_selection_path=copied_selection),
+            dataset_loader=_loader,
+        )
+
+    symlink_request = make_corpus_request(
+        tmp_path / "symlink-destination", plans=[_tiny_plan("main")]
+    )
+    real_destination = symlink_request.evidence_root / "real-drive"
+    real_destination.mkdir()
+    symlink_request.destination_root.symlink_to(real_destination.name)
+    with pytest.raises(ValueError, match="symbolic link"):
+        build_local_corpus(symlink_request, dataset_loader=_loader)
+
+    assert not (symlink_request.local_root / "corpus.sqlite3").exists()
 
 
 def test_builder_requires_enabled_dedup_and_contamination_controls(tmp_path: Path):

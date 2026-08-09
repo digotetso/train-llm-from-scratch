@@ -47,7 +47,7 @@ class LocalCorpusRequest:
     local_root: Path
     destination_root: Path
     quality_policy: DataQualityPolicy
-    evidence_root: Path | None = None
+    evidence_root: Path
     batch_documents: int = 128
     shard_size_tokens: int = 50_000_000
     raw_unit_bytes: int = 268_435_456
@@ -96,9 +96,11 @@ def _build_local_corpus(
     """Build deterministic source windows without re-encoding accepted rows."""
 
     _validate_request(request)
-    tokenizer_sha, selection_sha, comparison_sha = _selected_tokenizer_sha(request)
+    tokenizer_sha, selection_sha, comparison_sha, operational = _selected_tokenizer_sha(request)
     tokenizer = load_tokenizer(request.tokenizer_dir)
-    identity = _identity(request, tokenizer_sha, selection_sha, comparison_sha)
+    identity = _identity(
+        request, tokenizer_sha, selection_sha, comparison_sha, operational
+    )
     local_root = Path(request.local_root)
     destination_root = Path(request.destination_root)
     require_managed_path(local_root, local_root, kind="directory")
@@ -358,7 +360,7 @@ def _build_local_corpus(
                             ),
                             pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                         )
-                        return LocalCorpusResult("calibration_complete", identity.sha256, total, None)
+                        return LocalCorpusResult("calibration_complete", identity.content_sha256, total, None)
                     if _STOP_REQUESTED:
                         _write_progress(
                             local_root,
@@ -376,7 +378,7 @@ def _build_local_corpus(
                             ),
                             pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                         )
-                        return LocalCorpusResult("stopped_cleanly", identity.sha256, total, None)
+                        return LocalCorpusResult("stopped_cleanly", identity.content_sha256, total, None)
                     if all(
                         counters.get((stage, key), 0) >= int(items[key]["token_quota"])
                         for key in source_items
@@ -414,7 +416,7 @@ def _build_local_corpus(
             },
             pending_unit=_pending_unit([], [], 0, 0, 0, 0, 0),
         )
-        return LocalCorpusResult("provisional_complete", identity.sha256, total, manifest)
+        return LocalCorpusResult("provisional_complete", identity.content_sha256, total, manifest)
 
 
 def build_local_corpus(
@@ -457,33 +459,72 @@ def _validate_request(request: LocalCorpusRequest) -> None:
         raise ValueError("mandatory quality controls require enabled exact dedup and contamination evidence")
 
 
-def _selected_tokenizer_sha(request: LocalCorpusRequest) -> tuple[str, str, str]:
-    selection = Path(request.tokenizer_selection_path)
-    evidence_root = Path(request.evidence_root) if request.evidence_root is not None else selection.parent
-    if selection.parent.resolve() != evidence_root.resolve():
+def _selected_tokenizer_sha(
+    request: LocalCorpusRequest,
+) -> tuple[str, str, str, Mapping[str, str]]:
+    if request.evidence_root is None:
+        raise ValueError("evidence_root is required")
+    evidence_root = require_managed_path(
+        request.evidence_root,
+        request.evidence_root,
+        kind="directory",
+        allow_missing=False,
+    )
+    selection = _absolute_lexical(request.tokenizer_selection_path)
+    canonical_selection = evidence_root / "tokenizer_selection.json"
+    if selection != canonical_selection:
         raise ValueError("tokenizer selection must be directly below evidence_root")
-    if selection.name != "tokenizer_selection.json":
-        raise ValueError("tokenizer selection must use canonical tokenizer_selection.json")
+    selection = require_managed_path(
+        evidence_root, canonical_selection, kind="file", allow_missing=False
+    )
     data = json.loads(selection.read_text(encoding="utf-8"))
     comparison_path = evidence_root / "comparison.json"
-    if not comparison_path.is_file():
-        raise ValueError("approved tokenizer selection is missing canonical comparison evidence")
+    comparison_path = require_managed_path(
+        evidence_root, comparison_path, kind="file", allow_missing=False
+    )
     comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
     if not isinstance(data, Mapping) or not isinstance(comparison, Mapping):
         raise ValueError("approved tokenizer selection comparison evidence is invalid")
     selected_sha = validate_tokenizer_selection(data, comparison)
-    tokenizer_dir = Path(request.tokenizer_dir).resolve()
-    if not tokenizer_dir.is_relative_to(evidence_root.resolve()):
+    tokenizer_dir = require_managed_path(
+        evidence_root,
+        request.tokenizer_dir,
+        kind="directory",
+        allow_missing=False,
+    )
+    if tokenizer_dir == evidence_root:
         raise ValueError("selected tokenizer must be beneath evidence_root")
-    if not Path(request.destination_root).resolve().is_relative_to(evidence_root.resolve()):
+    tokenizer_json = require_managed_path(
+        evidence_root, tokenizer_dir / "tokenizer.json", kind="file", allow_missing=False
+    )
+    require_managed_path(
+        evidence_root,
+        tokenizer_dir / "special_tokens.json",
+        kind="file",
+        allow_missing=False,
+    )
+    destination_root = require_managed_path(
+        evidence_root, request.destination_root, kind="directory"
+    )
+    if destination_root == evidence_root:
         raise ValueError("corpus destination must be a managed evidence_root descendant")
-    actual = sha256_file(tokenizer_dir / "tokenizer.json")
-    metadata = load_tokenizer_metadata(request.tokenizer_dir)
+    actual = sha256_file(tokenizer_json)
+    metadata = load_tokenizer_metadata(tokenizer_dir)
     if selected_sha != actual:
         raise ValueError("approved tokenizer selection does not match tokenizer")
     if metadata.get("tokenizer_sha256") != actual:
         raise ValueError("tokenizer metadata checksum mismatch")
-    return actual, sha256_file(selection), sha256_file(comparison_path)
+    resolved_root = evidence_root.resolve(strict=True)
+    namespace = destination_root.relative_to(evidence_root).as_posix()
+    operational = {
+        "evidence_root": str(resolved_root),
+        "destination_namespace": namespace,
+    }
+    return actual, sha256_file(selection), sha256_file(comparison_path), operational
+
+
+def _absolute_lexical(path: str | Path) -> Path:
+    return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
 
 
 def _identity(
@@ -491,8 +532,29 @@ def _identity(
     tokenizer_sha: str,
     selection_sha: str,
     comparison_sha: str,
+    operational: Mapping[str, str],
 ) -> BuildIdentity:
-    return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens, "evidence_schema_version": _EVIDENCE_SCHEMA_VERSION, "selection_sha256": selection_sha, "comparison_sha256": comparison_sha}))
+    return BuildIdentity(
+        version=1,
+        mode="local_corpus",
+        plan_sha256=sha256_json(list(request.plans)),
+        source_registry_sha256=sha256_json(asdict(request.registry)),
+        contamination_sha256=sha256_json(
+            request.quality_policy.contamination_patterns
+        ),
+        quality_policy_sha256=sha256_json(asdict(request.quality_policy)),
+        tokenizer_sha256=tokenizer_sha,
+        format_sha256=sha256_json(
+            {
+                "raw_unit_bytes": request.raw_unit_bytes,
+                "shard_size_tokens": request.shard_size_tokens,
+                "evidence_schema_version": _EVIDENCE_SCHEMA_VERSION,
+                "selection_sha256": selection_sha,
+                "comparison_sha256": comparison_sha,
+            }
+        ),
+        operational=operational,
+    )
 
 
 def _is_transient_error(error: BaseException) -> bool:
@@ -779,7 +841,7 @@ def _journal_overhead_bytes(hashes: list[str]) -> int:
 
 def _manifest(identity, counters, journal):
     artifacts = tuple(journal.iter_artifacts())
-    manifest = {"version": 1, "complete": False, "status": "provisional", "build_identity_sha256": identity.sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
+    manifest = {"version": 1, "complete": False, "status": "provisional", "build_identity_sha256": identity.content_sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
     manifest["content_sha256"] = sha256_json(manifest)
     return manifest
 
@@ -883,9 +945,10 @@ def _write_progress(
     ):
         return None
     elapsed = runtime.elapsed_base + max(0.0, monotonic_now - runtime.started_at)
+    process_elapsed = max(0.0, monotonic_now - runtime.started_at)
     since_last = (
         max(0.0, monotonic_now - runtime.last_emitted_at)
-        if runtime.last_emitted_at is not None else elapsed
+        if runtime.last_emitted_at is not None else process_elapsed
     )
     token_delta = progress.accepted_quota_tokens - runtime.last_emitted_tokens
     overall_rate = progress.accepted_quota_tokens / elapsed if elapsed > 0 else 0.0

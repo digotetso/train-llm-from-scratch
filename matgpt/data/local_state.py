@@ -25,10 +25,32 @@ class BuildIdentity:
     quality_policy_sha256: str
     tokenizer_sha256: str | None
     format_sha256: str
+    operational: Mapping[str, str] | None = None
+
+    @property
+    def content_payload(self) -> dict[str, object]:
+        """Return path-independent inputs that define produced content."""
+
+        payload = asdict(self)
+        payload.pop("operational")
+        return payload
+
+    @property
+    def journal_payload(self) -> dict[str, object]:
+        """Return content plus machine-local state/publication ownership."""
+
+        payload = self.content_payload
+        if self.operational is not None:
+            payload["operational"] = dict(self.operational)
+        return payload
+
+    @property
+    def content_sha256(self) -> str:
+        return sha256_json(self.content_payload)
 
     @property
     def sha256(self) -> str:
-        return sha256_json(asdict(self))
+        return sha256_json(self.journal_payload)
 
 
 @dataclass(frozen=True)
@@ -149,7 +171,10 @@ class BuildJournal:
     @staticmethod
     def _ensure_identity(connection: sqlite3.Connection, identity: BuildIdentity) -> None:
         identity_json = json.dumps(
-            asdict(identity), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            identity.journal_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
         )
         rows = dict(
             connection.execute(

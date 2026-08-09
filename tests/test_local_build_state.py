@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,24 @@ def test_journal_refuses_changed_build_identity(tmp_path: Path):
 
     with pytest.raises(ValueError, match="identity mismatch"):
         BuildJournal.open(path, _identity(tokenizer_sha256="e" * 64))
+
+
+def test_operational_identity_changes_journal_but_not_content_identity(tmp_path: Path):
+    path = tmp_path / "state.sqlite3"
+    first = replace(
+        _identity(),
+        operational={"evidence_root": "/evidence/a", "destination_namespace": "drive"},
+    )
+    second = replace(
+        _identity(),
+        operational={"evidence_root": "/evidence/b", "destination_namespace": "drive"},
+    )
+
+    assert first.content_sha256 == second.content_sha256 == _identity().sha256
+    assert first.sha256 != second.sha256
+    BuildJournal.open(path, first).close()
+    with pytest.raises(ValueError, match="identity mismatch"):
+        BuildJournal.open(path, second)
 
 
 def test_journal_refuses_missing_identity_when_units_are_already_committed(
