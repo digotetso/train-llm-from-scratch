@@ -142,6 +142,7 @@ def load_verified_shard_metadata(
     metadata_root: str | Path | None = None,
     finalized_root: str | Path | None = None,
     finalized_artifact: Mapping[str, object] | None = None,
+    require_internal_fingerprint: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Load shard metadata and optionally bind it to final manifest evidence."""
 
@@ -205,7 +206,11 @@ def load_verified_shard_metadata(
 
     metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
     stored_hash = metadata.get("metadata_sha256")
-    if stored_hash is not None or finalized_artifact is not None:
+    if (
+        stored_hash is not None
+        or finalized_artifact is not None
+        or require_internal_fingerprint
+    ):
         unsigned = dict(metadata)
         unsigned.pop("metadata_sha256", None)
         if not isinstance(stored_hash, str) or stored_hash != sha256_json(unsigned):

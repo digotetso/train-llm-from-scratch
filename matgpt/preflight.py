@@ -510,6 +510,7 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
             if finalized_artifact is not None
             else None,
             finalized_artifact=finalized_artifact,
+            require_internal_fingerprint=True,
         )
         expected_provenance = {
             "split": split,

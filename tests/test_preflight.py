@@ -556,6 +556,29 @@ def test_preflight_rejects_stale_shard_provenance(
     assert field in check["message"]
 
 
+@pytest.mark.parametrize("split", ("train", "validation"))
+def test_legacy_preflight_requires_each_shard_metadata_internal_fingerprint(
+    synthetic_preflight_cfg,
+    split,
+):
+    metadata_path = (
+        Path(synthetic_preflight_cfg["sharding"]["output_dir"])
+        / f"{split}_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("metadata_sha256")
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "shards")
+    assert report["status"] == "fail"
+    assert check["status"] == "fail"
+    assert "metadata_sha256" in check["message"]
+
+
 def test_preflight_rejects_shard_path_outside_output_root(
     synthetic_preflight_cfg,
     tmp_path,
