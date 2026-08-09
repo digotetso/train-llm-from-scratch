@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
 
-from matgpt.data.quality import DataQualityPolicy
+from matgpt.data.quality import DataQualityPolicy, QualityFilter
 from matgpt.config import clone_config, load_config
 from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.data.sources import load_source_registry
@@ -13,6 +13,8 @@ from matgpt.data.telco_prepare import (
     audit_token_quotas,
     corpus_has_exact_token_quotas,
     iter_deterministic_buffered,
+    iter_deterministic_source_windows,
+    iter_normalized_source,
     normalize_source_row,
     prepare_telco_corpora,
 )
@@ -225,6 +227,56 @@ def test_buffered_order_is_repeatable_seeded_and_bounded():
     assert {row["document_id"] for row in first} == {
         str(index) for index in range(20)
     }
+
+
+def test_source_windows_preserve_buffered_order_and_resume_after_empty_rows():
+    source = load_source_registry(REGISTRY_PATH).by_id["common_pile_wikimedia"]
+    rows = [
+        {"text": "Document zero."},
+        {"text": "  \n"},
+        {"text": "Document two."},
+        {"text": "Document three."},
+        {"text": "\t"},
+        {"text": "Document five."},
+    ]
+    expected = list(
+        iter_deterministic_buffered(
+            iter_normalized_source(
+                source,
+                iter(rows),
+                "pilot",
+                QualityFilter(DataQualityPolicy(enabled=True)),
+            ),
+            seed=42,
+            buffer_size=2,
+        )
+    )
+    windows = list(
+        iter_deterministic_source_windows(
+            source,
+            iter(rows),
+            "pilot",
+            QualityFilter(DataQualityPolicy(enabled=True)),
+            seed=42,
+            buffer_size=2,
+        )
+    )
+
+    assert [record for window in windows for record in window.records] == expected
+    assert [window.next_raw_cursor for window in windows] == [3, 6]
+    for index, window in enumerate(windows):
+        restarted = iter_deterministic_source_windows(
+            source,
+            iter(rows[window.next_raw_cursor :]),
+            "pilot",
+            QualityFilter(DataQualityPolicy(enabled=True)),
+            seed=42,
+            buffer_size=2,
+            start_raw_cursor=window.next_raw_cursor,
+        )
+        assert [record for item in restarted for record in item.records] == [
+            record for item in windows[index + 1 :] for record in item.records
+        ]
 
 
 def test_builder_streams_to_quotas_and_promotes_atomically(tmp_path: Path):

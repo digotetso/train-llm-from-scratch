@@ -8,6 +8,7 @@ import math
 import shutil
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
@@ -280,6 +281,40 @@ def _bucket_lookup(source: SourceSpec) -> dict[str, str]:
     }
 
 
+def _normalize_stream_row(
+    source: SourceSpec,
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    stage: str,
+    quality_filter: QualityFilter,
+    collections: Mapping[str, str],
+) -> dict[str, Any] | None:
+    if not isinstance(row, Mapping):
+        raise ValueError(f"Source {source.id!r} row {index} must be a mapping.")
+    bucket_id: str | None = None
+    if source.buckets:
+        raw_collection = row.get(source.collection_field)  # type: ignore[arg-type]
+        collection = str(raw_collection).strip() if raw_collection is not None else ""
+        if collection not in collections:
+            raise ValueError(
+                f"Source {source.id!r} exposed unknown collection "
+                f"{collection!r}; update and review the registry before continuing."
+            )
+        bucket_id = collections[collection]
+    try:
+        return normalize_source_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            bucket_id=bucket_id,
+        )
+    except EmptySourceTextError:
+        quality_filter.record_rejection("empty_text")
+        return None
+
+
 def _iter_normalized_source(
     source: SourceSpec,
     dataset: Iterable[Mapping[str, Any]],
@@ -288,30 +323,86 @@ def _iter_normalized_source(
 ) -> Iterator[dict[str, Any]]:
     collections = _bucket_lookup(source)
     for index, row in enumerate(dataset):
-        if not isinstance(row, Mapping):
-            raise ValueError(
-                f"Source {source.id!r} row {index} must be a mapping."
+        record = _normalize_stream_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            quality_filter=quality_filter,
+            collections=collections,
+        )
+        if record is not None:
+            yield record
+
+
+iter_normalized_source = _iter_normalized_source
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    """One restart-safe deterministic buffer and its next raw row cursor."""
+
+    next_raw_cursor: int
+    records: tuple[dict[str, Any], ...]
+
+
+def iter_deterministic_source_windows(
+    source: SourceSpec,
+    dataset: Iterable[Mapping[str, Any]],
+    stage: str,
+    quality_filter: QualityFilter,
+    seed: int,
+    buffer_size: int,
+    start_raw_cursor: int = 0,
+) -> Iterator[SourceWindow]:
+    """Yield sorted normalized windows whose cursor counts every raw row."""
+
+    if buffer_size < 1:
+        raise ValueError("buffer_size must be positive.")
+    if start_raw_cursor < 0:
+        raise ValueError("start_raw_cursor must be non-negative.")
+
+    collections = _bucket_lookup(source)
+    records: list[dict[str, Any]] = []
+    next_raw_cursor = start_raw_cursor
+    window_start_cursor = start_raw_cursor
+    for index, row in enumerate(dataset, start=start_raw_cursor):
+        next_raw_cursor = index + 1
+        record = _normalize_stream_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            quality_filter=quality_filter,
+            collections=collections,
+        )
+        if record is not None:
+            records.append(record)
+        if len(records) == buffer_size:
+            yield SourceWindow(
+                next_raw_cursor=next_raw_cursor,
+                records=tuple(
+                    iter_deterministic_buffered(
+                        records,
+                        seed=seed,
+                        buffer_size=buffer_size,
+                    )
+                ),
             )
-        bucket_id: str | None = None
-        if source.buckets:
-            raw_collection = row.get(source.collection_field)  # type: ignore[arg-type]
-            collection = str(raw_collection).strip() if raw_collection is not None else ""
-            if collection not in collections:
-                raise ValueError(
-                    f"Source {source.id!r} exposed unknown collection "
-                    f"{collection!r}; update and review the registry before continuing."
+            records = []
+            window_start_cursor = next_raw_cursor
+
+    if next_raw_cursor > window_start_cursor:
+        yield SourceWindow(
+            next_raw_cursor=next_raw_cursor,
+            records=tuple(
+                iter_deterministic_buffered(
+                    records,
+                    seed=seed,
+                    buffer_size=buffer_size,
                 )
-            bucket_id = collections[collection]
-        try:
-            yield normalize_source_row(
-                source,
-                row,
-                index=index,
-                stage=stage,
-                bucket_id=bucket_id,
-            )
-        except EmptySourceTextError:
-            quality_filter.record_rejection("empty_text")
+            ),
+        )
 
 
 def _item_id(record: Mapping[str, Any]) -> str:
@@ -328,6 +419,9 @@ def _is_validation_record(record: Mapping[str, Any], fraction: float) -> bool:
         return False
     value = int(str(record["content_sha256"])[:16], 16) / float(16**16)
     return value < fraction
+
+
+is_validation_record = _is_validation_record
 
 
 def _write_stage(
@@ -379,7 +473,7 @@ def _write_stage(
                 }
             )
             dataset = dataset_loader(source.hf_name, **kwargs)
-            normalized = _iter_normalized_source(
+            normalized = iter_normalized_source(
                 source,
                 dataset,
                 stage,
@@ -414,7 +508,7 @@ def _write_stage(
                         f"Source {source.id!r} produced a non-positive quota "
                         f"token count for document {record['document_id']!r}."
                     )
-                if _is_validation_record(
+                if is_validation_record(
                     record, float(plan.get("validation_fraction", 0.0))
                 ):
                     validation_record = dict(record)
