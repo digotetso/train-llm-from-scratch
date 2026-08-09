@@ -45,6 +45,7 @@ class LocalCorpusRequest:
     local_root: Path
     destination_root: Path
     quality_policy: DataQualityPolicy
+    evidence_root: Path | None = None
     batch_documents: int = 128
     shard_size_tokens: int = 50_000_000
     raw_unit_bytes: int = 268_435_456
@@ -104,7 +105,6 @@ def _build_local_corpus(
         counters, cursors, cumulative = _state(journal)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
         _restore_quality(quality, cumulative.get("quality", {}))
-        discarded_after_quota: set[str] = set()
         for plan in request.plans:
             stage = str(plan["stage"])
             items = _validated_plan_items(request.registry, plan)
@@ -137,8 +137,6 @@ def _build_local_corpus(
                         if counters.get((stage, item_id), 0) >= int(items[item_id]["token_quota"]):
                             continue
                         digest = str(row["content_sha256"])
-                        if digest in discarded_after_quota:
-                            continue
                         if digest in committed or digest in pending or digest in pending_seen:
                             quality.record_rejection("duplicate_exact")
                             continue
@@ -159,7 +157,6 @@ def _build_local_corpus(
                             if counters.get((stage, item_id), 0) >= int(
                                 items[item_id]["token_quota"]
                             ):
-                                discarded_after_quota.add(str(row["content_sha256"]))
                                 continue
                             if is_validation_record(row, float(plan.get("validation_fraction", 0.0))):
                                 row["source_split"] = row["split"]
@@ -203,6 +200,7 @@ def _build_local_corpus(
                         pending_bytes + _journal_overhead_bytes(pending_hashes)
                     )
                     artifacts = _seal_unit(local_root, stage, source_id, window.next_raw_cursor, pending_fit, pending_holdout, tokenizer, request)
+                    artifacts = [{**artifact, "destination_path": str(artifact["path"])} for artifact in artifacts]
                     cursors[(stage, source_id)] = window.next_raw_cursor
                     _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, window.next_raw_cursor, pending_tokens, artifacts)
                     unit = UnitCommit(
@@ -216,13 +214,6 @@ def _build_local_corpus(
                         },
                     )
                     journal.commit_unit(unit)
-                    # Persist the deterministic destination mapping before the
-                    # first copy, so a fresh process can finish a post-commit
-                    # crash without guessing a destination.
-                    for artifact in artifacts:
-                        journal.record_destination(
-                            unit.unit_id, str(artifact["path"]), str(artifact["path"])
-                        )
                     for artifact in artifacts:
                         publisher.publish(local_root / str(artifact["path"]), str(artifact["path"]), unit_id=unit.unit_id)
                     pending_fit.clear()
@@ -327,17 +318,25 @@ def _validate_request(request: LocalCorpusRequest) -> None:
 
 def _selected_tokenizer_sha(request: LocalCorpusRequest) -> tuple[str, str, str]:
     selection = Path(request.tokenizer_selection_path)
+    evidence_root = Path(request.evidence_root) if request.evidence_root is not None else selection.parent
+    if selection.parent.resolve() != evidence_root.resolve():
+        raise ValueError("tokenizer selection must be directly below evidence_root")
     if selection.name != "tokenizer_selection.json":
         raise ValueError("tokenizer selection must use canonical tokenizer_selection.json")
     data = json.loads(selection.read_text(encoding="utf-8"))
-    comparison_path = selection.with_name("tokenizer_comparison.json")
+    comparison_path = evidence_root / "comparison.json"
     if not comparison_path.is_file():
         raise ValueError("approved tokenizer selection is missing canonical comparison evidence")
     comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
     if not isinstance(data, Mapping) or not isinstance(comparison, Mapping):
         raise ValueError("approved tokenizer selection comparison evidence is invalid")
     selected_sha = validate_tokenizer_selection(data, comparison)
-    actual = sha256_file(Path(request.tokenizer_dir) / "tokenizer.json")
+    tokenizer_dir = Path(request.tokenizer_dir).resolve()
+    if not tokenizer_dir.is_relative_to(evidence_root.resolve()):
+        raise ValueError("selected tokenizer must be beneath evidence_root")
+    if not Path(request.destination_root).resolve().is_relative_to(evidence_root.resolve()):
+        raise ValueError("corpus destination must be a managed evidence_root descendant")
+    actual = sha256_file(tokenizer_dir / "tokenizer.json")
     metadata = load_tokenizer_metadata(request.tokenizer_dir)
     if selected_sha != actual:
         raise ValueError("approved tokenizer selection does not match tokenizer")

@@ -218,8 +218,10 @@ class BuildJournal:
                 )
                 self.connection.executemany(
                     """
-                    INSERT INTO artifacts(unit_id, relative_path, size, sha256, published)
-                    VALUES (?, ?, ?, ?, 0)
+                    INSERT INTO artifacts(
+                        unit_id, relative_path, size, sha256,
+                        destination_relative_path, published
+                    ) VALUES (?, ?, ?, ?, ?, 0)
                     """,
                     (
                         (
@@ -227,6 +229,7 @@ class BuildJournal:
                             str(artifact["path"]),
                             int(artifact["size"]),
                             str(artifact["sha256"]),
+                            artifact.get("destination_path"),
                         )
                         for artifact in artifacts
                     ),

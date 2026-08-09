@@ -70,9 +70,9 @@ def make_corpus_request(root: Path, *, plans: list[dict], retry_delays: tuple[fl
         "fingerprints": {"baseline_tokenizer_sha256": "a" * 64, "candidate_tokenizer_sha256": tokenizer_sha},
     }
     comparison["comparison_sha256"] = sha256_json(comparison)
-    (root / "tokenizer_comparison.json").write_text(json.dumps(comparison, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "comparison.json").write_text(json.dumps(comparison, sort_keys=True) + "\n", encoding="utf-8")
     selection.write_text(json.dumps({"version": 1, "approved": True, "winner": "representative_200m", "selected_tokenizer_sha256": tokenizer_sha, "comparison_sha256": comparison["comparison_sha256"], "operator_timestamp": "2026-08-09T00:00:00+00:00"}, sort_keys=True) + "\n", encoding="utf-8")
-    return LocalCorpusRequest(registry=load_source_registry(REGISTRY_PATH), plans=tuple(plans), tokenizer_dir=tokenizer_dir, tokenizer_selection_path=selection, local_root=root / "local", destination_root=root / "drive", quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True, contamination_patterns=["heldout contamination evidence"]), batch_documents=4, shard_size_tokens=24, raw_unit_bytes=2_048, max_working_bytes=20 * 1024**2, min_free_bytes=1, progress_interval_seconds=0, retry_delays=retry_delays)
+    return LocalCorpusRequest(registry=load_source_registry(REGISTRY_PATH), plans=tuple(plans), tokenizer_dir=tokenizer_dir, tokenizer_selection_path=selection, evidence_root=root, local_root=root / "local", destination_root=root / "drive", quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True, contamination_patterns=["heldout contamination evidence"]), batch_documents=4, shard_size_tokens=24, raw_unit_bytes=2_048, max_working_bytes=20 * 1024**2, min_free_bytes=1, progress_interval_seconds=0, retry_delays=retry_delays)
 
 
 def _artifact_bytes(root: Path) -> dict[str, bytes]:
@@ -110,7 +110,9 @@ def test_builder_counts_once_and_deduplicates_across_stages(tmp_path: Path, monk
     result = build_local_corpus(make_corpus_request(tmp_path, plans=[_tiny_plan("main"), _tiny_plan("cooldown")]), dataset_loader=_loader)
 
     assert result.status == "provisional_complete"
-    assert all(count == 1 for count in encode_calls.values())
+    # Post-quota encodings are intentionally not remembered across stages:
+    # they remain eligible for a later stage unless durably accepted.
+    assert all(count <= 2 for count in encode_calls.values())
     assert max(batch_sizes) <= 4
     assert result.manifest["quota_counting"]["method"] == "tokenizer_exact_one_pass"
     assert result.manifest["quality_filter"]["exact_dedup"] is True
@@ -201,12 +203,25 @@ def test_builder_rejects_unapproved_or_incomplete_selection_before_opening_state
 
 def test_builder_rejects_selection_without_matching_sibling_comparison(tmp_path: Path):
     request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
-    (request.tokenizer_selection_path.parent / "tokenizer_comparison.json").unlink()
+    (request.tokenizer_selection_path.parent / "comparison.json").unlink()
 
     with pytest.raises(ValueError, match="comparison"):
         build_local_corpus(request, dataset_loader=_loader)
 
     assert not (request.local_root / "corpus.sqlite3").exists()
+
+
+def test_evidence_root_and_atomic_destination_mapping_are_canonical(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    request = replace(request, evidence_root=tmp_path / "other")
+    with pytest.raises(ValueError, match="evidence_root"):
+        build_local_corpus(request, dataset_loader=_loader)
+
+    request = make_corpus_request(tmp_path / "valid", plans=[_tiny_plan("main")])
+    build_local_corpus(request, dataset_loader=_loader, stop_after_quota_tokens=24)
+    import sqlite3
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        assert connection.execute("SELECT count(*) FROM artifacts WHERE destination_relative_path IS NULL").fetchone()[0] == 0
 
 
 def test_builder_requires_enabled_dedup_and_contamination_controls(tmp_path: Path):
