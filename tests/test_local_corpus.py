@@ -607,98 +607,140 @@ def test_builder_rejects_copied_selection_outside_root_and_symlink_destination(
     assert not (symlink_request.local_root / "corpus.sqlite3").exists()
 
 
-def _request_through_symlinked_ancestor(
-    request: LocalCorpusRequest, real_parent: Path, alias_parent: Path
+_SYMLINK_PATH_CASES = (
+    "evidence_root_ancestor",
+    "selection_file",
+    "comparison_file",
+    "tokenizer_dir_ancestor",
+    "tokenizer_json_file",
+    "special_tokens_file",
+    "destination_root_ancestor",
+    "local_root_ancestor",
+    "journal_file",
+)
+
+
+def _symlink_one_corpus_path(
+    request: LocalCorpusRequest, case: str
 ) -> LocalCorpusRequest:
-    def alias(path: Path) -> Path:
-        return alias_parent / path.relative_to(real_parent)
+    root = request.evidence_root
+    if case == "evidence_root_ancestor":
+        alias = root.parent / "evidence-root-alias"
+        alias.symlink_to(".", target_is_directory=True)
+        return replace(request, evidence_root=alias / root.name)
+    if case == "selection_file":
+        target = request.tokenizer_selection_path
+    elif case == "comparison_file":
+        target = root / "comparison.json"
+    elif case == "tokenizer_json_file":
+        target = request.tokenizer_dir / "tokenizer.json"
+    elif case == "special_tokens_file":
+        target = request.tokenizer_dir / "special_tokens.json"
+    elif case == "journal_file":
+        target = request.local_root / "corpus.sqlite3"
+    else:
+        alias = root / f"{case}-alias"
+        alias.symlink_to(".", target_is_directory=True)
+        if case == "tokenizer_dir_ancestor":
+            return replace(request, tokenizer_dir=alias / request.tokenizer_dir.name)
+        if case == "destination_root_ancestor":
+            return replace(request, destination_root=alias / request.destination_root.name)
+        if case == "local_root_ancestor":
+            return replace(request, local_root=alias / request.local_root.name)
+        raise AssertionError(f"unknown path case {case}")
 
-    return replace(
-        request,
-        evidence_root=alias(request.evidence_root),
-        tokenizer_dir=alias(request.tokenizer_dir),
-        tokenizer_selection_path=alias(request.tokenizer_selection_path),
-        local_root=alias(request.local_root),
-        destination_root=alias(request.destination_root),
-    )
+    backing = target.with_name(f"real-{target.name}")
+    if target.exists():
+        target.rename(backing)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backing.write_bytes(b"fresh journal symlink sentinel\n")
+    target.symlink_to(backing.name)
+    return request
 
 
-def test_fresh_build_rejects_symlinked_evidence_root_ancestor_before_state_hooks(
-    tmp_path: Path, monkeypatch
-):
+_LEXICAL_PATH_FIELDS = (
+    "evidence_root",
+    "tokenizer_selection_path",
+    "tokenizer_dir",
+    "destination_root",
+    "local_root",
+)
+
+
+def _lexically_alias_one_corpus_path(
+    request: LocalCorpusRequest, field: str
+) -> LocalCorpusRequest:
+    target = getattr(request, field)
+    alias = target.parent / f"unused-{field}" / ".." / target.name
+    return replace(request, **{field: alias})
+
+
+def _install_preflight_failure_hooks(monkeypatch) -> None:
     import matgpt.data.local_corpus as local_corpus
 
-    real_parent = tmp_path / "real-parent"
-    request = make_corpus_request(
-        real_parent / "evidence", plans=[_tiny_plan("main")]
-    )
-    alias_parent = tmp_path / "alias-parent"
-    alias_parent.symlink_to(real_parent.name)
-    aliased = _request_through_symlinked_ancestor(
-        request, real_parent, alias_parent
-    )
-
     def unexpected(*_args, **_kwargs):
-        raise AssertionError("path preflight must run before evidence/state hooks")
+        raise AssertionError("path must fail before evidence, journal, or publisher hooks")
 
     monkeypatch.setattr(Path, "read_text", unexpected)
     monkeypatch.setattr(local_corpus.BuildJournal, "open", unexpected)
     monkeypatch.setattr(local_corpus, "_cleanup_uncommitted_partials", unexpected)
+    monkeypatch.setattr(local_corpus.DrivePublisher, "__init__", unexpected)
     monkeypatch.setattr(local_corpus.DrivePublisher, "reconcile", unexpected)
 
-    with pytest.raises(ValueError, match="canonical non-symlink"):
-        build_local_corpus(aliased, dataset_loader=_loader)
 
-    assert not (request.local_root / "corpus.sqlite3").exists()
-
-
-def test_resume_rejects_symlinked_evidence_root_ancestor_before_journal_open(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("resumed", (False, True), ids=("fresh", "resume"))
+@pytest.mark.parametrize("path_case", _SYMLINK_PATH_CASES)
+def test_each_symlinked_corpus_path_fails_before_evidence_state_or_publisher_hooks(
+    tmp_path: Path, monkeypatch, path_case: str, resumed: bool
 ):
-    import matgpt.data.local_corpus as local_corpus
-
-    real_parent = tmp_path / "real-parent"
-    request = make_corpus_request(
-        real_parent / "evidence", plans=[_tiny_plan("main")]
+    request = make_corpus_request(tmp_path / "evidence", plans=[_tiny_plan("main")])
+    journal = request.local_root / "corpus.sqlite3"
+    if resumed:
+        build_local_corpus(
+            request, dataset_loader=_loader, stop_after_quota_tokens=24
+        )
+        before = (journal.read_bytes(), journal.stat().st_mtime_ns)
+    aliased = _symlink_one_corpus_path(request, path_case)
+    physical_journal = (
+        journal.with_name("real-corpus.sqlite3")
+        if path_case == "journal_file" else journal
     )
-    build_local_corpus(
-        request, dataset_loader=_loader, stop_after_quota_tokens=24
-    )
-    journal_before = (request.local_root / "corpus.sqlite3").stat()
-    alias_parent = tmp_path / "alias-parent"
-    alias_parent.symlink_to(real_parent.name)
-    aliased = _request_through_symlinked_ancestor(
-        request, real_parent, alias_parent
-    )
-
-    def unexpected(*_args, **_kwargs):
-        raise AssertionError("resume alias must fail before evidence/state hooks")
-
-    monkeypatch.setattr(Path, "read_text", unexpected)
-    monkeypatch.setattr(local_corpus.BuildJournal, "open", unexpected)
-    monkeypatch.setattr(local_corpus, "_cleanup_uncommitted_partials", unexpected)
-    monkeypatch.setattr(local_corpus.DrivePublisher, "reconcile", unexpected)
+    if path_case == "journal_file":
+        before = (physical_journal.read_bytes(), physical_journal.stat().st_mtime_ns)
+    _install_preflight_failure_hooks(monkeypatch)
 
     with pytest.raises(ValueError, match="canonical non-symlink"):
         build_local_corpus(aliased, dataset_loader=_loader)
 
-    journal_after = (request.local_root / "corpus.sqlite3").stat()
-    assert (journal_after.st_size, journal_after.st_mtime_ns) == (
-        journal_before.st_size,
-        journal_before.st_mtime_ns,
-    )
+    if resumed or path_case == "journal_file":
+        assert (physical_journal.read_bytes(), physical_journal.stat().st_mtime_ns) == before
+    else:
+        assert not journal.exists()
 
 
-def test_builder_does_not_canonicalize_lexical_root_aliases(tmp_path: Path):
-    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
-    aliased_root = request.evidence_root.parent / "unused" / ".." / request.evidence_root.name
+@pytest.mark.parametrize("resumed", (False, True), ids=("fresh", "resume"))
+@pytest.mark.parametrize("field", _LEXICAL_PATH_FIELDS)
+def test_each_lexically_aliased_corpus_path_fails_before_hooks(
+    tmp_path: Path, monkeypatch, field: str, resumed: bool
+):
+    request = make_corpus_request(tmp_path / "evidence", plans=[_tiny_plan("main")])
+    journal = request.local_root / "corpus.sqlite3"
+    if resumed:
+        build_local_corpus(
+            request, dataset_loader=_loader, stop_after_quota_tokens=24
+        )
+        before = (journal.read_bytes(), journal.stat().st_mtime_ns)
+    aliased = _lexically_alias_one_corpus_path(request, field)
+    _install_preflight_failure_hooks(monkeypatch)
 
     with pytest.raises(ValueError, match="lexical aliases"):
-        build_local_corpus(
-            replace(request, evidence_root=aliased_root), dataset_loader=_loader
-        )
+        build_local_corpus(aliased, dataset_loader=_loader)
 
-    assert not (request.local_root / "corpus.sqlite3").exists()
+    if resumed:
+        assert (journal.read_bytes(), journal.stat().st_mtime_ns) == before
+    else:
+        assert not journal.exists()
 
 
 def test_builder_requires_enabled_dedup_and_contamination_controls(tmp_path: Path):

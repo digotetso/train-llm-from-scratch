@@ -485,7 +485,14 @@ def _selected_tokenizer_sha(
     destination_root = _require_canonical_nonsymlink_path(
         request.destination_root, "destination_root"
     )
-    _require_canonical_nonsymlink_path(request.local_root, "local_root")
+    local_root = _require_canonical_nonsymlink_path(request.local_root, "local_root")
+    journal_path = _require_canonical_nonsymlink_path(
+        local_root / "corpus.sqlite3", "corpus journal"
+    )
+    for suffix in ("-wal", "-shm", "-journal"):
+        _require_canonical_nonsymlink_path(
+            Path(f"{journal_path}{suffix}"), f"corpus journal {suffix}"
+        )
 
     evidence_root = require_managed_path(
         evidence_root,
