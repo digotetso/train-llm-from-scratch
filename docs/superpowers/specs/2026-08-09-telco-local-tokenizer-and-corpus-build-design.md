@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09
 
-**Status:** Approved in conversation; pending written-spec review
+**Status:** Approved in conversation on 2026-08-09
 
 **Extends:** `2026-08-02-telco-300m-training-track-design.md`
 
@@ -122,10 +122,10 @@ The report includes:
 
 The 200M candidate is eligible only if all round-trip and special-token gates
 pass, telecom held-out token count does not regress, general held-out token count
-does not regress by more than 1%, and probe fragmentation does not materially
-worsen. The report recommends replacement when overall held-out token count
-improves by at least 1% or telecom token count improves by at least 2% without a
-guardrail failure. Selection remains an explicit operator decision.
+does not regress by more than 1%, and telecom-probe p95 tokens per word does not
+regress by more than 1%. The report recommends replacement when overall held-out
+token count improves by at least 1% or telecom token count improves by at least
+2% without a guardrail failure. Selection remains an explicit operator decision.
 
 Selecting the new tokenizer invalidates the old pilot checkpoint for promotion.
 The 20M pilot preparation, smoke, pilot, and evaluation gates must then be
