@@ -472,3 +472,73 @@ exit 0
   identity are unchanged; their cross-root and resume regressions remain green.
 
 No real data, Drive publication, training, or evaluation was performed.
+
+## Fix Round 5
+
+Implementation commit: `937c181 test: cover corpus path aliases independently`.
+
+### RED evidence
+
+After replacing the aggregate alias setup with independent fresh/resume cases,
+the corrected matrix isolated one implementation gap:
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py -k 'each_symlinked_corpus_path or each_lexically_aliased_corpus_path'
+................FF..........                                             [100%]
+FAILED ...[journal_file-fresh]
+AssertionError: path must fail before evidence, journal, or publisher hooks
+FAILED ...[journal_file-resume]
+AssertionError: path must fail before evidence, journal, or publisher hooks
+2 failed, 26 passed, 30 deselected
+```
+
+Both failures occurred at the guarded selection evidence read: the derived
+`corpus.sqlite3` path was not yet part of the pre-evidence validation set.
+
+### GREEN evidence
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py -k 'each_symlinked_corpus_path or each_lexically_aliased_corpus_path'
+............................                                             [100%]
+28 passed, 30 deselected
+
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py tests/test_local_build_state.py tests/test_local_publish.py tests/test_data_quality.py tests/test_local_tokens.py tests/test_telco_prepare.py tests/test_local_tokenizer_sample.py tests/test_telco_notebook_local.py tests/test_tokenizer_candidate.py
+........................................................................ [ 33%]
+........................................................................ [ 66%]
+........................................................................ [ 99%]
+..                                                                       [100%]
+218 passed in 21.08s
+
+$ uv run python -m compileall -q matgpt tests
+exit 0
+
+$ git diff --check
+exit 0
+```
+
+### Coverage completeness and self-review
+
+- Every case mutates one path only. Fresh and resume variants independently
+  exercise a symlinked evidence-root ancestor, selection file, comparison file,
+  tokenizer-directory ancestor, tokenizer JSON, special-token metadata,
+  destination-root ancestor, local-root ancestor, and journal file.
+- Fresh and resume variants independently exercise lexical aliases for every
+  supplied path where an alias can be expressed: evidence root, selection,
+  tokenizer directory, destination root, and local root. Canonical root-level
+  comparison and tokenizer files are derived rather than supplied, so their
+  independent final-component symlink cases are the applicable fail-closed
+  coverage. The journal path is likewise derived from the independently aliased
+  local root.
+- Every matrix case replaces evidence reads, journal open, cleanup, publisher
+  construction, and reconciliation with failure hooks. Fresh cases prove no
+  journal creation; resume cases compare the existing physical journal bytes and
+  modification timestamp before and after refusal.
+- The exposed gap is closed by validating `corpus.sqlite3` plus its `-wal`,
+  `-shm`, and `-journal` sidecars before evidence reads. This is the only
+  production change in the round.
+- Existing positive canonical-path builds, named direct selection/comparison
+  symlink tests, operational identity refusal, root-independent content identity,
+  resume/calibration equality, progress, publication, and state tests remain
+  green. No path is canonicalized into equivalence.
+
+No real data, Drive publication, training, or evaluation was performed.
