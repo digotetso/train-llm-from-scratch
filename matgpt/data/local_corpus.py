@@ -122,11 +122,17 @@ def _build_local_corpus(
                 pending_hashes: list[str] = []
                 pending_seen: set[str] = set()
                 pending_tokens = 0
+                pending_raw_bytes = 0
+                observed_raw_cursor = raw_cursor
                 for window in iter_deterministic_source_windows(
                     source, dataset, stage, quality, seed=int(plan["seed"]),
                     buffer_size=int(plan["buffer_size"]), start_raw_cursor=raw_cursor,
                 ):
-                    cumulative["read"]["documents"] += len(window.records)
+                    # The cursor counts raw source rows; normalized records are
+                    # tracked separately so empty/rejected input is not hidden.
+                    cumulative["read"]["documents"] += window.next_raw_cursor - observed_raw_cursor
+                    observed_raw_cursor = window.next_raw_cursor
+                    cumulative["normalized_documents"] = cumulative.get("normalized_documents", 0) + len(window.records)
                     committed = journal.committed_hashes(str(row["content_sha256"]) for row in window.records)
                     accepted: list[dict[str, Any]] = []
                     pending: set[str] = set()
@@ -148,6 +154,7 @@ def _build_local_corpus(
                     holdout: list[dict[str, Any]] = []
                     accepted_hashes: list[str] = []
                     window_tokens = 0
+                    before_item_tokens = {key: counters.get((stage, key), 0) for key in source_items}
                     for offset in range(0, len(accepted), request.batch_documents):
                         for encoded_row in encode_record_batch(
                             tokenizer, accepted[offset : offset + request.batch_documents]
@@ -179,11 +186,15 @@ def _build_local_corpus(
                     pending_hashes.extend(accepted_hashes)
                     pending_seen.update(accepted_hashes)
                     pending_tokens += window_tokens
-                    pending_bytes = _unit_storage_bytes(
-                        pending_fit, pending_holdout, tokenizer.token_to_id("<|eos|>")
-                    )
+                    pending_raw_bytes += sum(len(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1 for row in fit + holdout)
+                    pending_bytes = pending_raw_bytes + sum((len(row["token_ids"]) + 1) * 2 for row in fit + holdout)
                     source_complete = all(
                         counters.get((stage, key), 0) >= int(items[key]["token_quota"])
+                        for key in source_items
+                    )
+                    item_reached = any(
+                        before_item_tokens[key] < int(items[key]["token_quota"])
+                        <= counters.get((stage, key), 0)
                         for key in source_items
                     )
                     # Units only seal at a completed deterministic window boundary.
@@ -191,6 +202,7 @@ def _build_local_corpus(
                     if not (
                         pending_bytes >= request.raw_unit_bytes
                         or pending_tokens >= request.shard_size_tokens
+                        or item_reached
                         or source_complete
                         or _STOP_REQUESTED
                         or (stop_after_quota_tokens is not None and sum(counters.values()) >= stop_after_quota_tokens)
@@ -221,6 +233,7 @@ def _build_local_corpus(
                     pending_hashes.clear()
                     pending_seen.clear()
                     pending_tokens = 0
+                    pending_raw_bytes = 0
                     if on_unit_committed is not None:
                         on_unit_committed(unit)
                     total = sum(counters.values())
