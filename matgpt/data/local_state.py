@@ -1,0 +1,300 @@
+"""Crash-safe local state for resumable corpus builds."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Iterable
+
+from matgpt.utils.hashing import sha256_json
+
+
+@dataclass(frozen=True)
+class BuildIdentity:
+    """The immutable inputs that define one corpus build."""
+
+    version: int
+    mode: str
+    plan_sha256: str
+    source_registry_sha256: str
+    contamination_sha256: str
+    quality_policy_sha256: str
+    tokenizer_sha256: str | None
+    format_sha256: str
+
+    @property
+    def sha256(self) -> str:
+        return sha256_json(asdict(self))
+
+
+@dataclass(frozen=True)
+class UnitCommit:
+    """The durable state produced after a successful build unit."""
+
+    unit_id: str
+    stage: str
+    source_id: str
+    row_cursor: int
+    quota_tokens: int
+    accepted_hashes: tuple[str, ...]
+    artifacts: tuple[dict[str, object], ...]
+    published: bool = False
+
+
+_IDENTITY_JSON_KEY = "identity_json"
+_IDENTITY_SHA256_KEY = "identity_sha256"
+_HASH_BATCH_SIZE = 900
+
+
+class BuildJournal:
+    """SQLite journal whose unit commits are all-or-nothing."""
+
+    def __init__(self, connection: sqlite3.Connection):
+        self.connection = connection
+
+    @classmethod
+    def open(cls, path: str | Path, identity: BuildIdentity) -> "BuildJournal":
+        """Open a journal, creating it only for the supplied exact identity."""
+
+        journal_path = Path(path)
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(journal_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            cls._create_schema(connection)
+            cls._ensure_identity(connection, identity)
+        except BaseException:
+            connection.close()
+            raise
+        return cls(connection)
+
+    @staticmethod
+    def _create_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS units (
+                unit_id TEXT PRIMARY KEY,
+                stage TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                row_cursor INTEGER NOT NULL,
+                quota_tokens INTEGER NOT NULL,
+                artifacts_json TEXT NOT NULL,
+                published INTEGER NOT NULL CHECK (published IN (0, 1))
+            );
+
+            CREATE TABLE IF NOT EXISTS seen_hashes (
+                content_sha256 TEXT PRIMARY KEY,
+                unit_id TEXT NOT NULL,
+                FOREIGN KEY (unit_id) REFERENCES units(unit_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+                unit_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                published INTEGER NOT NULL CHECK (published IN (0, 1)),
+                destination_sha256 TEXT,
+                published_at TEXT,
+                PRIMARY KEY (unit_id, relative_path),
+                FOREIGN KEY (unit_id) REFERENCES units(unit_id)
+            );
+            """
+        )
+
+    @staticmethod
+    def _ensure_identity(connection: sqlite3.Connection, identity: BuildIdentity) -> None:
+        identity_json = json.dumps(
+            asdict(identity), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        rows = dict(
+            connection.execute(
+                "SELECT key, value FROM metadata WHERE key IN (?, ?)",
+                (_IDENTITY_JSON_KEY, _IDENTITY_SHA256_KEY),
+            )
+        )
+        if not rows:
+            with connection:
+                connection.executemany(
+                    "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                    (
+                        (_IDENTITY_JSON_KEY, identity_json),
+                        (_IDENTITY_SHA256_KEY, identity.sha256),
+                    ),
+                )
+            return
+        if set(rows) != {_IDENTITY_JSON_KEY, _IDENTITY_SHA256_KEY}:
+            raise ValueError("journal identity is incomplete")
+        if rows[_IDENTITY_SHA256_KEY] != sha256_json(json.loads(rows[_IDENTITY_JSON_KEY])):
+            raise ValueError("journal identity integrity mismatch")
+        if (
+            rows[_IDENTITY_JSON_KEY] != identity_json
+            or rows[_IDENTITY_SHA256_KEY] != identity.sha256
+        ):
+            raise ValueError("journal identity mismatch")
+
+    def commit_unit(self, unit: UnitCommit) -> None:
+        """Atomically store a build unit, its content hashes, and artifacts."""
+
+        artifacts_json = json.dumps(
+            unit.artifacts, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        try:
+            with self.connection:
+                self.connection.execute(
+                    """
+                    INSERT INTO units(
+                        unit_id, stage, source_id, row_cursor, quota_tokens,
+                        artifacts_json, published
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0)
+                    """,
+                    (
+                        unit.unit_id,
+                        unit.stage,
+                        unit.source_id,
+                        unit.row_cursor,
+                        unit.quota_tokens,
+                        artifacts_json,
+                    ),
+                )
+                self.connection.executemany(
+                    "INSERT INTO seen_hashes(content_sha256, unit_id) VALUES (?, ?)",
+                    ((digest, unit.unit_id) for digest in unit.accepted_hashes),
+                )
+                self.connection.executemany(
+                    """
+                    INSERT INTO artifacts(unit_id, relative_path, size, sha256, published)
+                    VALUES (?, ?, ?, ?, 0)
+                    """,
+                    (
+                        (
+                            unit.unit_id,
+                            str(artifact["path"]),
+                            int(artifact["size"]),
+                            str(artifact["sha256"]),
+                        )
+                        for artifact in unit.artifacts
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("unit ID or document hash already committed") from error
+
+    def committed_hashes(self, hashes: Iterable[str]) -> set[str]:
+        """Return the supplied digests that are already committed."""
+
+        committed: set[str] = set()
+        batch: list[str] = []
+        for digest in hashes:
+            batch.append(digest)
+            if len(batch) == _HASH_BATCH_SIZE:
+                committed.update(self._committed_hashes_batch(batch))
+                batch.clear()
+        if batch:
+            committed.update(self._committed_hashes_batch(batch))
+        return committed
+
+    def _committed_hashes_batch(self, hashes: list[str]) -> set[str]:
+        placeholders = ", ".join("?" for _ in hashes)
+        rows = self.connection.execute(
+            f"SELECT content_sha256 FROM seen_hashes WHERE content_sha256 IN ({placeholders})",
+            hashes,
+        )
+        return {str(row["content_sha256"]) for row in rows}
+
+    def units(self) -> tuple[UnitCommit, ...]:
+        """Return all committed units in deterministic order."""
+
+        rows = self.connection.execute(
+            """
+            SELECT unit_id, stage, source_id, row_cursor, quota_tokens,
+                   artifacts_json, published
+            FROM units
+            ORDER BY unit_id
+            """
+        )
+        return tuple(
+            UnitCommit(
+                unit_id=str(row["unit_id"]),
+                stage=str(row["stage"]),
+                source_id=str(row["source_id"]),
+                row_cursor=int(row["row_cursor"]),
+                quota_tokens=int(row["quota_tokens"]),
+                accepted_hashes=self._hashes_for_unit(str(row["unit_id"])),
+                artifacts=tuple(json.loads(str(row["artifacts_json"]))),
+                published=bool(row["published"]),
+            )
+            for row in rows
+        )
+
+    def _hashes_for_unit(self, unit_id: str) -> tuple[str, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT content_sha256 FROM seen_hashes
+            WHERE unit_id = ?
+            ORDER BY content_sha256
+            """,
+            (unit_id,),
+        )
+        return tuple(str(row["content_sha256"]) for row in rows)
+
+    def mark_published(
+        self,
+        unit_id: str,
+        relative_path: str,
+        destination_sha256: str,
+        published_at: str,
+    ) -> None:
+        """Record one artifact publication and complete its unit when all are done."""
+
+        with self.connection:
+            artifact = self.connection.execute(
+                """
+                SELECT published, destination_sha256 FROM artifacts
+                WHERE unit_id = ? AND relative_path = ?
+                """,
+                (unit_id, relative_path),
+            ).fetchone()
+            if artifact is None:
+                raise ValueError("unknown artifact")
+            if artifact["published"]:
+                if artifact["destination_sha256"] != destination_sha256:
+                    raise ValueError("artifact was already published with another hash")
+                return
+            self.connection.execute(
+                """
+                UPDATE artifacts
+                SET published = 1, destination_sha256 = ?, published_at = ?
+                WHERE unit_id = ? AND relative_path = ?
+                """,
+                (destination_sha256, published_at, unit_id, relative_path),
+            )
+            self.connection.execute(
+                """
+                UPDATE units
+                SET published = NOT EXISTS (
+                    SELECT 1 FROM artifacts
+                    WHERE unit_id = ? AND published = 0
+                )
+                WHERE unit_id = ?
+                """,
+                (unit_id, unit_id),
+            )
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def __enter__(self) -> "BuildJournal":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()
