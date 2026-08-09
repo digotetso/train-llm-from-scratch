@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,20 @@ def test_journal_refuses_changed_build_identity(tmp_path: Path):
         BuildJournal.open(path, _identity(tokenizer_sha256="e" * 64))
 
 
+def test_journal_refuses_missing_identity_when_units_are_already_committed(
+    tmp_path: Path,
+):
+    path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(path, _identity()) as journal:
+        journal.commit_unit(_unit())
+
+    with sqlite3.connect(path) as connection:
+        connection.execute("DELETE FROM metadata")
+
+    with pytest.raises(ValueError, match="missing identity"):
+        BuildJournal.open(path, _identity())
+
+
 def test_duplicate_hash_rolls_back_the_entire_unit_commit(tmp_path: Path):
     with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
         journal.commit_unit(_unit())
@@ -104,3 +119,32 @@ def test_mark_published_tracks_each_artifact_before_the_unit(tmp_path: Path):
         )
 
         assert journal.units()[0].published is True
+
+
+@pytest.mark.parametrize("artifact_path", ("/artifact.jsonl", "a/../artifact.jsonl"))
+def test_journal_rejects_non_normalized_artifact_paths(tmp_path: Path, artifact_path: str):
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        with pytest.raises(ValueError, match="normalized relative POSIX path"):
+            journal.commit_unit(
+                _unit(
+                    artifacts=(
+                        {"path": artifact_path, "size": 80, "sha256": "3" * 64},
+                    )
+                )
+            )
+
+        assert journal.units() == ()
+
+
+def test_journal_persists_and_reads_artifacts_in_normalized_path_order(tmp_path: Path):
+    artifacts = (
+        {"path": "b/artifact.jsonl", "size": 80, "sha256": "3" * 64},
+        {"path": "a/artifact.jsonl", "size": 20, "sha256": "4" * 64},
+    )
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        journal.commit_unit(_unit(artifacts=artifacts))
+
+        assert tuple(artifact["path"] for artifact in journal.units()[0].artifacts) == (
+            "a/artifact.jsonl",
+            "b/artifact.jsonl",
+        )

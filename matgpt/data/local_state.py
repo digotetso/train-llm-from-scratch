@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from matgpt.utils.hashing import sha256_json
@@ -46,6 +46,7 @@ class UnitCommit:
 _IDENTITY_JSON_KEY = "identity_json"
 _IDENTITY_SHA256_KEY = "identity_sha256"
 _HASH_BATCH_SIZE = 900
+_STATE_TABLES = ("units", "seen_hashes", "artifacts")
 
 
 class BuildJournal:
@@ -124,6 +125,8 @@ class BuildJournal:
             )
         )
         if not rows:
+            if BuildJournal._has_persisted_state(connection):
+                raise ValueError("journal state is missing identity metadata")
             with connection:
                 connection.executemany(
                     "INSERT INTO metadata(key, value) VALUES (?, ?)",
@@ -143,11 +146,19 @@ class BuildJournal:
         ):
             raise ValueError("journal identity mismatch")
 
+    @staticmethod
+    def _has_persisted_state(connection: sqlite3.Connection) -> bool:
+        return any(
+            connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            for table in _STATE_TABLES
+        )
+
     def commit_unit(self, unit: UnitCommit) -> None:
         """Atomically store a build unit, its content hashes, and artifacts."""
 
+        artifacts = _normalized_artifacts(unit.artifacts)
         artifacts_json = json.dumps(
-            unit.artifacts, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            artifacts, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )
         try:
             with self.connection:
@@ -183,7 +194,7 @@ class BuildJournal:
                             int(artifact["size"]),
                             str(artifact["sha256"]),
                         )
-                        for artifact in unit.artifacts
+                        for artifact in artifacts
                     ),
                 )
         except sqlite3.IntegrityError as error:
@@ -298,3 +309,28 @@ class BuildJournal:
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         self.close()
+
+
+def _normalized_artifacts(
+    artifacts: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    normalized = tuple(
+        {**artifact, "path": _normalized_relative_posix_path(artifact["path"])}
+        for artifact in artifacts
+    )
+    return tuple(sorted(normalized, key=lambda artifact: str(artifact["path"])))
+
+
+def _normalized_relative_posix_path(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("artifact path must be a normalized relative POSIX path")
+    path = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or path.is_absolute()
+        or ".." in path.parts
+        or str(path) != value
+    ):
+        raise ValueError("artifact path must be a normalized relative POSIX path")
+    return value
