@@ -18,6 +18,7 @@ from matgpt.tokenizer.train import (
     has_required_special_token_ids,
 )
 from matgpt.utils.hashing import sha256_json
+from matgpt.utils.paths import open_exclusive_nofollow
 
 
 TARGET_SAMPLE_TOKENS = 200_000_000
@@ -49,7 +50,7 @@ _COMPARISON_KEYS = frozenset(
         "min_telecom_improvement",
     }
 )
-_LOCAL_KEYS = frozenset({"max_working_gib", "min_free_gib"})
+_LOCAL_KEYS = frozenset({"max_working_gib", "min_free_gib", "enforcement"})
 
 
 @dataclass(frozen=True)
@@ -65,10 +66,13 @@ class TokenizerCandidateConfig:
     min_telecom_improvement: float
     max_working_gib: int
     min_free_gib: int
+    storage_enforcement: str = "advisory"
 
     def __post_init__(self) -> None:
         if self.baseline_label == self.candidate_label:
             raise ValueError("Tokenizer baseline and candidate labels must differ.")
+        if self.storage_enforcement != "advisory":
+            raise ValueError("Tokenizer storage_enforcement must be advisory.")
 
 
 def _positive_integer(value: Any, field: str) -> int:
@@ -138,6 +142,10 @@ def load_tokenizer_candidate_config(path: str | Path) -> TokenizerCandidateConfi
     mixture_stage = _safe_label(raw.get("mixture_stage"), "mixture_stage")
     if mixture_stage != REQUIRED_MIXTURE_STAGE:
         raise ValueError("Tokenizer candidate config mixture_stage must be pilot.")
+    if local.get("enforcement") != "advisory":
+        raise ValueError(
+            "Tokenizer candidate config local.enforcement must be advisory."
+        )
 
     return TokenizerCandidateConfig(
         sample_tokens=sample_tokens,
@@ -163,6 +171,7 @@ def load_tokenizer_candidate_config(path: str | Path) -> TokenizerCandidateConfi
             local.get("max_working_gib"), "max_working_gib"
         ),
         min_free_gib=_positive_integer(local.get("min_free_gib"), "min_free_gib"),
+        storage_enforcement="advisory",
     )
 
 
@@ -278,43 +287,71 @@ def compare_tokenizers(
     )
     probe_regression = (candidate_probe_p95 / baseline_probe_p95) - 1.0
 
-    failures: list[str] = []
-    if _failure_count(baseline, "round_trip_failures") or _failure_count(
-        candidate, "round_trip_failures"
-    ):
-        failures.append("round_trip_failure")
-    if _failure_count(baseline, "special_token_failures") or _failure_count(
-        candidate, "special_token_failures"
-    ):
-        failures.append("special_token_failure")
+    shared_failures: list[str] = []
+    baseline_failures: list[str] = []
+    candidate_failures: list[str] = []
+    if _failure_count(baseline, "round_trip_failures"):
+        baseline_failures.append("round_trip_failure")
+    if _failure_count(candidate, "round_trip_failures"):
+        candidate_failures.append("round_trip_failure")
+    if _failure_count(baseline, "special_token_failures"):
+        baseline_failures.append("special_token_failure")
+    if _failure_count(candidate, "special_token_failures"):
+        candidate_failures.append("special_token_failure")
     if telecom_improvement < -config.max_telecom_regression:
-        failures.append("telecom_regression")
+        candidate_failures.append("telecom_regression")
     if general_regression > config.max_general_regression:
-        failures.append("general_regression")
+        candidate_failures.append("general_regression")
     if probe_regression > config.max_probe_p95_regression:
-        failures.append("probe_p95_regression")
+        candidate_failures.append("probe_p95_regression")
     baseline_holdout = baseline.get("input_files_sha256")
     candidate_holdout = candidate.get("input_files_sha256")
     if not _valid_sha256(baseline_holdout) or not _valid_sha256(candidate_holdout):
-        failures.append("holdout_fingerprint_invalid")
+        shared_failures.append("holdout_fingerprint_invalid")
     elif baseline_holdout != candidate_holdout:
-        failures.append("holdout_mismatch")
+        shared_failures.append("holdout_mismatch")
     baseline_probes = baseline.get("probe_sets_sha256")
     candidate_probes = candidate.get("probe_sets_sha256")
     if not _valid_sha256(baseline_probes) or not _valid_sha256(candidate_probes):
-        failures.append("probe_fingerprint_invalid")
+        shared_failures.append("probe_fingerprint_invalid")
     elif baseline_probes != candidate_probes:
-        failures.append("probe_set_mismatch")
-    if not _valid_tokenizer_identity(baseline) or not _valid_tokenizer_identity(
-        candidate
-    ):
-        failures.append("tokenizer_identity_failure")
+        shared_failures.append("probe_set_mismatch")
+    baseline_sample = baseline.get("sample_manifest_sha256")
+    candidate_sample = candidate.get("sample_manifest_sha256")
+    if not _valid_sha256(baseline_sample) or not _valid_sha256(candidate_sample):
+        shared_failures.append("sample_manifest_fingerprint_invalid")
+    elif baseline_sample != candidate_sample:
+        shared_failures.append("sample_manifest_mismatch")
+    if not _valid_tokenizer_identity(baseline):
+        baseline_failures.append("tokenizer_identity_failure")
+    if not _valid_tokenizer_identity(candidate):
+        candidate_failures.append("tokenizer_identity_failure")
 
+    shared_evidence_valid = not shared_failures
+    side_validity = {
+        "baseline": shared_evidence_valid and not baseline_failures,
+        "candidate": shared_evidence_valid and not candidate_failures,
+    }
+    failures = list(
+        dict.fromkeys([*shared_failures, *baseline_failures, *candidate_failures])
+    )
     eligible = not failures
-    recommend_candidate = eligible and (
+    candidate_meets_threshold = (
         overall_improvement >= config.min_overall_improvement
         or telecom_improvement >= config.min_telecom_improvement
     )
+    if not shared_evidence_valid or not any(side_validity.values()):
+        recommended_winner: str | None = None
+    elif side_validity["candidate"] and not side_validity["baseline"]:
+        recommended_winner = config.candidate_label
+    elif side_validity["baseline"] and not side_validity["candidate"]:
+        recommended_winner = config.baseline_label
+    else:
+        recommended_winner = (
+            config.candidate_label
+            if candidate_meets_threshold
+            else config.baseline_label
+        )
     labels = {
         "baseline": config.baseline_label,
         "candidate": config.candidate_label,
@@ -340,14 +377,17 @@ def compare_tokenizers(
     if not reasons:
         reasons.append(
             "candidate_meets_improvement_threshold"
-            if recommend_candidate
+            if candidate_meets_threshold
             else "candidate_improvement_below_threshold"
         )
     report: dict[str, Any] = {
         "eligible": eligible,
-        "recommended_winner": (
-            config.candidate_label if recommend_candidate else config.baseline_label
-        ),
+        "recommended_winner": recommended_winner,
+        "shared_evidence_valid": shared_evidence_valid,
+        "side_validity": side_validity,
+        "shared_fatal_failures": shared_failures,
+        "baseline_fatal_failures": baseline_failures,
+        "candidate_fatal_failures": candidate_failures,
         "guardrail_failures": failures,
         "reasons": reasons,
         "labels": labels,
@@ -411,8 +451,19 @@ def write_tokenizer_selection(
     candidate_label = labels.get("candidate")
     if winner not in {baseline_label, candidate_label}:
         raise ValueError("Tokenizer selection winner must equal a compared label.")
-    if winner == candidate_label and comparison.get("eligible") is not True:
-        raise ValueError("Cannot approve an ineligible candidate tokenizer.")
+    if comparison.get("shared_evidence_valid") is not True:
+        raise ValueError("Cannot approve a tokenizer with invalid shared evidence.")
+    side_validity = comparison.get("side_validity")
+    if not isinstance(side_validity, Mapping):
+        raise ValueError("Tokenizer comparison is missing side validity evidence.")
+    selected_side = "candidate" if winner == candidate_label else "baseline"
+    if side_validity.get(selected_side) is not True:
+        qualifier = (
+            " (ineligible candidate)" if selected_side == "candidate" else ""
+        )
+        raise ValueError(
+            f"Cannot approve an invalid {selected_side} tokenizer{qualifier}."
+        )
 
     comparison_sha256 = comparison.get("comparison_sha256")
     if not isinstance(comparison_sha256, str):
@@ -444,7 +495,7 @@ def write_tokenizer_selection(
         ):
             raise ValueError(f"Tokenizer comparison {side} fingerprint mismatch.")
 
-    side = "candidate" if winner == candidate_label else "baseline"
+    side = selected_side
     evaluation = comparison.get(side)
     if not isinstance(evaluation, Mapping):
         raise ValueError(f"Tokenizer comparison is missing {side} evaluation.")
@@ -477,7 +528,7 @@ def write_tokenizer_selection(
     if destination.name != "tokenizer_selection.json":
         raise ValueError("Tokenizer selection output must be tokenizer_selection.json.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("x", encoding="utf-8") as handle:
+    with open_exclusive_nofollow(destination, "w", encoding="utf-8") as handle:
         json.dump(selection, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return selection

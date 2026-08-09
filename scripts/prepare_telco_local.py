@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -14,6 +15,7 @@ from typing import Any, Mapping, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from matgpt.config import load_config
+from matgpt.data.contamination import pattern_fingerprint
 from matgpt.data.local_sample import LocalSampleRequest, build_tokenizer_sample
 from matgpt.data.mixture import load_mixture_config
 from matgpt.data.quality import DataQualityPolicy, load_contamination_patterns
@@ -30,6 +32,7 @@ from matgpt.tokenizer.train import (
     train_tokenizer_from_manifest,
 )
 from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
 
 STAGES = (
@@ -80,10 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="JSONL",
         help="Evaluation text to exclude; repeat for every contamination file.",
     )
-    parser.add_argument("--sample-manifest", help="Complete v2 sample manifest.")
+    parser.add_argument("--sample-manifest", help="Complete v3 sample manifest.")
     parser.add_argument("--baseline-tokenizer", help="Baseline tokenizer directory.")
+    parser.add_argument(
+        "--baseline-provenance",
+        help="Canonical preserved-pilot tokenizer provenance JSON.",
+    )
     parser.add_argument("--candidate-tokenizer", help="Candidate tokenizer directory.")
-    parser.add_argument("--holdout-manifest", help="Shared complete v2 sample manifest.")
+    parser.add_argument("--holdout-manifest", help="Shared complete v3 sample manifest.")
     parser.add_argument("--comparison", help="Reviewed tokenizer comparison JSON.")
     parser.add_argument("--winner", help="Explicit tokenizer label to select.")
     parser.add_argument(
@@ -129,6 +136,29 @@ def _required_path(value: str | None, option: str, *, directory: bool = False) -
     return path.resolve()
 
 
+def _required_managed_path(
+    root: Path,
+    value: str | Path | None,
+    option: str,
+    *,
+    directory: bool = False,
+) -> Path:
+    if value is None or not str(value):
+        raise ValueError(f"Stage requires {option}.")
+    path = Path(value).expanduser()
+    require_managed_path(
+        root,
+        path,
+        kind="directory" if directory else "file",
+        allow_missing=False,
+    )
+    valid = path.is_dir() if directory else path.is_file()
+    if not valid:
+        kind = "directory" if directory else "file"
+        raise ValueError(f"{option} must name an existing real {kind}: {path}")
+    return path.resolve()
+
+
 def _approved_config(value: str, option: str) -> Path:
     supplied = _required_path(value, option)
     canonical = CANONICAL_CONFIGS[option]
@@ -154,9 +184,13 @@ def _load_json_object(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def _write_json_exclusive(path: Path, payload: dict[str, Any]) -> None:
+def _write_json_exclusive(
+    path: Path, payload: dict[str, Any], *, managed_root: Path
+) -> None:
+    require_managed_path(managed_root, path.parent, kind="directory")
+    require_managed_path(managed_root, path, kind="file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8") as handle:
+    with open_exclusive_nofollow(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
 
@@ -274,14 +308,40 @@ def _verified_contamination_paths(
 
 
 def _canonical_sample_manifest(
-    supplied: str | None, work_dir: Path, option: str
-) -> tuple[Path, str]:
-    manifest = _required_path(supplied, option)
+    supplied: str | None,
+    work_dir: Path,
+    option: str,
+    *,
+    expected_provenance: Mapping[str, Any],
+) -> tuple[Path, str, dict[str, Any]]:
+    manifest = _required_managed_path(work_dir, supplied, option)
     canonical = work_dir / "tokenizer_sample" / "manifest.json"
     if manifest != canonical.resolve():
         raise ValueError(f"{option} must be the canonical work-root sample manifest.")
     payload = _load_json_object(manifest, "Tokenizer sample manifest")
-    return manifest, _manifest_sha256(payload, "Tokenizer sample")
+    if payload.get("version") != 3 or payload.get("complete") is not True:
+        raise ValueError("Tokenizer sample manifest must be complete version 3 evidence.")
+    expected_manifest_sha256 = _manifest_sha256(payload, "Tokenizer sample")
+    unsigned = dict(payload)
+    unsigned.pop("manifest_sha256", None)
+    if sha256_json(unsigned) != expected_manifest_sha256:
+        raise ValueError("Tokenizer sample manifest checksum mismatch.")
+    provenance = payload.get("build_provenance")
+    provenance_sha256 = payload.get("build_provenance_sha256")
+    if (
+        not isinstance(provenance, Mapping)
+        or provenance.get("workflow") != "telco_200m_tokenizer_candidate"
+        or not isinstance(provenance_sha256, str)
+        or SHA256_PATTERN.fullmatch(provenance_sha256) is None
+        or sha256_json(provenance) != provenance_sha256
+    ):
+        raise ValueError("Tokenizer sample manifest build provenance is missing or foreign.")
+    if dict(provenance) != dict(expected_provenance):
+        raise ValueError(
+            "Tokenizer sample manifest build provenance does not match current "
+            "canonical configs and contamination evidence."
+        )
+    return manifest, _manifest_sha256(payload, "Tokenizer sample"), payload
 
 
 def _quality_policy(
@@ -292,6 +352,141 @@ def _quality_policy(
     return replace(
         policy,
         contamination_patterns=[*policy.contamination_patterns, *additional],
+    )
+
+
+def _provenance_component(payload: Mapping[str, Any]) -> dict[str, Any]:
+    component = dict(payload)
+    component["sha256"] = sha256_json(payload)
+    return component
+
+
+def _contamination_evidence_provenance(paths: Sequence[Path]) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    for source_id in OPEN_TELCO_SOURCES:
+        source_paths = [
+            path
+            for path in paths
+            if _load_json_object(path.parent / "manifest.json", "Open Telco manifest").get(
+                "source_id"
+            )
+            == source_id
+        ]
+        if len(source_paths) != len(OPEN_TELCO_CONFIGS):
+            raise ValueError(f"{source_id} contamination provenance is incomplete.")
+        manifest_path = source_paths[0].parent / "manifest.json"
+        manifest = _load_json_object(manifest_path, f"{source_id} manifest")
+        sources.append(
+            {
+                "source_id": source_id,
+                "manifest_sha256": _manifest_sha256(manifest, source_id),
+                "manifest_file_sha256": sha256_file(manifest_path),
+                "configs": {
+                    name: {
+                        "sha256": str(manifest["configs"][name]["sha256"]),
+                        "raw_bytes": int(manifest["configs"][name]["raw_bytes"]),
+                        "examples": int(manifest["configs"][name]["examples"]),
+                    }
+                    for name in OPEN_TELCO_CONFIGS
+                },
+            }
+        )
+    return _provenance_component({"version": 1, "sources": sources})
+
+
+def _sample_build_provenance(
+    *,
+    registry: Any,
+    plan: Mapping[str, Any],
+    candidate_config: TokenizerCandidateConfig,
+    model_config: Mapping[str, Any],
+    quality_policy: DataQualityPolicy,
+    contamination_paths: Sequence[Path],
+    chunk_bytes: int,
+) -> dict[str, Any]:
+    plan_payload = dict(plan)
+    recipe_payload = {
+        "candidate_config": asdict(candidate_config),
+        "candidate_config_file_sha256": sha256_file(
+            CANONICAL_CONFIGS["--candidate-config"]
+        ),
+        "mixture_config_file_sha256": sha256_file(CANONICAL_CONFIGS["--mixture"]),
+        "model_config_file_sha256": sha256_file(CANONICAL_CONFIGS["--model-config"]),
+        "tokenizer": dict(model_config["tokenizer"]),
+    }
+    source_payload = {
+        "registry_file_sha256": sha256_file(CANONICAL_CONFIGS["--sources"]),
+        "registry_sha256": sha256_json(asdict(registry)),
+    }
+    quality_payload = {
+        "enabled": quality_policy.enabled,
+        "min_chars": quality_policy.min_chars,
+        "max_chars": quality_policy.max_chars,
+        "exact_dedup": quality_policy.exact_dedup,
+        "contamination_patterns": len(quality_policy.contamination_patterns),
+        "contamination_patterns_sha256": pattern_fingerprint(
+            quality_policy.contamination_patterns
+        ),
+        "policy_sha256": sha256_json(asdict(quality_policy)),
+    }
+    return {
+        "version": 1,
+        "workflow": "telco_200m_tokenizer_candidate",
+        "target_estimated_tokens": int(plan["total_tokens"]),
+        "role_quotas": dict(plan["role_quotas"]),
+        "plan": _provenance_component(plan_payload),
+        "recipe": _provenance_component(recipe_payload),
+        "sources": _provenance_component(source_payload),
+        "quality_policy": _provenance_component(quality_payload),
+        "contamination_evidence": _contamination_evidence_provenance(
+            contamination_paths
+        ),
+        "format": {
+            "version": 3,
+            "encoding": "utf-8",
+            "json": {"ensure_ascii": False, "sort_keys": True},
+            "chunk_bytes": chunk_bytes,
+        },
+    }
+
+
+def _canonical_contamination_paths(work_dir: Path, registry: Any) -> list[Path]:
+    supplied = [
+        str(work_dir / "evaluation" / source_id / f"{config}.jsonl")
+        for source_id in OPEN_TELCO_SOURCES
+        for config in OPEN_TELCO_CONFIGS
+    ]
+    for source_id in OPEN_TELCO_SOURCES:
+        require_managed_path(
+            work_dir,
+            work_dir / "evaluation" / source_id,
+            kind="directory",
+            allow_missing=False,
+        )
+    return _verified_contamination_paths(supplied, registry)
+
+
+def _current_sample_provenance(
+    *,
+    work_dir: Path,
+    registry: Any,
+    mixture: Mapping[str, Any],
+    candidate_config: TokenizerCandidateConfig,
+    model_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    contamination_paths = _canonical_contamination_paths(work_dir, registry)
+    plan = build_tokenizer_sample_plan(registry, mixture, candidate_config)
+    quality_policy = _quality_policy(
+        dict(model_config), [str(path) for path in contamination_paths]
+    )
+    return _sample_build_provenance(
+        registry=registry,
+        plan=plan,
+        candidate_config=candidate_config,
+        model_config=model_config,
+        quality_policy=quality_policy,
+        contamination_paths=contamination_paths,
+        chunk_bytes=268_435_456,
     )
 
 
@@ -307,19 +502,37 @@ def _sample_stage(
     contamination_paths = _verified_contamination_paths(
         args.contamination_patterns, registry
     )
+    canonical_contamination_paths = _canonical_contamination_paths(work_dir, registry)
+    if contamination_paths != canonical_contamination_paths:
+        raise ValueError(
+            "Contamination evidence must use the canonical work-root evaluation paths."
+        )
     work_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = work_dir / "tokenizer_sample"
     state_dir = work_dir / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     plan = build_tokenizer_sample_plan(registry, mixture, candidate_config)
+    quality_policy = _quality_policy(
+        model_config, [str(path) for path in contamination_paths]
+    )
+    chunk_bytes = 268_435_456
     request = LocalSampleRequest(
         registry=registry,
         plan=plan,
         output_dir=sample_dir,
         state_path=state_dir / "tokenizer_sample.sqlite3",
-        quality_policy=_quality_policy(
-            model_config, [str(path) for path in contamination_paths]
+        quality_policy=quality_policy,
+        chunk_bytes=chunk_bytes,
+        build_provenance=_sample_build_provenance(
+            registry=registry,
+            plan=plan,
+            candidate_config=candidate_config,
+            model_config=model_config,
+            quality_policy=quality_policy,
+            contamination_paths=contamination_paths,
+            chunk_bytes=chunk_bytes,
         ),
+        managed_root=work_dir,
     )
 
     def report_progress(event: Any) -> None:
@@ -338,11 +551,25 @@ def _candidate_stage(
     drive_dir: Path,
     candidate_config: TokenizerCandidateConfig,
     model_config: dict[str, Any],
+    registry: Any,
+    mixture: Mapping[str, Any],
 ) -> dict[str, Any]:
     destination = drive_dir / "tokenizers" / candidate_config.candidate_label
-    sample_manifest, sample_manifest_sha256 = _canonical_sample_manifest(
-        args.sample_manifest, work_dir, "--sample-manifest"
+    expected_provenance = _current_sample_provenance(
+        work_dir=work_dir,
+        registry=registry,
+        mixture=mixture,
+        candidate_config=candidate_config,
+        model_config=model_config,
     )
+    sample_manifest, sample_manifest_sha256, _ = _canonical_sample_manifest(
+        args.sample_manifest,
+        work_dir,
+        "--sample-manifest",
+        expected_provenance=expected_provenance,
+    )
+    require_managed_path(drive_dir, destination.parent, kind="directory")
+    require_managed_path(drive_dir, destination, kind="directory")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.mkdir(exist_ok=False)
     tokenizer_config = model_config["tokenizer"]
@@ -359,12 +586,129 @@ def _candidate_stage(
     persisted = _load_json_object(
         destination / "tokenizer_report.json", "Candidate tokenizer report"
     )
+    for filename in ("tokenizer.json", "special_tokens.json", "tokenizer_report.json"):
+        require_managed_path(
+            drive_dir, destination / filename, kind="file", allow_missing=False
+        )
+    tokenizer_sha256 = sha256_file(destination / "tokenizer.json")
     for candidate_report in (report, persisted):
         if candidate_report.get("fitting_manifest_sha256") != sample_manifest_sha256:
             raise ValueError("Candidate tokenizer fitting manifest fingerprint mismatch.")
+        if candidate_report.get("tokenizer_sha256") != tokenizer_sha256:
+            raise ValueError("Candidate tokenizer report fingerprint mismatch.")
     if persisted != report:
         raise ValueError("Persisted candidate tokenizer report mismatch.")
     return report
+
+
+def _pilot_recipe_sha256() -> str:
+    digest = hashlib.sha256()
+    digest.update(b"telco-data-recipe-v1\0")
+    digest.update(CANONICAL_CONFIGS["--model-config"].read_bytes())
+    digest.update(b"\0")
+    digest.update(CANONICAL_CONFIGS["--sources"].read_bytes())
+    digest.update(b"\0")
+    digest.update(CANONICAL_CONFIGS["--mixture"].read_bytes())
+    return digest.hexdigest()
+
+
+def _canonical_pilot_provenance(
+    drive_dir: Path,
+    supplied: str | None = None,
+) -> tuple[Path, Path, dict[str, Any]]:
+    recipe_sha256 = _pilot_recipe_sha256()
+    recipe_id = recipe_sha256[:12]
+    recipe_root = drive_dir / "recipes" / recipe_id
+    baseline = recipe_root / "prepared" / "pilot" / "tokenizer"
+    provenance_path = (
+        recipe_root / "evidence" / "pilot" / "tokenizer_provenance.json"
+    )
+    for path, kind in (
+        (drive_dir / "recipes", "directory"),
+        (recipe_root, "directory"),
+        (recipe_root / "prepared", "directory"),
+        (recipe_root / "prepared" / "pilot", "directory"),
+        (baseline, "directory"),
+        (baseline / "tokenizer.json", "file"),
+        (baseline / "special_tokens.json", "file"),
+        (recipe_root / "evidence", "directory"),
+        (recipe_root / "evidence" / "pilot", "directory"),
+        (provenance_path, "file"),
+    ):
+        require_managed_path(drive_dir, path, kind=kind, allow_missing=False)
+    if supplied is not None:
+        supplied_path = _required_managed_path(
+            drive_dir, supplied, "--baseline-provenance"
+        )
+        if supplied_path != provenance_path.resolve():
+            raise ValueError(
+                "--baseline-provenance must be the canonical pilot evidence file."
+            )
+    provenance = _load_json_object(provenance_path, "Pilot tokenizer provenance")
+    expected_relative_sample = "corpora/pilot/manifest.json"
+    expected_relative_tokenizer = "prepared/pilot/tokenizer"
+    sample_manifest = recipe_root / expected_relative_sample
+    require_managed_path(
+        drive_dir, sample_manifest, kind="file", allow_missing=False
+    )
+    sample_payload = _load_json_object(sample_manifest, "Pilot sample manifest")
+    sample_manifest_sha256 = _manifest_sha256(sample_payload, "Pilot sample")
+    unsigned_sample = dict(sample_payload)
+    unsigned_sample.pop("manifest_sha256", None)
+    if sha256_json(unsigned_sample) != sample_manifest_sha256:
+        raise ValueError("Pilot sample manifest checksum mismatch.")
+    expected = {
+        "version": 1,
+        "stage": "pilot",
+        "recipe_sha256": recipe_sha256,
+        "recipe_id": recipe_id,
+        "sample_manifest_relative_path": expected_relative_sample,
+        "sample_manifest_file_sha256": sha256_file(sample_manifest),
+        "sample_manifest_sha256": sample_manifest_sha256,
+        "tokenizer_relative_path": expected_relative_tokenizer,
+        "tokenizer_sha256": sha256_file(baseline / "tokenizer.json"),
+    }
+    expected["provenance_sha256"] = sha256_json(expected)
+    if provenance != expected:
+        raise ValueError(
+            "Pilot tokenizer provenance does not match the canonical pilot recipe, "
+            "sample, and tokenizer."
+        )
+    return baseline.resolve(), provenance_path.resolve(), provenance
+
+
+def _comparison_workflow_evidence(
+    *,
+    sample_manifest_sha256: str,
+    sample_payload: Mapping[str, Any],
+    expected_sample_provenance: Mapping[str, Any],
+    pilot_provenance: Mapping[str, Any],
+    candidate_report: Mapping[str, Any],
+    baseline_tokenizer_sha256: str,
+    candidate_tokenizer_sha256: str,
+) -> dict[str, Any]:
+    recipe = expected_sample_provenance.get("recipe")
+    if not isinstance(recipe, Mapping):
+        raise ValueError("Current candidate recipe provenance is invalid.")
+    evidence = {
+        "version": 1,
+        "sample_manifest_sha256": sample_manifest_sha256,
+        "sample_build_provenance_sha256": sample_payload.get(
+            "build_provenance_sha256"
+        ),
+        "candidate_recipe_sha256": recipe.get("sha256"),
+        "candidate_report_sha256": sha256_json(candidate_report),
+        "baseline_provenance_sha256": pilot_provenance.get("provenance_sha256"),
+        "baseline_recipe_sha256": pilot_provenance.get("recipe_sha256"),
+        "baseline_sample_manifest_sha256": pilot_provenance.get(
+            "sample_manifest_sha256"
+        ),
+        "baseline_tokenizer_sha256": baseline_tokenizer_sha256,
+        "candidate_tokenizer_sha256": candidate_tokenizer_sha256,
+    }
+    if any(not isinstance(value, (int, str)) for value in evidence.values()):
+        raise ValueError("Tokenizer comparison workflow evidence is incomplete.")
+    return evidence
 
 
 def _comparison_stage(
@@ -374,16 +718,42 @@ def _comparison_stage(
     drive_dir: Path,
     candidate_config: TokenizerCandidateConfig,
     model_config: dict[str, Any],
+    registry: Any,
+    mixture: Mapping[str, Any],
 ) -> dict[str, Any]:
     destination = drive_dir / "comparison.json"
+    require_managed_path(drive_dir, destination, kind="file")
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"Comparison already exists: {destination}")
-    baseline = _required_path(
-        args.baseline_tokenizer, "--baseline-tokenizer", directory=True
+    if not args.baseline_provenance:
+        raise ValueError("tokenizer_compare requires --baseline-provenance.")
+    baseline, _, pilot_provenance = _canonical_pilot_provenance(
+        drive_dir, args.baseline_provenance
     )
+    supplied_baseline = _required_managed_path(
+        drive_dir,
+        args.baseline_tokenizer,
+        "--baseline-tokenizer",
+        directory=True,
+    )
+    if supplied_baseline != baseline:
+        raise ValueError(
+            "--baseline-tokenizer must be the canonical preserved pilot tokenizer."
+        )
     canonical_candidate = drive_dir / "tokenizers" / candidate_config.candidate_label
-    candidate = _required_path(
-        args.candidate_tokenizer, "--candidate-tokenizer", directory=True
+    for path, kind in (
+        (drive_dir / "tokenizers", "directory"),
+        (canonical_candidate, "directory"),
+        (canonical_candidate / "tokenizer.json", "file"),
+        (canonical_candidate / "special_tokens.json", "file"),
+        (canonical_candidate / "tokenizer_report.json", "file"),
+    ):
+        require_managed_path(drive_dir, path, kind=kind, allow_missing=False)
+    candidate = _required_managed_path(
+        drive_dir,
+        args.candidate_tokenizer,
+        "--candidate-tokenizer",
+        directory=True,
     )
     if candidate != canonical_candidate.resolve():
         raise ValueError(
@@ -391,8 +761,18 @@ def _comparison_stage(
         )
     if baseline == candidate:
         raise ValueError("Baseline and candidate tokenizer directories must differ.")
-    holdout, sample_manifest_sha256 = _canonical_sample_manifest(
-        args.holdout_manifest, work_dir, "--holdout-manifest"
+    expected_provenance = _current_sample_provenance(
+        work_dir=work_dir,
+        registry=registry,
+        mixture=mixture,
+        candidate_config=candidate_config,
+        model_config=model_config,
+    )
+    holdout, sample_manifest_sha256, sample_payload = _canonical_sample_manifest(
+        args.holdout_manifest,
+        work_dir,
+        "--holdout-manifest",
+        expected_provenance=expected_provenance,
     )
     candidate_report = _load_json_object(
         candidate / "tokenizer_report.json", "Candidate tokenizer report"
@@ -400,6 +780,7 @@ def _comparison_stage(
     if candidate_report.get("fitting_manifest_sha256") != sample_manifest_sha256:
         raise ValueError("Candidate tokenizer fitting manifest fingerprint mismatch.")
     candidate_report_sha256 = candidate_report.get("tokenizer_sha256")
+    baseline_report_sha256 = pilot_provenance["tokenizer_sha256"]
     if (
         not isinstance(candidate_report_sha256, str)
         or SHA256_PATTERN.fullmatch(candidate_report_sha256) is None
@@ -424,6 +805,8 @@ def _comparison_stage(
             raise ValueError(f"{side} evaluation sample manifest fingerprint mismatch.")
     if candidate_evaluation.get("tokenizer_sha256") != candidate_report_sha256:
         raise ValueError("Candidate evaluation tokenizer fingerprint mismatch.")
+    if baseline_evaluation.get("tokenizer_sha256") != baseline_report_sha256:
+        raise ValueError("Baseline evaluation tokenizer provenance mismatch.")
     comparison = compare_tokenizers(
         baseline_evaluation, candidate_evaluation, candidate_config
     )
@@ -432,14 +815,30 @@ def _comparison_stage(
         "candidate": candidate_config.candidate_label,
     }:
         raise ValueError("Tokenizer comparison side labels mismatch.")
-    _write_json_exclusive(destination, comparison)
+    comparison.pop("comparison_sha256", None)
+    comparison["workflow_evidence"] = _comparison_workflow_evidence(
+        sample_manifest_sha256=sample_manifest_sha256,
+        sample_payload=sample_payload,
+        expected_sample_provenance=expected_provenance,
+        pilot_provenance=pilot_provenance,
+        candidate_report=candidate_report,
+        baseline_tokenizer_sha256=baseline_report_sha256,
+        candidate_tokenizer_sha256=candidate_report_sha256,
+    )
+    comparison["comparison_sha256"] = sha256_json(comparison)
+    _write_json_exclusive(destination, comparison, managed_root=drive_dir)
     return comparison
 
 
 def _selection_stage(
     args: argparse.Namespace,
     *,
+    work_dir: Path,
     drive_dir: Path,
+    registry: Any,
+    mixture: Mapping[str, Any],
+    candidate_config: TokenizerCandidateConfig,
+    model_config: Mapping[str, Any],
 ) -> dict[str, Any]:
     if not args.approve:
         raise ValueError(
@@ -447,12 +846,88 @@ def _selection_stage(
         )
     if not args.winner:
         raise ValueError("tokenizer_select requires --winner.")
-    comparison_path = _required_path(args.comparison, "--comparison")
+    canonical_comparison = drive_dir / "comparison.json"
+    comparison_path = _required_managed_path(
+        drive_dir, args.comparison, "--comparison"
+    )
+    if comparison_path != canonical_comparison.resolve():
+        raise ValueError("--comparison must be the canonical Drive comparison.json.")
     comparison = _load_json_object(comparison_path, "Tokenizer comparison")
+    expected_labels = {
+        "baseline": candidate_config.baseline_label,
+        "candidate": candidate_config.candidate_label,
+    }
+    if comparison.get("labels") != expected_labels:
+        raise ValueError("Tokenizer comparison labels do not match the current recipe.")
+    expected_provenance = _current_sample_provenance(
+        work_dir=work_dir,
+        registry=registry,
+        mixture=mixture,
+        candidate_config=candidate_config,
+        model_config=model_config,
+    )
+    sample_manifest = work_dir / "tokenizer_sample" / "manifest.json"
+    _, sample_manifest_sha256, sample_payload = _canonical_sample_manifest(
+        str(sample_manifest),
+        work_dir,
+        "canonical sample manifest",
+        expected_provenance=expected_provenance,
+    )
+    baseline, _, pilot_provenance = _canonical_pilot_provenance(drive_dir)
+    candidate = drive_dir / "tokenizers" / candidate_config.candidate_label
+    for path, kind in (
+        (candidate, "directory"),
+        (candidate / "tokenizer.json", "file"),
+        (candidate / "special_tokens.json", "file"),
+        (candidate / "tokenizer_report.json", "file"),
+        (baseline, "directory"),
+        (baseline / "tokenizer.json", "file"),
+        (baseline / "special_tokens.json", "file"),
+    ):
+        require_managed_path(drive_dir, path, kind=kind, allow_missing=False)
+    candidate_report = _load_json_object(
+        candidate / "tokenizer_report.json", "Candidate tokenizer report"
+    )
+    baseline_sha256 = sha256_file(baseline / "tokenizer.json")
+    candidate_sha256 = sha256_file(candidate / "tokenizer.json")
+    if (
+        candidate_report.get("fitting_manifest_sha256")
+        != sample_manifest_sha256
+        or candidate_report.get("tokenizer_sha256") != candidate_sha256
+    ):
+        raise ValueError(
+            "Candidate tokenizer report is not bound to the current sample and "
+            "tokenizer."
+        )
+    expected_workflow_evidence = _comparison_workflow_evidence(
+        sample_manifest_sha256=sample_manifest_sha256,
+        sample_payload=sample_payload,
+        expected_sample_provenance=expected_provenance,
+        pilot_provenance=pilot_provenance,
+        candidate_report=candidate_report,
+        baseline_tokenizer_sha256=baseline_sha256,
+        candidate_tokenizer_sha256=candidate_sha256,
+    )
+    if comparison.get("workflow_evidence") != expected_workflow_evidence:
+        raise ValueError(
+            "Tokenizer comparison does not match current recipe and provenance evidence."
+        )
+    fingerprints = comparison.get("fingerprints")
+    if not isinstance(fingerprints, Mapping) or (
+        fingerprints.get("baseline_tokenizer_sha256") != baseline_sha256
+        or fingerprints.get("candidate_tokenizer_sha256") != candidate_sha256
+        or fingerprints.get("baseline_sample_manifest_sha256")
+        != sample_manifest_sha256
+        or fingerprints.get("candidate_sample_manifest_sha256")
+        != sample_manifest_sha256
+    ):
+        raise ValueError("Tokenizer comparison fingerprints are stale or foreign.")
+    selection_path = drive_dir / "tokenizer_selection.json"
+    require_managed_path(drive_dir, selection_path, kind="file")
     return write_tokenizer_selection(
         comparison,
         args.winner,
-        drive_dir / "tokenizer_selection.json",
+        selection_path,
     )
 
 
@@ -466,6 +941,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     mixture = load_mixture_config(mixture_path)
     candidate_config = load_tokenizer_candidate_config(candidate_path)
     model_config = load_config(model_path)
+    print(
+        json.dumps(
+            {
+                "event": "storage_advisory",
+                "enforced": False,
+                "max_working_gib": candidate_config.max_working_gib,
+                "min_free_gib": candidate_config.min_free_gib,
+                "mode": candidate_config.storage_enforcement,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
     if args.stage == "tokenizer_sample":
         return _sample_stage(
@@ -483,6 +971,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             drive_dir=drive_dir,
             candidate_config=candidate_config,
             model_config=model_config,
+            registry=registry,
+            mixture=mixture,
         )
     if args.stage == "tokenizer_compare":
         return _comparison_stage(
@@ -491,9 +981,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             drive_dir=drive_dir,
             candidate_config=candidate_config,
             model_config=model_config,
+            registry=registry,
+            mixture=mixture,
         )
     if args.stage == "tokenizer_select":
-        return _selection_stage(args, drive_dir=drive_dir)
+        return _selection_stage(
+            args,
+            work_dir=work_dir,
+            drive_dir=drive_dir,
+            registry=registry,
+            mixture=mixture,
+            candidate_config=candidate_config,
+            model_config=model_config,
+        )
     raise ValueError(f"Unsupported stage: {args.stage}")
 
 

@@ -99,6 +99,11 @@ checked repository files. A byte-identical copy is accepted; an edited or
 semantically similar alternate file is rejected before sampling, training, or
 evaluation begins.
 
+The candidate recipe's `max_working_gib` and `min_free_gib` values are
+explicitly **advisory**. Every invocation prints them in a
+`storage_advisory` event with `enforced: false`; the operator must check free
+space before starting. They are not a filesystem quota or cleanup mechanism.
+
 The notebook at `notebooks/prepare_matgpt_telco_300m_local.ipynb` keeps these
 paths visible at the top, previews the exact expanded command, and streams
 stdout/stderr live with `subprocess.Popen`.
@@ -143,8 +148,14 @@ Expected local outputs:
 ```
 
 Progress lines report the source cursor, accepted estimated tokens, elapsed
-time, rate, and ETA. The final manifest is v2 and binds bounded artifact counts,
-content digests, and the build identity.
+time, rate, and ETA. The final manifest is v3 and binds bounded artifact counts,
+content digests, and the build identity. Its deterministic provenance envelope
+also binds the exact 200M target and role quotas, sample plan,
+candidate/model/mixture recipe identities, source registry, quality policy,
+current Lite/Full contamination files and manifests, and output format.
+Candidate fitting, comparison, and selection recompute this envelope from the
+checked configs and canonical work-root evidence; missing, foreign, or stale
+envelopes fail closed.
 
 `Ctrl-C` is safe. Rerun the identical command: committed chunks are verified,
 uncommitted temporary/chunk files are removed, and sampling resumes from the
@@ -183,10 +194,12 @@ now-absent canonical destination. Never overwrite files in place.
 
 ## Stage 3: write `tokenizer_compare`
 
-Locate the preserved pilot tokenizer from the existing recipe namespace,
-normally `recipes/<recipe-id>/prepared/pilot/tokenizer`. Compare both tokenizers
-against the same verified sample manifest; the evaluation API selects every
-holdout chunk in manifest order and verifies all digests and counts.
+Locate the preserved pilot tokenizer from the canonical existing recipe
+namespace, `recipes/<recipe-id>/prepared/pilot/tokenizer`. Comparison also
+requires `recipes/<recipe-id>/evidence/pilot/tokenizer_provenance.json`.
+Compare both tokenizers against the same verified sample manifest; the
+evaluation API selects every holdout chunk in manifest order, hashes the bytes
+it actually consumes, and verifies all digests and counts.
 
 ```bash
 uv run python scripts/prepare_telco_local.py \
@@ -197,7 +210,8 @@ uv run python scripts/prepare_telco_local.py \
   --model-config configs/matgpt_telco_300m.yaml \
   --work-dir <local-work-root> \
   --drive-dir <streamed-drive-publish-root> \
-  --baseline-tokenizer <preserved-pilot-tokenizer-dir> \
+  --baseline-tokenizer <streamed-drive-publish-root>/recipes/<recipe-id>/prepared/pilot/tokenizer \
+  --baseline-provenance <streamed-drive-publish-root>/recipes/<recipe-id>/evidence/pilot/tokenizer_provenance.json \
   --candidate-tokenizer <streamed-drive-publish-root>/tokenizers/representative_200m \
   --holdout-manifest <local-work-root>/tokenizer_sample/manifest.json
 ```
@@ -212,6 +226,34 @@ The candidate argument must resolve exactly to
 tokenizer checksum, and canonical sample-manifest fingerprint must agree. The
 CLI rejects swapped sides and equal baseline/candidate tokenizer fingerprints
 before writing comparison evidence.
+
+### One-time pilot provenance migration
+
+Older pilot artifacts do not contain this evidence file. Do not infer or
+fabricate it. First locate the canonical recipe namespace and review the
+original pilot stage record, recipe inputs, corpus manifest, and tokenizer.
+Only after that review, create the canonical evidence file with this exact
+self-checking shape:
+
+```json
+{
+  "version": 1,
+  "stage": "pilot",
+  "recipe_sha256": "<SHA256(b'telco-data-recipe-v1\\0' + model bytes + b'\\0' + sources bytes + b'\\0' + mixture bytes)>",
+  "recipe_id": "<first 12 characters of recipe_sha256>",
+  "sample_manifest_relative_path": "corpora/pilot/manifest.json",
+  "sample_manifest_file_sha256": "<sha256 of that manifest file>",
+  "sample_manifest_sha256": "<verified internal manifest_sha256>",
+  "tokenizer_relative_path": "prepared/pilot/tokenizer",
+  "tokenizer_sha256": "<sha256 of tokenizer.json>",
+  "provenance_sha256": "<sha256_json of all preceding fields>"
+}
+```
+
+The CLI independently recomputes every field, requires canonical locations,
+and rejects arbitrary structurally valid BPEs labeled `pilot_20m`. If the
+original stage/recipe/sample evidence cannot be established, comparison remains
+blocked; absence of evidence is not permission to create a claim.
 
 ## Stage 4: review, then `tokenizer_select`
 
@@ -237,8 +279,12 @@ uv run python scripts/prepare_telco_local.py \
 Expected output is a new
 `<streamed-drive-publish-root>/tokenizer_selection.json`. Exclusive creation
 prevents replacement. The selection binds the comparison checksum and selected
-tokenizer digest; it never copies over or modifies either tokenizer. An
-ineligible `representative_200m` request fails.
+tokenizer digest; it never copies over or modifies either tokenizer. An invalid
+side fails even with an explicit override. Shared-evidence failure or two
+invalid sides produces no recommended winner. Selection accepts only canonical
+Drive `comparison.json` and revalidates current labels, sample/build provenance,
+pilot evidence, candidate recipe and report, and both tokenizer hashes before
+exclusive record creation.
 
 If `representative_200m` is selected, all dependent pilot preparation, smoke,
 pilot, and evaluation gates must be refreshed under the new tokenizer

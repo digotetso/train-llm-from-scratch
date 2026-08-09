@@ -69,3 +69,15 @@ def test_quality_filter_uses_supplied_matcher_and_reports_its_provenance():
     assert quality_filter.report()["contamination_patterns_sha256"] == pattern_fingerprint(
         policy.contamination_patterns
     )
+
+
+def test_generic_quality_filter_keeps_exact_dedup_behavior_by_default():
+    policy = DataQualityPolicy(enabled=True, exact_dedup=True)
+    quality_filter = QualityFilter(policy)
+    first = make_document_record("unit", "train", 0, "A unique document.")
+    duplicate = make_document_record("unit", "train", 1, "A unique document.")
+
+    assert quality_filter.accept(first) is True
+    assert quality_filter.accept(duplicate) is False
+    assert quality_filter.seen_hashes == {first["text_sha256"]}
+    assert quality_filter.report()["rejection_reasons"] == {"duplicate_exact": 1}

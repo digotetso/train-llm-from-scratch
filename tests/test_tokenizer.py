@@ -77,7 +77,7 @@ def write_sample_manifest(
     for artifact in sorted(artifacts, key=lambda item: str(item["path"])):
         artifact_digest.update(sha256_json(artifact).encode("utf-8"))
     manifest = {
-        "version": 2,
+        "version": 3,
         "complete": True,
         "accepted_documents": document_counts["fit"],
         "holdout_documents": document_counts["holdout"],
@@ -86,6 +86,24 @@ def write_sample_manifest(
         "artifact_count": len(artifacts),
         "artifacts_sha256": artifact_digest.hexdigest(),
     }
+    build_provenance = {
+        "version": 1,
+        "workflow": "test_tokenizer_sample",
+        "target_estimated_tokens": 200_000_000,
+        "role_quotas": {
+            "pretrain_general": 128_333_333,
+            "pretrain_structured": 10_000_000,
+            "pretrain_telecom": 61_666_667,
+        },
+        "plan": {"sha256": "1" * 64},
+        "recipe": {"sha256": "2" * 64},
+        "sources": {"sha256": "3" * 64},
+        "quality_policy": {"sha256": "4" * 64},
+        "contamination_evidence": {"sha256": "5" * 64},
+        "format": {"version": 3},
+    }
+    manifest["build_provenance"] = build_provenance
+    manifest["build_provenance_sha256"] = sha256_json(build_provenance)
     manifest["manifest_sha256"] = sha256_json(manifest)
     manifest_path = root / "manifest.json"
     manifest_path.write_text(
@@ -120,6 +138,7 @@ def install_valid_training_double(monkeypatch: pytest.MonkeyPatch) -> None:
         min_frequency,
         special_tokens,
         probe_sets_path=None,
+        **_kwargs,
     ):
         del min_frequency, probe_sets_path
         documents = sum(
@@ -379,7 +398,7 @@ def test_train_tokenizer_from_manifest_rejects_v1_manifest(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match="version must be 2"):
+    with pytest.raises(ValueError, match="version must be 3"):
         train_tokenizer_from_manifest(
             manifest_path,
             tmp_path / "tokenizer",
@@ -387,6 +406,64 @@ def test_train_tokenizer_from_manifest_rejects_v1_manifest(
             min_frequency=1,
             special_tokens=SPECIAL_TOKENS,
         )
+
+
+def test_train_tokenizer_from_manifest_rejects_missing_build_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_valid_training_double(monkeypatch)
+    manifest = write_sample_manifest(
+        tmp_path,
+        fit_records=[[sample_record("RRC connection setup.")]],
+        holdout_records=[],
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload.pop("build_provenance")
+    payload.pop("build_provenance_sha256")
+    payload.pop("manifest_sha256")
+    payload["manifest_sha256"] = sha256_json(payload)
+    manifest.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="build provenance"):
+        train_tokenizer_from_manifest(
+            manifest,
+            tmp_path / "tokenizer",
+            vocab_size=REQUIRED_VOCAB_SIZE,
+            min_frequency=1,
+            special_tokens=SPECIAL_TOKENS,
+        )
+
+
+def test_tokenizer_training_detects_input_mutation_between_consumption_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    corpus = tmp_path / "train.jsonl"
+    output = tmp_path / "tokenizer"
+    write_corpus(corpus)
+    original_count = tokenizer_train._count_texts
+
+    def count_then_mutate(input_paths):
+        result = original_count(input_paths)
+        with corpus.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"text": "Mutated after the counting pass."}) + "\n")
+        return result
+
+    monkeypatch.setattr(tokenizer_train, "_count_texts", count_then_mutate)
+
+    with pytest.raises(ValueError, match="changed between tokenizer passes"):
+        train_tokenizer_from_jsonl(
+            [corpus],
+            output,
+            vocab_size=320,
+            min_frequency=1,
+            special_tokens=SPECIAL_TOKENS,
+        )
+
+    assert not (output / "tokenizer.json").exists()
+    assert not (output / "special_tokens.json").exists()
+    assert not (output / "tokenizer_report.json").exists()
 
 
 def test_evaluate_tokenizer_reports_streamed_holdout_and_probe_metrics(
@@ -446,6 +523,101 @@ def test_evaluate_tokenizer_reports_streamed_holdout_and_probe_metrics(
         manifest.read_text(encoding="utf-8")
     )["manifest_sha256"]
     assert len(report["input_file_checksums"]) == 2
+
+
+def test_evaluation_detects_holdout_mutation_after_manifest_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    corpus = tmp_path / "train.jsonl"
+    tokenizer_dir = tmp_path / "tokenizer"
+    probes = tmp_path / "probes.yaml"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[[sample_record("Approved holdout text.")]],
+    )
+    holdout = manifest.parent / "holdout" / "holdout_00000.jsonl"
+    original_inputs = tokenizer_train._input_paths_for_evaluation
+
+    def verify_then_mutate(input_paths):
+        result = original_inputs(input_paths)
+        replacement = sample_record("Foreign text inserted after verification.")
+        holdout.write_text(
+            json.dumps(replacement, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(
+        tokenizer_train, "_input_paths_for_evaluation", verify_then_mutate
+    )
+
+    with pytest.raises(ValueError, match="changed after manifest verification"):
+        evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
+
+
+@pytest.mark.parametrize("artifact", ("tokenizer", "probes"))
+def test_evaluation_detects_tokenizer_or_probe_mutation_during_consumption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact: str,
+):
+    corpus = tmp_path / "train.jsonl"
+    tokenizer_dir = tmp_path / "tokenizer"
+    probes = tmp_path / "probes.yaml"
+    write_corpus(corpus)
+    train_tokenizer_from_jsonl(
+        [corpus],
+        tokenizer_dir,
+        vocab_size=320,
+        min_frequency=1,
+        special_tokens=SPECIAL_TOKENS,
+    )
+    probes.write_text(
+        "version: 1\ngroups:\n  general:\n    - General prose.\n",
+        encoding="utf-8",
+    )
+    manifest = write_sample_manifest(
+        tmp_path / "sample",
+        fit_records=[[sample_record("Fitting text.")]],
+        holdout_records=[[sample_record("Held-out text.")]],
+    )
+    if artifact == "tokenizer":
+        original_load = tokenizer_train.load_tokenizer
+
+        def load_then_mutate(path):
+            loaded = original_load(path)
+            (Path(path) / "tokenizer.json").write_text("{}\n", encoding="utf-8")
+            return loaded
+
+        monkeypatch.setattr(tokenizer_train, "load_tokenizer", load_then_mutate)
+    else:
+        original_probes = tokenizer_train.load_probe_sets
+
+        def load_then_mutate(path):
+            loaded = original_probes(path)
+            Path(path).write_text(
+                "version: 1\ngroups:\n  general:\n    - Foreign probes.\n",
+                encoding="utf-8",
+            )
+            return loaded
+
+        monkeypatch.setattr(tokenizer_train, "load_probe_sets", load_then_mutate)
+
+    with pytest.raises(ValueError, match="changed during evaluation"):
+        evaluate_tokenizer_on_jsonl(tokenizer_dir, [manifest], probes)
 
 
 def test_evaluate_tokenizer_records_missing_or_invalid_special_metadata_as_failure(

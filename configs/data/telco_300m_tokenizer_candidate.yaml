@@ -12,3 +12,4 @@ comparison:
 local:
   max_working_gib: 20
   min_free_gib: 25
+  enforcement: advisory

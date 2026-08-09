@@ -42,6 +42,7 @@ def test_local_notebook_exposes_only_data_and_tokenizer_stages():
     assert "scripts/pretrain.py" not in source
     assert "run_pretraining" not in source
     assert "FULL_APPROVED" not in source
+    assert 'DRIVE_PUBLISH_ROOT / "recipes"' in source
 
 
 def test_local_notebook_requires_distinct_local_and_drive_roots():
@@ -84,6 +85,7 @@ def test_local_notebook_builds_one_deterministic_cli_command():
         "tokenizer_select",
     }.issubset(stage_values)
     assert "scripts/prepare_telco_local.py" in source
+    assert "--baseline-provenance" in source
     assert "shlex.join(command)" in source
 
 

@@ -63,8 +63,15 @@ class DataQualityPolicy:
 
 
 class QualityFilter:
-    def __init__(self, policy: DataQualityPolicy, contamination_matcher=None) -> None:
+    def __init__(
+        self,
+        policy: DataQualityPolicy,
+        contamination_matcher=None,
+        *,
+        track_seen_hashes: bool = True,
+    ) -> None:
         self.policy = policy
+        self.track_seen_hashes = track_seen_hashes
         self.contamination_matcher = contamination_matcher or build_contamination_matcher(
             policy.contamination_patterns
         )
@@ -93,8 +100,12 @@ class QualityFilter:
             return "too_long"
 
         # Is exact deduplication enabled, and have we seen this hash?
-        if self.policy.exact_dedup and record["text_sha256"] in self.seen_hashes:
-                # Reject this document as an exact duplicate.
+        if (
+            self.policy.exact_dedup
+            and self.track_seen_hashes
+            and record["text_sha256"] in self.seen_hashes
+        ):
+            # Reject this document as an exact duplicate.
             return "duplicate_exact"
 
         # Convert document text to a capitalization-independent form.
@@ -113,7 +124,7 @@ class QualityFilter:
             self.rejection_reasons[reason] += 1
             return False
         self.accepted_documents += 1
-        if self.policy.exact_dedup:
+        if self.policy.exact_dedup and self.track_seen_hashes:
             # Remember this document's fingerprint.
             self.seen_hashes.add(record["text_sha256"])
         return True

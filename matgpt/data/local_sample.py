@@ -26,10 +26,11 @@ from matgpt.data.telco_prepare import (
     iter_deterministic_source_windows,
 )
 from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
 
 _CHUNK_NAME = re.compile(r"^(fit|holdout)_(\d{5,})\.jsonl$")
-_FORMAT_VERSION = 2
+_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ class LocalSampleRequest:
     quality_policy: DataQualityPolicy
     chunk_bytes: int = 268_435_456
     progress_interval_seconds: float = 30.0
+    build_provenance: Mapping[str, object] | None = None
+    managed_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -116,11 +119,17 @@ def _validate_request(request: LocalSampleRequest) -> dict[str, dict[str, Any]]:
 
 
 def _build_identity(request: LocalSampleRequest) -> BuildIdentity:
+    format_version = _FORMAT_VERSION if request.build_provenance is not None else 2
     format_description = {
-        "version": _FORMAT_VERSION,
+        "version": format_version,
         "encoding": "utf-8",
         "json": {"ensure_ascii": False, "sort_keys": True},
         "chunk_bytes": request.chunk_bytes,
+        "build_provenance_sha256": (
+            sha256_json(request.build_provenance)
+            if request.build_provenance is not None
+            else None
+        ),
     }
     return BuildIdentity(
         version=1,
@@ -134,6 +143,32 @@ def _build_identity(request: LocalSampleRequest) -> BuildIdentity:
         tokenizer_sha256=None,
         format_sha256=sha256_json(format_description),
     )
+
+
+def _managed_root(request: LocalSampleRequest) -> Path:
+    if request.managed_root is not None:
+        return Path(request.managed_root)
+    common = os.path.commonpath(
+        [os.path.abspath(request.output_dir), os.path.abspath(request.state_path)]
+    )
+    return Path(common)
+
+
+def _preflight_managed_paths(request: LocalSampleRequest) -> Path:
+    root = _managed_root(request)
+    output = require_managed_path(root, request.output_dir, kind="directory")
+    state_path = require_managed_path(root, request.state_path, kind="file")
+    require_managed_path(root, state_path.parent, kind="directory")
+    for suffix in ("-wal", "-shm", "-journal"):
+        require_managed_path(root, Path(f"{state_path}{suffix}"), kind="file")
+    for split in ("fit", "holdout"):
+        split_dir = require_managed_path(root, output / split, kind="directory")
+        if split_dir.exists():
+            for entry in split_dir.iterdir():
+                require_managed_path(root, entry)
+    for name in ("manifest.json", "manifest.json.tmp"):
+        require_managed_path(root, output / name, kind="file")
+    return root
 
 
 def _cleanup_uncommitted_files(output_dir: Path, journal: BuildJournal) -> None:
@@ -262,7 +297,7 @@ def _write_chunks(
         index = next_index
         final_path = split_dir / f"{split}_{index:05d}.jsonl"
         temporary_path = final_path.with_suffix(".jsonl.tmp")
-        with temporary_path.open("wb") as handle:
+        with open_exclusive_nofollow(temporary_path, "wb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
@@ -334,7 +369,7 @@ def _manifest(
         artifact_digest.update(sha256_json(artifact).encode("utf-8"))
         artifact_count += 1
     manifest: dict[str, object] = {
-        "version": 2,
+        "version": _FORMAT_VERSION if request.build_provenance is not None else 2,
         "complete": True,
         "stage": str(request.plan["stage"]),
         "plan_sha256": str(request.plan["plan_sha256"]),
@@ -352,6 +387,9 @@ def _manifest(
             item_id: state.item_tokens[item_id] for item_id in sorted(state.item_tokens)
         },
     }
+    if request.build_provenance is not None:
+        manifest["build_provenance"] = dict(request.build_provenance)
+        manifest["build_provenance_sha256"] = sha256_json(request.build_provenance)
     manifest["manifest_sha256"] = sha256_json(manifest)
     return manifest
 
@@ -359,7 +397,7 @@ def _manifest(
 def _write_manifest(output_dir: Path, manifest: Mapping[str, object]) -> None:
     temporary = output_dir / "manifest.json.tmp"
     final = output_dir / "manifest.json"
-    with temporary.open("w", encoding="utf-8") as handle:
+    with open_exclusive_nofollow(temporary, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
         handle.flush()
@@ -377,6 +415,7 @@ def build_tokenizer_sample(
 
     items = _validate_request(request)
     loader = _load_dataset_function(dataset_loader)
+    managed_root = _preflight_managed_paths(request)
     output_dir = Path(request.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     identity = _build_identity(request)
@@ -391,9 +430,14 @@ def build_tokenizer_sample(
     last_source_id = source_ids[-1]
     last_cursor = 0
 
-    with BuildJournal.open(request.state_path, identity) as journal:
+    with BuildJournal.open(
+        request.state_path, identity, managed_root=managed_root
+    ) as journal:
         state = _load_state(output_dir, journal, items)
-        quality_filter = QualityFilter(request.quality_policy)
+        quality_filter = QualityFilter(
+            request.quality_policy,
+            track_seen_hashes=False,
+        )
         last_cursor = state.source_cursors.get(last_source_id, 0)
 
         for source_index, source_id in enumerate(source_ids):

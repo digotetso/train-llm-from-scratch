@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import matgpt.data.local_sample as local_sample
 from matgpt.data.local_sample import (
     LocalSampleRequest,
     _write_chunks,
@@ -43,6 +44,18 @@ def _fake_telco_loader(_dataset_id: str, **_kwargs):
             "text": f"Document {index} explains deterministic telecom routing behavior.",
         }
         for index in range(10_000)
+    )
+
+
+def _large_fake_telco_loader(_dataset_id: str, **_kwargs):
+    return iter(
+        {
+            "text": (
+                f"Scaled document {index} explains deterministic telecom routing "
+                "behavior with enough unique content."
+            ),
+        }
+        for index in range(100_000)
     )
 
 
@@ -182,6 +195,120 @@ def test_chunk_writer_does_not_retain_all_encoded_chunk_payloads(tmp_path: Path)
     assert len(artifacts) == 12
     assert next_index == 12
     assert peak_bytes < 4_000_000
+
+
+def test_sample_manifest_persists_the_supplied_build_provenance(tmp_path: Path):
+    registry = load_source_registry("configs/data/telco_300m_sources.yaml")
+    provenance = {
+        "version": 1,
+        "workflow": "test_tokenizer_sample",
+        "target_estimated_tokens": 2_000,
+        "role_quotas": {"pretrain_general": 2_000},
+        "plan": {"sha256": "1" * 64},
+        "recipe": {"sha256": "2" * 64},
+        "sources": {"sha256": "3" * 64},
+        "quality_policy": {"sha256": "4" * 64},
+        "contamination_evidence": {"sha256": "5" * 64},
+        "format": {"version": 3},
+    }
+    request = LocalSampleRequest(
+        registry=registry,
+        plan=_tiny_plan(),
+        output_dir=tmp_path / "sample",
+        state_path=tmp_path / "state" / "tokenizer_sample.sqlite3",
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
+        chunk_bytes=300,
+        progress_interval_seconds=0,
+        build_provenance=provenance,
+    )
+
+    manifest = build_tokenizer_sample(request, dataset_loader=_fake_telco_loader)
+
+    assert manifest["version"] == 3
+    assert manifest["build_provenance"] == provenance
+    assert len(manifest["build_provenance_sha256"]) == 64
+
+
+def test_sampler_exact_dedup_does_not_retain_every_accepted_hash_in_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    registry = load_source_registry("configs/data/telco_300m_sources.yaml")
+    plan = _tiny_plan()
+    plan["total_tokens"] = 50_000
+    plan["role_quotas"] = {"pretrain_general": 50_000}
+    plan["items"][0]["token_quota"] = 50_000
+    captured_filters = []
+    real_filter = local_sample.QualityFilter
+
+    class CapturingQualityFilter(real_filter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured_filters.append(self)
+
+    monkeypatch.setattr(local_sample, "QualityFilter", CapturingQualityFilter)
+    request = LocalSampleRequest(
+        registry=registry,
+        plan=plan,
+        output_dir=tmp_path / "sample",
+        state_path=tmp_path / "state" / "tokenizer_sample.sqlite3",
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
+        chunk_bytes=2_000,
+        progress_interval_seconds=0,
+    )
+
+    manifest = build_tokenizer_sample(request, dataset_loader=_large_fake_telco_loader)
+
+    assert manifest["accepted_documents"] > 100
+    assert len(captured_filters) == 1
+    assert len(captured_filters[0].seen_hashes) <= plan["buffer_size"]
+
+
+@pytest.mark.parametrize("escaped_component", ("sample", "fit", "state"))
+def test_sample_refuses_symlinked_managed_descendants_before_mutation(
+    tmp_path: Path, escaped_component: str
+):
+    registry = load_source_registry("configs/data/telco_300m_sources.yaml")
+    work = tmp_path / "work"
+    outside = tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    outside_marker = outside / "keep.txt"
+    outside_marker.write_text("keep\n", encoding="utf-8")
+    sample = work / "tokenizer_sample"
+    state = work / "state"
+    state_path = state / "tokenizer_sample.sqlite3"
+
+    if escaped_component == "sample":
+        sample.symlink_to(outside, target_is_directory=True)
+    elif escaped_component == "fit":
+        sample.mkdir()
+        (sample / "fit").symlink_to(outside, target_is_directory=True)
+        (outside / "fit_00000.jsonl.tmp").write_text(
+            "must not be deleted\n", encoding="utf-8"
+        )
+    else:
+        state.symlink_to(outside, target_is_directory=True)
+
+    request = LocalSampleRequest(
+        registry=registry,
+        plan=_tiny_plan(),
+        output_dir=sample,
+        state_path=state_path,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True),
+        chunk_bytes=300,
+        progress_interval_seconds=0,
+    )
+
+    with pytest.raises(ValueError, match="managed path|symbolic link"):
+        build_tokenizer_sample(request, dataset_loader=_fake_telco_loader)
+
+    assert outside_marker.read_text(encoding="utf-8") == "keep\n"
+    if escaped_component == "fit":
+        assert (outside / "fit_00000.jsonl.tmp").read_text(encoding="utf-8") == (
+            "must not be deleted\n"
+        )
+    if escaped_component != "state":
+        assert not state_path.exists()
 
 
 @pytest.mark.parametrize(

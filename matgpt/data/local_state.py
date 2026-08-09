@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator
 
 from matgpt.utils.hashing import sha256_json
+from matgpt.utils.paths import require_managed_path
 
 
 @dataclass(frozen=True)
@@ -56,10 +57,21 @@ class BuildJournal:
         self.connection = connection
 
     @classmethod
-    def open(cls, path: str | Path, identity: BuildIdentity) -> "BuildJournal":
+    def open(
+        cls,
+        path: str | Path,
+        identity: BuildIdentity,
+        *,
+        managed_root: str | Path | None = None,
+    ) -> "BuildJournal":
         """Open a journal, creating it only for the supplied exact identity."""
 
         journal_path = Path(path)
+        root = Path(managed_root) if managed_root is not None else journal_path.parent
+        require_managed_path(root, journal_path.parent, kind="directory")
+        require_managed_path(root, journal_path, kind="file")
+        for suffix in ("-wal", "-shm", "-journal"):
+            require_managed_path(root, Path(f"{journal_path}{suffix}"), kind="file")
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(journal_path)
         connection.row_factory = sqlite3.Row
