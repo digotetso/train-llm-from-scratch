@@ -532,3 +532,58 @@ def write_tokenizer_selection(
         json.dump(selection, handle, indent=2, sort_keys=True)
         handle.write("\n")
     return selection
+
+
+def validate_tokenizer_selection(
+    selection: Mapping[str, Any], comparison: Mapping[str, Any]
+) -> str:
+    """Validate an immutable approval against its canonical comparison evidence."""
+
+    required = {
+        "version", "approved", "winner", "comparison_sha256",
+        "selected_tokenizer_sha256", "operator_timestamp",
+    }
+    if set(selection) != required or selection.get("version") != 1:
+        raise ValueError("Tokenizer selection has an invalid schema.")
+    if selection.get("approved") is not True:
+        raise ValueError("Tokenizer selection is not approved.")
+    comparison_sha256 = comparison.get("comparison_sha256")
+    unsigned = dict(comparison)
+    unsigned.pop("comparison_sha256", None)
+    if not isinstance(comparison_sha256, str) or sha256_json(unsigned) != comparison_sha256:
+        raise ValueError("Tokenizer comparison checksum mismatch.")
+    if selection.get("comparison_sha256") != comparison_sha256:
+        raise ValueError("Tokenizer selection comparison fingerprint mismatch.")
+    labels = comparison.get("labels")
+    if not isinstance(labels, Mapping):
+        raise ValueError("Tokenizer comparison labels must be a mapping.")
+    winner = selection.get("winner")
+    baseline_label, candidate_label = labels.get("baseline"), labels.get("candidate")
+    if winner not in {baseline_label, candidate_label}:
+        raise ValueError("Tokenizer selection winner must equal a compared label.")
+    if comparison.get("shared_evidence_valid") is not True:
+        raise ValueError("Cannot approve a tokenizer with invalid shared evidence.")
+    selected_side = "candidate" if winner == candidate_label else "baseline"
+    side_validity = comparison.get("side_validity")
+    if not isinstance(side_validity, Mapping) or side_validity.get(selected_side) is not True:
+        raise ValueError("Cannot approve an invalid selected tokenizer.")
+    evaluation = comparison.get(selected_side)
+    fingerprints = comparison.get("fingerprints")
+    if not isinstance(evaluation, Mapping) or not isinstance(fingerprints, Mapping):
+        raise ValueError("Tokenizer comparison is missing selected evidence.")
+    selected_sha = evaluation.get("tokenizer_sha256")
+    if (
+        not isinstance(selected_sha, str)
+        or re.fullmatch(r"[0-9a-f]{64}", selected_sha) is None
+        or fingerprints.get(f"{selected_side}_tokenizer_sha256") != selected_sha
+        or selection.get("selected_tokenizer_sha256") != selected_sha
+    ):
+        raise ValueError("Tokenizer selection selected fingerprint mismatch.")
+    timestamp = selection.get("operator_timestamp")
+    try:
+        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("Tokenizer selection operator timestamp is invalid.") from error
+    if parsed.tzinfo is None:
+        raise ValueError("Tokenizer selection operator timestamp must include a timezone.")
+    return selected_sha

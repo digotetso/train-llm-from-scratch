@@ -10,7 +10,7 @@ from matgpt.data.local_publish import StoragePressure
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.data.sources import load_source_registry
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
-from matgpt.utils.hashing import sha256_file
+from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
@@ -56,8 +56,20 @@ def make_corpus_request(root: Path, *, plans: list[dict], retry_delays: tuple[fl
     tokenizer_dir = _write_tokenizer(root)
     tokenizer_sha = sha256_file(tokenizer_dir / "tokenizer.json")
     selection = root / "tokenizer_selection.json"
-    selection.write_text(json.dumps({"version": 1, "approved": True, "winner": "representative_200m", "selected_tokenizer_sha256": tokenizer_sha, "comparison_sha256": "c" * 64, "operator_timestamp": "2026-08-09T00:00:00+00:00"}, sort_keys=True) + "\n", encoding="utf-8")
-    return LocalCorpusRequest(registry=load_source_registry(REGISTRY_PATH), plans=tuple(plans), tokenizer_dir=tokenizer_dir, tokenizer_selection_path=selection, local_root=root / "local", destination_root=root / "drive", quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True, contamination_patterns=[]), batch_documents=4, shard_size_tokens=24, raw_unit_bytes=2_048, max_working_bytes=20 * 1024**2, min_free_bytes=1, progress_interval_seconds=0, retry_delays=retry_delays)
+    comparison = {
+        "labels": {"baseline": "pilot_20m", "candidate": "representative_200m"},
+        "baseline_label": "pilot_20m",
+        "candidate_label": "representative_200m",
+        "shared_evidence_valid": True,
+        "side_validity": {"baseline": True, "candidate": True},
+        "baseline": {"tokenizer_sha256": "a" * 64},
+        "candidate": {"tokenizer_sha256": tokenizer_sha},
+        "fingerprints": {"baseline_tokenizer_sha256": "a" * 64, "candidate_tokenizer_sha256": tokenizer_sha},
+    }
+    comparison["comparison_sha256"] = sha256_json(comparison)
+    (root / "tokenizer_comparison.json").write_text(json.dumps(comparison, sort_keys=True) + "\n", encoding="utf-8")
+    selection.write_text(json.dumps({"version": 1, "approved": True, "winner": "representative_200m", "selected_tokenizer_sha256": tokenizer_sha, "comparison_sha256": comparison["comparison_sha256"], "operator_timestamp": "2026-08-09T00:00:00+00:00"}, sort_keys=True) + "\n", encoding="utf-8")
+    return LocalCorpusRequest(registry=load_source_registry(REGISTRY_PATH), plans=tuple(plans), tokenizer_dir=tokenizer_dir, tokenizer_selection_path=selection, local_root=root / "local", destination_root=root / "drive", quality_policy=DataQualityPolicy(enabled=True, min_chars=2, exact_dedup=True, contamination_patterns=["heldout contamination evidence"]), batch_documents=4, shard_size_tokens=24, raw_unit_bytes=2_048, max_working_bytes=20 * 1024**2, min_free_bytes=1, progress_interval_seconds=0, retry_delays=retry_delays)
 
 
 def _artifact_bytes(root: Path) -> dict[str, bytes]:
@@ -79,12 +91,12 @@ def test_builder_counts_once_and_deduplicates_across_stages(tmp_path: Path, monk
     monkeypatch.setattr(local_corpus, "encode_record_batch", observed_encode)
     result = build_local_corpus(make_corpus_request(tmp_path, plans=[_tiny_plan("main"), _tiny_plan("cooldown")]), dataset_loader=_loader)
 
-    assert result.status == "complete"
+    assert result.status == "provisional_complete"
     assert all(count == 1 for count in encode_calls.values())
     assert max(batch_sizes) <= 4
     assert result.manifest["quota_counting"]["method"] == "tokenizer_exact_one_pass"
     assert result.manifest["quality_filter"]["exact_dedup"] is True
-    assert result.manifest["complete"] is True
+    assert result.manifest["complete"] is False
 
 
 def test_forced_interruption_resumes_byte_identically(tmp_path: Path):
@@ -115,7 +127,7 @@ def test_calibration_stop_resumes_same_identity(tmp_path: Path):
     assert calibrated.accepted_quota_tokens >= 24
     completed = build_local_corpus(request, dataset_loader=_loader)
 
-    assert completed.status == "complete"
+    assert completed.status == "provisional_complete"
     assert completed.build_identity_sha256 == calibrated.build_identity_sha256
 
 
@@ -169,6 +181,47 @@ def test_builder_rejects_unapproved_or_incomplete_selection_before_opening_state
     assert not (request.local_root / "corpus.sqlite3").exists()
 
 
+def test_builder_rejects_selection_without_matching_sibling_comparison(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    (request.tokenizer_selection_path.parent / "tokenizer_comparison.json").unlink()
+
+    with pytest.raises(ValueError, match="comparison"):
+        build_local_corpus(request, dataset_loader=_loader)
+
+    assert not (request.local_root / "corpus.sqlite3").exists()
+
+
+def test_builder_requires_enabled_dedup_and_contamination_controls(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    request = replace(
+        request,
+        quality_policy=DataQualityPolicy(enabled=False, exact_dedup=False, contamination_patterns=[]),
+    )
+
+    with pytest.raises(ValueError, match="quality controls"):
+        build_local_corpus(request, dataset_loader=_loader)
+
+    assert not (request.local_root / "corpus.sqlite3").exists()
+
+
+def test_only_first_encoded_document_that_reaches_item_quota_is_committed(tmp_path: Path):
+    plan = _tiny_plan("main")
+    plan["items"] = [
+        {"id": "common_pile_wikimedia", "source_id": "common_pile_wikimedia", "bucket_id": None, "role": "pretrain_general", "token_quota": 1}
+    ]
+    plan["role_quotas"] = {"pretrain_general": 1}
+    plan["total_tokens"] = 1
+    request = make_corpus_request(tmp_path, plans=[plan])
+
+    result = build_local_corpus(request, dataset_loader=_loader)
+
+    assert result.accepted_quota_tokens >= 1
+    import sqlite3
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        assert connection.execute("SELECT count(*) FROM seen_hashes").fetchone()[0] == 1
+    assert not (request.destination_root / "manifest.json").exists()
+
+
 def test_missing_document_license_fails_without_manifest(tmp_path: Path):
     def missing_license_loader(hf_name: str, **kwargs):
         if hf_name == "GSMA/Telco-Common-Corpus":
@@ -218,6 +271,31 @@ def test_startup_removes_uncommitted_partials_after_identity_validation(tmp_path
 
     assert result.status == "calibration_complete"
     assert not partial.exists()
+
+
+def test_startup_removes_uncommitted_sealed_artifacts_before_resume(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    orphan = request.local_root / "units" / "orphan" / "fit.jsonl"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"sealed but uncommitted\n")
+    binary = orphan.with_name("fit_00000.bin")
+    binary.write_bytes(b"\x00\x00")
+
+    result = build_local_corpus(request, dataset_loader=_loader, stop_after_quota_tokens=24)
+
+    assert result.status == "calibration_complete"
+    assert not orphan.exists()
+    assert not binary.exists()
+
+
+def test_raw_records_preserve_upstream_source_split(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    build_local_corpus(request, dataset_loader=_loader, stop_after_quota_tokens=24)
+
+    raw = next(request.destination_root.rglob("fit.jsonl"))
+    record = json.loads(raw.read_text(encoding="utf-8").splitlines()[0])
+    assert record["source_split"] == "train"
+    assert record["split"] == "fit"
 
 
 def test_builder_checks_storage_before_sealing_a_unit(tmp_path: Path):

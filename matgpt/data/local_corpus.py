@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -27,6 +28,7 @@ from matgpt.data.telco_prepare import (
     iter_deterministic_source_windows,
 )
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
+from matgpt.tokenizer.candidate import validate_tokenizer_selection
 from matgpt.utils.hashing import sha256_file, sha256_json
 from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
@@ -69,7 +71,7 @@ class LocalCorpusResult:
     manifest: Mapping[str, object] | None
 
 
-def build_local_corpus(
+def _build_local_corpus(
     request: LocalCorpusRequest,
     *,
     dataset_loader=None,
@@ -78,12 +80,10 @@ def build_local_corpus(
 ) -> LocalCorpusResult:
     """Build deterministic source windows without re-encoding accepted rows."""
 
-    global _STOP_REQUESTED
-    _STOP_REQUESTED = False
     _validate_request(request)
-    tokenizer_sha = _selected_tokenizer_sha(request)
+    tokenizer_sha, selection_sha, comparison_sha = _selected_tokenizer_sha(request)
     tokenizer = load_tokenizer(request.tokenizer_dir)
-    identity = _identity(request, tokenizer_sha)
+    identity = _identity(request, tokenizer_sha, selection_sha, comparison_sha)
     local_root = Path(request.local_root)
     destination_root = Path(request.destination_root)
     require_managed_path(local_root, local_root, kind="directory")
@@ -92,7 +92,6 @@ def build_local_corpus(
     loader = _load_dataset_function(dataset_loader)
     journal_path = local_root / "corpus.sqlite3"
     publisher = None
-    _install_sigint_handler()
     with BuildJournal.open(journal_path, identity, managed_root=local_root) as journal:
         _cleanup_uncommitted_partials(local_root, journal)
         publisher = DrivePublisher(
@@ -104,6 +103,7 @@ def build_local_corpus(
         publisher.reconcile()
         counters, cursors = _state(journal)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
+        discarded_after_quota: set[str] = set()
         for plan in request.plans:
             stage = str(plan["stage"])
             items = _validated_plan_items(request.registry, plan)
@@ -132,6 +132,8 @@ def build_local_corpus(
                         if counters.get((stage, item_id), 0) >= int(items[item_id]["token_quota"]):
                             continue
                         digest = str(row["content_sha256"])
+                        if digest in discarded_after_quota:
+                            continue
                         if digest in committed or digest in pending:
                             quality.record_rejection("duplicate_exact")
                             continue
@@ -149,12 +151,19 @@ def build_local_corpus(
                         ):
                             row = dict(encoded_row.record)
                             item_id = _item_id(row)
+                            if counters.get((stage, item_id), 0) >= int(
+                                items[item_id]["token_quota"]
+                            ):
+                                discarded_after_quota.add(str(row["content_sha256"]))
+                                continue
                             if is_validation_record(row, float(plan.get("validation_fraction", 0.0))):
+                                row["source_split"] = row["split"]
                                 row["split"] = "holdout"
                                 row["token_ids"] = list(encoded_row.ids)
                                 holdout.append(row)
                                 accepted_hashes.append(str(row["content_sha256"]))
                                 continue
+                            row["source_split"] = row["split"]
                             row["split"] = "fit"
                             row["token_ids"] = list(encoded_row.ids)
                             fit.append(row)
@@ -212,11 +221,15 @@ def build_local_corpus(
                             ),
                         )
                         return LocalCorpusResult("stopped_cleanly", identity.sha256, total, None)
+                    if all(
+                        counters.get((stage, key), 0) >= int(items[key]["token_quota"])
+                        for key in source_items
+                    ):
+                        break
                 missing = [key for key in source_items if counters.get((stage, key), 0) < int(items[key]["token_quota"])]
                 if missing:
                     raise ValueError(f"Source {source_id!r} exhausted before quota")
         manifest = _manifest(identity, counters, journal)
-        _write_manifest(destination_root, manifest)
         total = sum(counters.values())
         _write_progress(
             local_root,
@@ -225,10 +238,28 @@ def build_local_corpus(
                 source_id="complete",
                 row_cursor=0,
                 accepted_quota_tokens=total,
-                status="complete",
+                status="provisional_complete",
             ),
         )
-        return LocalCorpusResult("complete", identity.sha256, total, manifest)
+        return LocalCorpusResult("provisional_complete", identity.sha256, total, manifest)
+
+
+def build_local_corpus(
+    request: LocalCorpusRequest,
+    *,
+    dataset_loader=None,
+    on_unit_committed: Callable[[UnitCommit], object] | None = None,
+    stop_after_quota_tokens: int | None = None,
+) -> LocalCorpusResult:
+    """Build a provisional, deterministic corpus and restore SIGINT on exit."""
+
+    with _sigint_guard():
+        return _build_local_corpus(
+            request,
+            dataset_loader=dataset_loader,
+            on_unit_committed=on_unit_committed,
+            stop_after_quota_tokens=stop_after_quota_tokens,
+        )
 
 
 def _validate_request(request: LocalCorpusRequest) -> None:
@@ -238,33 +269,43 @@ def _validate_request(request: LocalCorpusRequest) -> None:
         raise ValueError("batch and artifact bounds must be positive")
     if request.max_working_bytes < 0 or request.min_free_bytes < 0:
         raise ValueError("storage bounds must be non-negative")
+    quality = request.quality_policy
+    if (
+        quality.enabled is not True
+        or quality.exact_dedup is not True
+        or not quality.contamination_patterns
+    ):
+        raise ValueError("mandatory quality controls require enabled exact dedup and contamination evidence")
 
 
-def _selected_tokenizer_sha(request: LocalCorpusRequest) -> str:
+def _selected_tokenizer_sha(request: LocalCorpusRequest) -> tuple[str, str, str]:
     selection = Path(request.tokenizer_selection_path)
     if selection.name != "tokenizer_selection.json":
         raise ValueError("tokenizer selection must use canonical tokenizer_selection.json")
     data = json.loads(selection.read_text(encoding="utf-8"))
-    required = {"version", "approved", "winner", "comparison_sha256", "selected_tokenizer_sha256", "operator_timestamp"}
-    if not isinstance(data, Mapping) or set(data) != required:
-        raise ValueError("approved tokenizer selection has an invalid schema")
-    if data.get("version") != 1 or data.get("winner") not in {"pilot_20m", "representative_200m"}:
-        raise ValueError("approved tokenizer selection has invalid provenance")
-    if not isinstance(data.get("comparison_sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", str(data["comparison_sha256"])) is None:
-        raise ValueError("approved tokenizer selection has invalid comparison provenance")
-    if not isinstance(data.get("operator_timestamp"), str) or not data["operator_timestamp"].strip():
-        raise ValueError("approved tokenizer selection is missing operator provenance")
+    comparison_path = selection.with_name("tokenizer_comparison.json")
+    if not comparison_path.is_file():
+        raise ValueError("approved tokenizer selection is missing canonical comparison evidence")
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    if not isinstance(data, Mapping) or not isinstance(comparison, Mapping):
+        raise ValueError("approved tokenizer selection comparison evidence is invalid")
+    selected_sha = validate_tokenizer_selection(data, comparison)
     actual = sha256_file(Path(request.tokenizer_dir) / "tokenizer.json")
     metadata = load_tokenizer_metadata(request.tokenizer_dir)
-    if data.get("approved") is not True or data.get("selected_tokenizer_sha256") != actual:
+    if selected_sha != actual:
         raise ValueError("approved tokenizer selection does not match tokenizer")
     if metadata.get("tokenizer_sha256") != actual:
         raise ValueError("tokenizer metadata checksum mismatch")
-    return actual
+    return actual, sha256_file(selection), sha256_file(comparison_path)
 
 
-def _identity(request: LocalCorpusRequest, tokenizer_sha: str) -> BuildIdentity:
-    return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens}))
+def _identity(
+    request: LocalCorpusRequest,
+    tokenizer_sha: str,
+    selection_sha: str,
+    comparison_sha: str,
+) -> BuildIdentity:
+    return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens, "selection_sha256": selection_sha, "comparison_sha256": comparison_sha}))
 
 
 def _load_with_retries(loader, source, delays):
@@ -328,18 +369,9 @@ def _unit_storage_bytes(
 
 def _manifest(identity, counters, journal):
     artifacts = tuple(journal.iter_artifacts())
-    manifest = {"version": 1, "complete": True, "build_identity_sha256": identity.sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
+    manifest = {"version": 1, "complete": False, "status": "provisional", "build_identity_sha256": identity.sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
     manifest["content_sha256"] = sha256_json(manifest)
     return manifest
-
-
-def _write_manifest(destination_root, manifest):
-    destination_root.mkdir(parents=True, exist_ok=True)
-    temporary = destination_root / "manifest.json.partial"
-    final = destination_root / "manifest.json"
-    with open_exclusive_nofollow(temporary, "w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, sort_keys=True); handle.flush(); os.fsync(handle.fileno())
-    os.rename(temporary, final)
 
 
 def _write_progress(root: Path, progress: LocalCorpusProgress) -> None:
@@ -363,26 +395,43 @@ def _write_progress(root: Path, progress: LocalCorpusProgress) -> None:
         os.close(descriptor)
 
 
-def _install_sigint_handler() -> None:
-    """Request a clean stop at the next durable unit boundary."""
+@contextmanager
+def _sigint_guard():
+    """Request a clean stop at the next durable boundary and restore SIGINT."""
+
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = False
 
     def request_stop(_signal_number: int, _frame: object) -> None:
         global _STOP_REQUESTED
         _STOP_REQUESTED = True
 
     try:
-        signal.signal(signal.SIGINT, request_stop)
+        previous = signal.signal(signal.SIGINT, request_stop)
     except ValueError:
-        # Tests and embedded callers can run outside the main interpreter thread.
+        yield
         return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def _cleanup_uncommitted_partials(root: Path, journal: BuildJournal) -> None:
-    """Remove only uncommitted partial files after the journal identity verifies."""
+    """Remove pre-commit unit artifacts only after the journal identity verifies."""
 
-    for path in root.rglob("*.partial"):
+    units_root = root / "units"
+    if not units_root.exists():
+        return
+    for path in sorted(units_root.rglob("*"), reverse=True):
+        if path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+            continue
         managed = require_managed_path(root, path, kind="file", allow_missing=False)
         relative = managed.relative_to(root).as_posix()
         if journal.has_artifact(relative):
-            raise ValueError(f"committed artifact cannot be a partial file: {relative}")
+            continue
         managed.unlink()
