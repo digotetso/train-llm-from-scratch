@@ -7,7 +7,7 @@ faster and gives repeatable training examples for interrupted Colab sessions.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -16,6 +16,38 @@ from matgpt.data.prepare import effective_validation_split
 from matgpt.data.token_dtype import DTYPES, validate_token_ids
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.paths import require_managed_path
+
+
+def resolve_shard_artifact_path(
+    metadata_path: str | Path,
+    artifact_path: object,
+    *,
+    shard_root: str | Path | None = None,
+) -> Path:
+    """Resolve legacy absolute or portable relative shards below one root."""
+
+    metadata_file = Path(metadata_path)
+    root = Path(shard_root) if shard_root is not None else metadata_file.parent
+    root = require_managed_path(root, root, kind="directory", allow_missing=False)
+    if not isinstance(artifact_path, str) or not artifact_path:
+        raise ValueError("shard path must be a safe relative or in-root absolute path")
+    candidate = Path(artifact_path)
+    if candidate.is_absolute():
+        if ".." in candidate.parts:
+            raise ValueError("shard path must be a safe relative or in-root absolute path")
+    else:
+        relative = PurePosixPath(artifact_path)
+        if (
+            "\\" in artifact_path
+            or ".." in relative.parts
+            or str(relative) != artifact_path
+        ):
+            raise ValueError("shard path must be a safe relative or in-root absolute path")
+        candidate = metadata_file.parent / Path(*relative.parts)
+    return require_managed_path(
+        root, candidate, kind="file", allow_missing=False
+    )
 
 
 def _flush_shard(

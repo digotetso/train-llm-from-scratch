@@ -9,11 +9,17 @@ from pathlib import Path
 
 import pytest
 
+from matgpt.config import clone_config, load_config
 from matgpt.data.local_corpus import LocalCorpusRequest, build_local_corpus
 from matgpt.data.local_publish import StoragePressure
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.data.sources import load_source_registry
+from matgpt.data.telco_prepare import (
+    corpus_has_exact_token_quotas,
+    iter_corpus_split_records,
+)
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
+from matgpt.preflight import build_preflight_report
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 
 
@@ -146,14 +152,255 @@ def test_builder_counts_once_and_deduplicates_across_stages(tmp_path: Path, monk
     monkeypatch.setattr(local_corpus, "encode_record_batch", observed_encode)
     result = build_local_corpus(make_corpus_request(tmp_path, plans=[_tiny_plan("main"), _tiny_plan("cooldown")]), dataset_loader=_loader)
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     # Post-quota encodings are intentionally not remembered across stages:
     # they remain eligible for a later stage unless durably accepted.
     assert all(count <= 2 for count in encode_calls.values())
     assert max(batch_sizes) <= 4
     assert result.manifest["quota_counting"]["method"] == "tokenizer_exact_one_pass"
     assert result.manifest["quality_filter"]["exact_dedup"] is True
-    assert result.manifest["complete"] is False
+    assert result.manifest["complete"] is True
+
+
+def test_complete_build_finalizes_committed_units_and_publishes_manifest_last(
+    tmp_path: Path,
+):
+    plans = [_tiny_plan("main"), _tiny_plan("cooldown")]
+    request = make_corpus_request(tmp_path / "complete", plans=plans)
+
+    result = build_local_corpus(request, dataset_loader=_loader)
+
+    assert result.status == "complete"
+    assert result.manifest is not None
+    assert result.manifest["complete"] is True
+    assert result.manifest["storage_format"] == "chunked_prebuilt_v1"
+    assert result.manifest["build_identity_sha256"] == result.build_identity_sha256
+    assert corpus_has_exact_token_quotas(
+        request.destination_root, request.tokenizer_dir, plans
+    )
+    assert (request.destination_root / "manifest.json").is_file()
+    for name in (
+        "quota_audit.json",
+        "license_audit.json",
+        "quality_audit.json",
+        "overlap_audit.json",
+        "calibration_report.json",
+        "main_metadata.json",
+        "cooldown_metadata.json",
+    ):
+        assert (request.destination_root / name).is_file(), name
+    for split, stats in result.manifest["split_stats"].items():
+        assert stats["document_count"] > 0
+        assert stats["raw_chunks"]
+        assert all(not Path(chunk["path"]).is_absolute() for chunk in stats["raw_chunks"])
+    main = result.manifest["stages"]["main"]
+    assert main["items"]["common_pile_wikimedia"]["documents"] > 0
+    assert main["roles"]["pretrain_general"]["documents"] > 0
+    assert result.manifest["breakdowns"]["sources"][
+        "main:common_pile_wikimedia"
+    ]["characters"] > 0
+    assert result.manifest["breakdowns"]["buckets"][
+        "main:telco_common_corpus/rfc"
+    ]["packed_tokens"] > 0
+
+
+def test_calibration_remains_provisional_and_never_writes_manifest(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+
+    result = build_local_corpus(
+        request, dataset_loader=_loader, stop_after_quota_tokens=24
+    )
+
+    assert result.status == "calibration_complete"
+    assert result.manifest is None
+    assert not (request.destination_root / "manifest.json").exists()
+    assert (request.destination_root / "calibration_report.json").is_file()
+
+
+def test_calibration_refuses_valid_existing_evidence_from_another_build(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    request.destination_root.mkdir()
+    payload = {
+        "version": 1,
+        "status": "calibration_complete",
+        "build_identity_sha256": "0" * 64,
+        "accepted_quota_tokens": 1,
+        "committed_units": 1,
+        "elapsed_seconds": 1.0,
+        "peak_rss_bytes": 1,
+    }
+    payload["calibration_report_sha256"] = sha256_json(payload)
+    path = request.destination_root / "calibration_report.json"
+    original = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    path.write_bytes(original)
+
+    with pytest.raises(ValueError, match="calibration.*identity"):
+        build_local_corpus(
+            request, dataset_loader=_loader, stop_after_quota_tokens=24
+        )
+
+    assert path.read_bytes() == original
+    assert not (request.destination_root / "manifest.json").exists()
+
+
+def test_finalization_refuses_inconsistent_journaled_quality_counts(tmp_path: Path):
+    import sqlite3
+
+    plan = _single_source_plan(
+        "main", token_quota=1, validation_fraction=0.0, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path, plans=[plan])
+    build_local_corpus(
+        request, dataset_loader=_loader, stop_after_quota_tokens=1
+    )
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        rowid, encoded = connection.execute(
+            "SELECT rowid, state_json FROM units ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        state = json.loads(encoded)
+        state["cumulative"]["quality"]["rejected_documents"] += 1
+        connection.execute(
+            "UPDATE units SET state_json = ? WHERE rowid = ?",
+            (json.dumps(state, sort_keys=True), rowid),
+        )
+
+    with pytest.raises(ValueError, match="quality.*reconcile"):
+        build_local_corpus(request, dataset_loader=_loader)
+
+    assert not (request.destination_root / "manifest.json").exists()
+
+
+def test_finalization_crash_resumes_without_provider_read_or_reencoding(
+    tmp_path: Path, monkeypatch
+):
+    import matgpt.data.local_corpus as local_corpus
+
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    real_publish = local_corpus._publish_json_evidence
+    crashed = False
+
+    def crash_after_quality(publisher, relative_path, payload):
+        nonlocal crashed
+        artifact = real_publish(publisher, relative_path, payload)
+        if relative_path == "quality_audit.json" and not crashed:
+            crashed = True
+            raise RuntimeError("crash-after-quality-audit")
+        return artifact
+
+    monkeypatch.setattr(local_corpus, "_publish_json_evidence", crash_after_quality)
+    with pytest.raises(RuntimeError, match="crash-after-quality-audit"):
+        build_local_corpus(request, dataset_loader=_loader)
+    assert not (request.destination_root / "manifest.json").exists()
+
+    monkeypatch.setattr(local_corpus, "_publish_json_evidence", real_publish)
+
+    def unexpected_provider(*_args, **_kwargs):
+        raise AssertionError("finalization resume must not reopen the provider")
+
+    monkeypatch.setattr(local_corpus, "encode_record_batch", unexpected_provider)
+    result = build_local_corpus(request, dataset_loader=unexpected_provider)
+
+    assert result.status == "complete"
+    assert result.manifest["complete"] is True
+
+
+def test_final_raw_chunk_reader_rejects_changed_or_traversing_artifacts(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    result = build_local_corpus(request, dataset_loader=_loader)
+
+    records = list(iter_corpus_split_records(request.destination_root, "main"))
+    assert len(records) == result.manifest["split_stats"]["main"]["document_count"]
+
+    chunk = request.destination_root / result.manifest["split_stats"]["main"][
+        "raw_chunks"
+    ][0]["path"]
+    original = chunk.read_bytes()
+    chunk.write_bytes(original + b"{}\n")
+    with pytest.raises(ValueError, match="checksum|size"):
+        list(iter_corpus_split_records(request.destination_root, "main"))
+
+    chunk.write_bytes(original)
+    manifest_path = request.destination_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["split_stats"]["main"]["raw_chunks"][0]["path"] = "../outside.jsonl"
+    manifest.pop("manifest_sha256")
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="safe relative|escapes"):
+        list(iter_corpus_split_records(request.destination_root, "main"))
+
+
+def _local_preflight_config(tmp_path: Path, request: LocalCorpusRequest) -> dict:
+    cfg = clone_config(load_config("configs/matgpt_telco_300m.yaml"))
+    cfg["run"]["output_dir"] = str(tmp_path / "run")
+    cfg["dataset"]["normalized_dir"] = str(request.destination_root)
+    cfg["dataset"]["train_split"] = "main"
+    cfg["dataset"]["validation_split"] = "validation"
+    cfg["dataset"]["training_splits"] = {"main": "main"}
+    cfg["tokenizer"]["output_dir"] = str(request.tokenizer_dir)
+    cfg["tokenizer"]["vocab_size"] = 320
+    cfg["model"]["vocab_size"] = 320
+    cfg["model"]["context_length"] = 8
+    cfg["sharding"]["output_dir"] = str(request.destination_root)
+    cfg["sharding"]["shard_size_tokens"] = request.shard_size_tokens
+    cfg["training"]["max_tokens"] = 40
+    cfg["training"]["data_phases"] = [
+        {"name": "main", "split": "main", "until_tokens": 40}
+    ]
+    return cfg
+
+
+def test_finalized_local_corpus_passes_preflight_without_raw_rescan(
+    tmp_path: Path, monkeypatch
+):
+    plan = _single_source_plan(
+        "main", token_quota=40, validation_fraction=0.4, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path, plans=[plan])
+    build_local_corpus(request, dataset_loader=_loader)
+    cfg = _local_preflight_config(tmp_path, request)
+
+    import matgpt.preflight as preflight
+
+    def unexpected_raw_scan(_path):
+        raise AssertionError("chunked preflight must consume signed audits")
+
+    monkeypatch.setattr(preflight, "_normalized_split_evidence", unexpected_raw_scan)
+    report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
+
+    assert report["status"] == "pass", report
+
+
+@pytest.mark.parametrize("failure", ("changed", "traversal"))
+def test_finalized_local_corpus_preflight_fails_closed_on_audit_drift(
+    tmp_path: Path, failure: str
+):
+    plan = _single_source_plan(
+        "main", token_quota=40, validation_fraction=0.4, buffer_size=2
+    )
+    request = make_corpus_request(tmp_path, plans=[plan])
+    build_local_corpus(request, dataset_loader=_loader)
+    cfg = _local_preflight_config(tmp_path, request)
+    manifest_path = request.destination_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if failure == "changed":
+        audit = request.destination_root / "quota_audit.json"
+        audit.write_bytes(audit.read_bytes() + b" ")
+    else:
+        manifest["audits"]["quota_audit"]["path"] = "../quota_audit.json"
+        manifest.pop("manifest_sha256")
+        manifest["manifest_sha256"] = sha256_json(manifest)
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
+
+    assert report["status"] == "fail"
+    manifest_check = next(
+        check for check in report["checks"] if check["name"] == "dataset_manifest"
+    )
+    assert manifest_check["status"] == "fail"
 
 
 def test_forced_interruption_resumes_byte_identically(tmp_path: Path):
@@ -189,7 +436,7 @@ def test_calibration_stop_resumes_same_identity(tmp_path: Path):
     assert calibrated.accepted_quota_tokens >= 24
     completed = build_local_corpus(request, dataset_loader=_loader)
 
-    assert completed.status == "provisional_complete"
+    assert completed.status == "complete"
     assert completed.build_identity_sha256 == calibrated.build_identity_sha256
 
 
@@ -248,7 +495,7 @@ def test_streaming_validation_evidence_restores_identically_after_restart(tmp_pa
     resumed_evidence.pop("progress", None)
     clean_evidence.pop("progress", None)
 
-    assert resumed.status == clean.status == "provisional_complete"
+    assert resumed.status == clean.status == "complete"
     assert resumed_evidence["validation"]["documents"] > 0
     assert resumed_evidence == clean_evidence
     assert _artifact_bytes(resumed_request.destination_root) == _artifact_bytes(
@@ -291,7 +538,7 @@ def test_atomic_unit_state_contains_truthful_streaming_cumulative_evidence(tmp_p
     cursor = cumulative["source_cursors"]["main:common_pile_wikimedia"]
     consumed = rows[:cursor]
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     assert cumulative["raw"] == {
         "documents": cursor,
         "chars": sum(len(str(row["text"])) for row in consumed),
@@ -360,7 +607,7 @@ def test_interval_progress_reports_truthful_unsealed_window_state(
         progress_callback=events.append,
     )
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     running = [event for event in events if event["status"] == "running"]
     assert len(running) >= 2
     unsealed = next(event for event in running if event["last_unit"] is None)
@@ -395,7 +642,7 @@ def test_interval_progress_reports_truthful_unsealed_window_state(
         monotonic_clock=lambda: next(ticks),
         progress_callback=resumed_events.append,
     )
-    assert resumed.status == "provisional_complete"
+    assert resumed.status == "complete"
     assert resumed_events[-1]["throughput"]["elapsed_seconds"] >= committed_elapsed
 
 
@@ -441,7 +688,7 @@ def test_resumed_rolling_rate_uses_only_new_process_tokens_and_interval(tmp_path
 
     assert calibrated.status == "calibration_complete"
     assert saved["accepted_quota_tokens"] < 120
-    assert resumed.status == "provisional_complete"
+    assert resumed.status == "complete"
     assert new_elapsed > 0
     assert new_tokens > 0
     assert rolling == pytest.approx(new_tokens / new_elapsed)
@@ -464,7 +711,7 @@ def test_transient_loader_failure_retries_from_committed_cursor(tmp_path: Path):
 
     result = build_local_corpus(make_corpus_request(tmp_path, plans=[_tiny_plan("main")]), dataset_loader=flaky_loader)
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     assert attempts >= 2
 
 
@@ -771,7 +1018,9 @@ def test_only_first_encoded_document_that_reaches_item_quota_is_committed(tmp_pa
     import sqlite3
     with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
         assert connection.execute("SELECT count(*) FROM seen_hashes").fetchone()[0] == 1
-    assert not (request.destination_root / "manifest.json").exists()
+    assert json.loads(
+        (request.destination_root / "manifest.json").read_text(encoding="utf-8")
+    )["complete"] is True
 
 
 def test_missing_document_license_fails_without_manifest(tmp_path: Path):
@@ -842,7 +1091,7 @@ def test_iteration_timeout_restarts_from_last_committed_cursor(tmp_path: Path):
         make_corpus_request(tmp_path, plans=[_tiny_plan("main")]), dataset_loader=flaky_stream
     )
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     assert calls > 2
 
 
@@ -857,7 +1106,7 @@ def test_completed_windows_accumulate_before_bounded_unit_seal(tmp_path: Path):
 
     result = build_local_corpus(request, dataset_loader=_loader)
 
-    assert result.status == "provisional_complete"
+    assert result.status == "complete"
     assert len(list((request.destination_root / "units").iterdir())) == 1
 
 
@@ -903,7 +1152,7 @@ def test_fresh_restart_recovers_crashes_at_seal_commit_and_publish_boundaries(tm
         build_local_corpus(post_commit, dataset_loader=_loader)
     monkeypatch.setattr(DrivePublisher, "publish", real_publish)
     recovered = build_local_corpus(post_commit, dataset_loader=_loader)
-    assert recovered.status == "provisional_complete"
+    assert recovered.status == "complete"
 
     post_mark = make_corpus_request(tmp_path / "post-mark", plans=[_tiny_plan("main")])
     real_record = DrivePublisher._record_then_release
@@ -920,7 +1169,7 @@ def test_fresh_restart_recovers_crashes_at_seal_commit_and_publish_boundaries(tm
     with pytest.raises(RuntimeError, match="after-mark-before-next-publish"):
         build_local_corpus(post_mark, dataset_loader=_loader)
     monkeypatch.setattr(DrivePublisher, "_record_then_release", real_record)
-    assert build_local_corpus(post_mark, dataset_loader=_loader).status == "provisional_complete"
+    assert build_local_corpus(post_mark, dataset_loader=_loader).status == "complete"
 
 
 def test_subprocess_sigint_stops_after_durable_window_and_restores_handler(tmp_path: Path):

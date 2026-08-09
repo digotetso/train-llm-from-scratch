@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 import numpy as np
@@ -16,6 +16,7 @@ import torch
 
 from matgpt.config import config_to_yaml, validate_config
 from matgpt.data.prepare import effective_validation_split
+from matgpt.data.shard import resolve_shard_artifact_path
 from matgpt.data.sources import PRETRAIN_ROLES, load_source_registry
 from matgpt.model.gpt import GPT, GPTConfig, count_parameters
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
@@ -23,6 +24,7 @@ from matgpt.training.dataset import metadata_path_for_split
 from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.schedule import build_training_schedule
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
+from matgpt.utils.paths import require_managed_path
 
 
 CHECK_IDS = (
@@ -156,9 +158,163 @@ def _configured_data_splits(dataset_cfg: dict[str, Any]) -> list[str]:
     return splits
 
 
+def _safe_relative_artifact(
+    root: Path, value: object, *, kind: str = "file", allow_missing: bool = False
+) -> Path:
+    if not isinstance(value, str):
+        raise ValueError("artifact path must be a safe relative POSIX path")
+    relative = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or str(relative) != value
+    ):
+        raise ValueError("artifact path must be a safe relative POSIX path")
+    return require_managed_path(
+        root,
+        root / Path(*relative.parts),
+        kind=kind,
+        allow_missing=allow_missing,
+    )
+
+
+def _verified_json_artifact(
+    root: Path, record: object, *, internal_hash_field: str | None = None
+) -> tuple[Path, dict[str, Any]]:
+    if not isinstance(record, dict):
+        raise ValueError("manifest artifact evidence must be an object")
+    path = _safe_relative_artifact(root, record.get("path"))
+    if path.stat().st_size != int(record.get("size", -1)):
+        raise ValueError(f"artifact size mismatch: {path}")
+    if sha256_file(path) != record.get("sha256"):
+        raise ValueError(f"artifact SHA-256 mismatch: {path}")
+    payload = _read_json(path)
+    if internal_hash_field is not None:
+        stored = payload.get(internal_hash_field)
+        unsigned = dict(payload)
+        unsigned.pop(internal_hash_field, None)
+        if stored != sha256_json(unsigned):
+            raise ValueError(f"{path.name} internal checksum mismatch")
+    return path, payload
+
+
+def _check_chunked_dataset_manifest(
+    cfg: dict[str, Any], manifest: dict[str, Any], normalized: Path, stored_hash: str
+) -> dict[str, Any]:
+    if manifest.get("complete") is not True or manifest.get("status") != "complete":
+        raise ValueError("Chunked corpus manifest is not complete")
+    if manifest.get("version") != 2 or manifest.get("evidence_schema_version") != 2:
+        raise ValueError("Unsupported chunked corpus builder/schema version")
+    fingerprints = manifest.get("fingerprints")
+    if not isinstance(fingerprints, dict):
+        raise ValueError("Chunked corpus manifest has no fingerprints")
+    if manifest.get("build_identity_sha256") != sha256_json(fingerprints):
+        raise ValueError("Chunked corpus build identity does not match fingerprints")
+    content_keys = (
+        "version",
+        "builder",
+        "storage_format",
+        "build_identity_sha256",
+        "fingerprints",
+        "stages",
+        "sources",
+        "split_stats",
+        "breakdowns",
+        "unit_artifacts",
+        "audits",
+    )
+    content_payload = {key: manifest.get(key) for key in content_keys}
+    if manifest.get("content_sha256") != sha256_json(content_payload):
+        raise ValueError("Chunked corpus content_sha256 does not match logical content")
+    tokenizer_sha256 = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])[
+        "tokenizer_sha256"
+    ]
+    if fingerprints.get("tokenizer_sha256") != tokenizer_sha256:
+        raise ValueError("Chunked corpus tokenizer fingerprint mismatch")
+    revision = cfg["dataset"]["revision"]
+    if isinstance(revision, str) and revision.startswith("registry:"):
+        registry = load_source_registry(cfg["dataset"]["source_registry_path"])
+        if fingerprints.get("source_registry_sha256") != sha256_json(asdict(registry)):
+            raise ValueError("Chunked corpus source-registry fingerprint mismatch")
+
+    audit_payloads: dict[str, dict[str, Any]] = {}
+    audits = manifest.get("audits")
+    if not isinstance(audits, dict):
+        raise ValueError("Chunked corpus manifest has no audit evidence")
+    for name in ("quota_audit", "license_audit", "quality_audit", "overlap_audit"):
+        _path, payload = _verified_json_artifact(
+            normalized, audits.get(name), internal_hash_field="audit_sha256"
+        )
+        if payload.get("passed") is not True:
+            raise ValueError(f"{name} did not pass")
+        audit_payloads[name] = payload
+    if audit_payloads["quota_audit"].get("tokenizer_sha256") != tokenizer_sha256:
+        raise ValueError("Quota audit tokenizer fingerprint mismatch")
+    if audit_payloads["quota_audit"].get("plan_sha256") != fingerprints.get("plan_sha256"):
+        raise ValueError("Quota audit plan fingerprint mismatch")
+    if audit_payloads["license_audit"].get("source_registry_sha256") != fingerprints.get(
+        "source_registry_sha256"
+    ):
+        raise ValueError("License audit source-registry fingerprint mismatch")
+    if audit_payloads["quality_audit"].get("contamination_sha256") != fingerprints.get(
+        "contamination_sha256"
+    ):
+        raise ValueError("Quality audit contamination fingerprint mismatch")
+
+    split_stats = manifest.get("split_stats")
+    split_metadata = manifest.get("split_metadata")
+    if not isinstance(split_stats, dict) or not isinstance(split_metadata, dict):
+        raise ValueError("Chunked corpus split evidence is incomplete")
+    counts: dict[str, int] = {}
+    metadata_evidence: dict[str, Any] = {}
+    for split in _configured_data_splits(cfg["dataset"]):
+        stats = split_stats.get(split)
+        if not isinstance(stats, dict):
+            raise ValueError(f"Chunked corpus has no split {split!r}")
+        count = stats.get("document_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise ValueError(f"Chunked corpus split {split!r} has no documents")
+        chunks = stats.get("raw_chunks")
+        if not isinstance(chunks, list) or not chunks:
+            raise ValueError(f"Chunked corpus split {split!r} has no raw chunks")
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                raise ValueError("raw chunk evidence must be an object")
+            # Validate containment without hashing multi-gigabyte normalized text.
+            chunk_path = _safe_relative_artifact(
+                normalized, chunk.get("path"), allow_missing=False
+            )
+            if chunk_path.stat().st_size != int(chunk.get("size", -1)):
+                raise ValueError(f"raw chunk size mismatch: {chunk_path}")
+        _metadata_path, metadata = _verified_json_artifact(
+            normalized,
+            split_metadata.get(split),
+            internal_hash_field="metadata_sha256",
+        )
+        if metadata.get("split") != split or metadata.get("total_documents") != count:
+            raise ValueError(f"{split} metadata provenance mismatch")
+        counts[split] = count
+        metadata_evidence[split] = {
+            "metadata_sha256": metadata["metadata_sha256"],
+            "document_count": count,
+        }
+    return {
+        "manifest_sha256": stored_hash,
+        "document_counts": counts,
+        "split_evidence": metadata_evidence,
+        "storage_format": "chunked_prebuilt_v1",
+        "build_identity_sha256": manifest["build_identity_sha256"],
+    }
+
+
 def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
     dataset_cfg = cfg["dataset"]
     normalized = Path(dataset_cfg["normalized_dir"])
+    normalized = require_managed_path(
+        normalized, normalized, kind="directory", allow_missing=False
+    )
     manifest = _read_json(normalized / "manifest.json")
     revision = dataset_cfg["revision"]
     if isinstance(revision, str) and revision.startswith("registry:"):
@@ -193,6 +349,10 @@ def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
     hash_payload.pop("manifest_sha256", None)
     if stored_hash != sha256_json(hash_payload):
         raise ValueError("Dataset manifest_sha256 does not match manifest content")
+    if manifest.get("storage_format") == "chunked_prebuilt_v1":
+        return _check_chunked_dataset_manifest(
+            cfg, manifest, normalized, str(stored_hash)
+        )
     counts = {}
     split_evidence = {}
     for split in _configured_data_splits(dataset_cfg):
@@ -235,6 +395,26 @@ def _check_dataset_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
 def _check_dataset_overlap(cfg: dict[str, Any]) -> dict[str, Any]:
     dataset_cfg = cfg["dataset"]
     normalized = Path(dataset_cfg["normalized_dir"])
+    normalized = require_managed_path(
+        normalized, normalized, kind="directory", allow_missing=False
+    )
+    manifest = _read_json(normalized / "manifest.json")
+    if manifest.get("storage_format") == "chunked_prebuilt_v1":
+        audits = manifest.get("audits")
+        if not isinstance(audits, dict):
+            raise ValueError("Chunked corpus manifest has no audit evidence")
+        _path, overlap = _verified_json_artifact(
+            normalized,
+            audits.get("overlap_audit"),
+            internal_hash_field="audit_sha256",
+        )
+        if overlap.get("passed") is not True or overlap.get("overlap_count") != 0:
+            raise ValueError("Signed overlap audit did not prove zero overlap")
+        return {
+            "overlap_count": 0,
+            "validation_hash_count": int(overlap.get("validation_hash_count", 0)),
+            "method": overlap.get("method"),
+        }
     validation_split = effective_validation_split(dataset_cfg)
     validation_hashes = {
         row["text_sha256"]
@@ -293,7 +473,10 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
     details = {}
     dataset_cfg = cfg["dataset"]
     sharding_cfg = cfg["sharding"]
-    output_root = Path(sharding_cfg["output_dir"]).resolve()
+    output_root = Path(sharding_cfg["output_dir"])
+    output_root = require_managed_path(
+        output_root, output_root, kind="directory", allow_missing=False
+    )
     manifest = _read_json(Path(dataset_cfg["normalized_dir"]) / "manifest.json")
     for split in _configured_data_splits(dataset_cfg):
         metadata_path = metadata_path_for_split(sharding_cfg["output_dir"], split)
@@ -323,15 +506,14 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
         eos_count = 0
         maximum_id = -1
         for shard in metadata["shards"]:
-            path = Path(shard["path"])
-            if not path.is_absolute():
-                path = metadata_path.parent / path
-            path = path.resolve()
             try:
-                path.relative_to(output_root)
+                path = resolve_shard_artifact_path(
+                    metadata_path, shard.get("path"), shard_root=output_root
+                )
             except ValueError as exc:
                 raise ValueError(
-                    f"{split} shard path is outside sharding.output_dir: {path}"
+                    f"{split} shard path is outside sharding.output_dir or unsafe: "
+                    f"{shard.get('path')!r}"
                 ) from exc
             expected_tokens = int(shard["num_tokens"])
             expected_bytes = expected_tokens * dtype.itemsize

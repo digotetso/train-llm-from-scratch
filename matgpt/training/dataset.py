@@ -8,6 +8,9 @@ from typing import Any
 import numpy as np
 import torch
 
+from matgpt.data.shard import resolve_shard_artifact_path
+from matgpt.utils.hashing import sha256_file
+
 
 NUMPY_DTYPES = {
     "uint16": np.uint16,
@@ -50,13 +53,21 @@ class PackedTokenDataset:
         # creates a memory map:
         shards = []
         for shard in metadata["shards"]:
-            path = Path(shard["path"])
-            if not path.is_absolute():
-                path = metadata_file.parent / path
+            path = resolve_shard_artifact_path(metadata_file, shard.get("path"))
+            expected_tokens = int(shard["num_tokens"])
+            expected_size = expected_tokens * np.dtype(dtype).itemsize
+            if path.stat().st_size != expected_size:
+                raise ValueError(
+                    f"shard size mismatch: path={path} "
+                    f"observed={path.stat().st_size} expected={expected_size}"
+                )
+            expected_sha256 = shard.get("sha256")
+            if not isinstance(expected_sha256, str) or sha256_file(path) != expected_sha256:
+                raise ValueError(f"shard SHA-256 mismatch: {path}")
             shards.append(
                 PackedShard(
                     path=path,
-                    num_tokens=int(shard["num_tokens"]),
+                    num_tokens=expected_tokens,
 
                     # Make the binary file accessible like a NumPy array.
                     data=np.memmap(path, mode="r", dtype=dtype),

@@ -309,6 +309,30 @@ class BuildJournal:
                 state=json.loads(str(row["state_json"])),
             )
 
+    def iter_units_in_commit_order(self) -> Iterator[UnitCommit]:
+        """Stream units in transaction order for cumulative-snapshot deltas."""
+
+        rows = self.connection.execute(
+            """
+            SELECT unit_id, stage, source_id, row_cursor, quota_tokens,
+                   artifacts_json, state_json, published
+            FROM units
+            ORDER BY rowid
+            """
+        )
+        for row in rows:
+            yield UnitCommit(
+                unit_id=str(row["unit_id"]),
+                stage=str(row["stage"]),
+                source_id=str(row["source_id"]),
+                row_cursor=int(row["row_cursor"]),
+                quota_tokens=int(row["quota_tokens"]),
+                accepted_hashes=self._hashes_for_unit(str(row["unit_id"])),
+                artifacts=tuple(json.loads(str(row["artifacts_json"]))),
+                published=bool(row["published"]),
+                state=json.loads(str(row["state_json"])),
+            )
+
     def units(self) -> tuple[UnitCommit, ...]:
         """Return all committed units; prefer ``iter_units`` for large builds."""
 

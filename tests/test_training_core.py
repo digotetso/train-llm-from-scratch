@@ -11,6 +11,7 @@ from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint
 from matgpt.training.dataset import PackedTokenDataset
 from matgpt.training.pretrain import validate_checkpoint_compatibility
 from matgpt.training.optim import build_optimizer, cosine_warmup_lr
+from matgpt.utils.hashing import sha256_file
 
 
 def tiny_config(vocab_size: int = 64) -> GPTConfig:
@@ -37,7 +38,13 @@ def write_shard_metadata(tmp_path: Path) -> Path:
         "split": "train",
         "dtype": "uint16",
         "total_tokens": 128,
-        "shards": [{"path": str(shard_path), "num_tokens": 128, "sha256": "x"}],
+        "shards": [
+            {
+                "path": str(shard_path),
+                "num_tokens": 128,
+                "sha256": sha256_file(shard_path),
+            }
+        ],
     }
     metadata_path = tmp_path / "train_metadata.json"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
@@ -52,6 +59,29 @@ def test_packed_token_dataset_samples_next_token_targets(tmp_path: Path):
     assert x.shape == (4, 8)
     assert y.shape == (4, 8)
     assert torch.equal(y[:, :-1], x[:, 1:])
+
+
+def test_packed_token_dataset_rejects_traversal_and_checksum_drift(tmp_path: Path):
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    metadata_path = write_shard_metadata(managed)
+    outside = tmp_path / "outside.bin"
+    np.arange(128, dtype=np.uint16).tofile(outside)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["shards"][0]["path"] = "../outside.bin"
+    metadata["shards"][0]["sha256"] = sha256_file(outside)
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="safe relative|escapes"):
+        PackedTokenDataset.from_metadata(metadata_path, context_length=8)
+
+    checksum = tmp_path / "checksum"
+    checksum.mkdir()
+    metadata_path = write_shard_metadata(checksum)
+    shard = checksum / "train_00000.bin"
+    shard.write_bytes(shard.read_bytes() + b"\x00\x00")
+    with pytest.raises(ValueError, match="size|SHA-256"):
+        PackedTokenDataset.from_metadata(metadata_path, context_length=8)
 
 
 def test_optimizer_and_lr_schedule():

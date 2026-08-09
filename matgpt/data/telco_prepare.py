@@ -10,7 +10,7 @@ import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from matgpt.data.normalize import normalize_text
@@ -23,6 +23,7 @@ from matgpt.data.sources import (
 )
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
+from matgpt.utils.paths import require_managed_path
 
 
 DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
@@ -773,7 +774,8 @@ def corpus_has_exact_token_quotas(
 
     return (
         manifest.get("complete") is True
-        and quota_counting.get("method") == "tokenizer_exact"
+        and quota_counting.get("method")
+        in {"tokenizer_exact", "tokenizer_exact_one_pass"}
         and quota_counting.get("tokenizer_sha256") == tokenizer_sha256
         and set(stage_manifests) == set(expected_plans)
         and all(
@@ -781,6 +783,87 @@ def corpus_has_exact_token_quotas(
             for stage, plan_sha256 in expected_plans.items()
         )
     )
+
+
+def _resolve_corpus_relative_file(
+    corpus_root: Path, relative_path: object
+) -> Path:
+    if not isinstance(relative_path, str):
+        raise ValueError("corpus artifact path must be a safe relative POSIX path")
+    relative = PurePosixPath(relative_path)
+    if (
+        not relative_path
+        or "\\" in relative_path
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or str(relative) != relative_path
+    ):
+        raise ValueError("corpus artifact path must be a safe relative POSIX path")
+    return require_managed_path(
+        corpus_root,
+        corpus_root / Path(*relative.parts),
+        kind="file",
+        allow_missing=False,
+    )
+
+
+def iter_corpus_split_records(
+    corpus_dir: str | Path, split: str
+) -> Iterator[dict[str, Any]]:
+    """Read one finalized chunked split, with the legacy JSONL fallback."""
+
+    if not split or Path(split).name != split:
+        raise ValueError("split must be a safe path component")
+    root = require_managed_path(
+        Path(corpus_dir), Path(corpus_dir), kind="directory", allow_missing=False
+    )
+    manifest_path = require_managed_path(
+        root, root / "manifest.json", kind="file", allow_missing=False
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("corpus manifest must contain a JSON object")
+    stored = manifest.get("manifest_sha256")
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    if stored != sha256_json(unsigned):
+        raise ValueError("corpus manifest checksum does not match its content")
+    if manifest.get("storage_format") == "chunked_prebuilt_v1":
+        try:
+            chunks = manifest["split_stats"][split]["raw_chunks"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"chunked corpus has no split {split!r}") from error
+        if not isinstance(chunks, list) or not chunks:
+            raise ValueError(f"chunked corpus split {split!r} has no raw chunks")
+        for chunk in chunks:
+            if not isinstance(chunk, Mapping):
+                raise ValueError("raw chunk evidence must be a mapping")
+            path = _resolve_corpus_relative_file(root, chunk.get("path"))
+            if path.stat().st_size != int(chunk.get("size", -1)):
+                raise ValueError(f"raw chunk size mismatch: {path}")
+            if sha256_file(path) != chunk.get("sha256"):
+                raise ValueError(f"raw chunk checksum mismatch: {path}")
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError(f"{path}:{line_number} must contain an object")
+                    yield row
+        return
+
+    legacy = require_managed_path(
+        root, root / f"{split}.jsonl", kind="file", allow_missing=False
+    )
+    with legacy.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"{legacy}:{line_number} must contain an object")
+            yield row
 
 
 def audit_token_quotas(

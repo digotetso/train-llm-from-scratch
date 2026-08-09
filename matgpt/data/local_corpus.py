@@ -15,10 +15,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import numpy as np
+
 from matgpt.data.local_publish import DrivePublisher, StoragePolicy
 from matgpt.data.local_state import BuildIdentity, BuildJournal, UnitCommit
 from matgpt.data.local_tokens import PackedShardWriter, encode_record_batch
 from matgpt.data.quality import DataQualityPolicy, QualityFilter
+from matgpt.data.shard import build_split_metadata
 from matgpt.data.sources import SourceRegistry
 from matgpt.data.telco_prepare import (
     _item_id,
@@ -344,6 +347,14 @@ def _build_local_corpus(
                         pending_unit=_pending_unit([], [], 0, 0, 0, window.next_raw_cursor, window.next_raw_cursor),
                     )
                     if stop_after_quota_tokens is not None and total >= stop_after_quota_tokens:
+                        _write_calibration_report(
+                            request,
+                            identity,
+                            journal,
+                            counters,
+                            cumulative,
+                            status="calibration_complete",
+                        )
                         _write_progress(
                             local_root,
                             LocalCorpusProgress(
@@ -387,8 +398,15 @@ def _build_local_corpus(
                 missing = [key for key in source_items if counters.get((stage, key), 0) < int(items[key]["token_quota"])]
                 if missing:
                     raise ValueError(f"Source {source_id!r} exhausted before quota")
-        _verify_published_units(journal)
-        manifest = _manifest(identity, counters, journal)
+        manifest = _finalize_corpus(
+            request,
+            identity,
+            journal,
+            counters,
+            cumulative,
+            tokenizer,
+            publisher,
+        )
         total = sum(counters.values())
         _write_progress(
             local_root,
@@ -397,7 +415,7 @@ def _build_local_corpus(
                 source_id="complete",
                 row_cursor=0,
                 accepted_quota_tokens=total,
-                status="provisional_complete",
+                status="complete",
             ), cumulative=cumulative, publisher=publisher,
             interval_seconds=request.progress_interval_seconds,
             runtime=progress_runtime,
@@ -416,7 +434,7 @@ def _build_local_corpus(
             },
             pending_unit=_pending_unit([], [], 0, 0, 0, 0, 0),
         )
-        return LocalCorpusResult("provisional_complete", identity.content_sha256, total, manifest)
+        return LocalCorpusResult("complete", identity.content_sha256, total, manifest)
 
 
 def build_local_corpus(
@@ -708,6 +726,13 @@ def _empty_cumulative() -> dict[str, Any]:
             "content_order_sha256": "0" * 64,
         },
         "fit": {"documents": 0, "tokens": 0, "packed_tokens": 0, "chars": 0, "bytes": 0, "raw_bytes": 0},
+        "breakdowns": {
+            "stages": {},
+            "roles": {},
+            "items": {},
+            "sources": {},
+            "buckets": {},
+        },
         "item_quotas": {}, "source_cursors": {}, "packed": {"raw_units": 0, "shards": 0, "raw_bytes": 0, "token_bytes": 0},
         "quality": {}, "items": {}, "last_document": {}, "overshoot": {}, "last_unit": None,
     }
@@ -755,6 +780,41 @@ def _accepted(
     license_name = str(row.get("license", ""))
     cumulative["licenses"][license_name] = cumulative["licenses"].get(license_name, 0) + 1
     item = _item_id(row)
+    breakdowns = cumulative.setdefault("breakdowns", _empty_cumulative()["breakdowns"])
+    role = str(row.get("role", ""))
+    source_id = str(row.get("source_id", ""))
+    bucket_id = row.get("bucket_id")
+    keys = {
+        "stages": stage,
+        "roles": f"{stage}:{role}",
+        "items": f"{stage}:{item}",
+        "sources": f"{stage}:{source_id}",
+    }
+    if bucket_id is not None:
+        keys["buckets"] = f"{stage}:{source_id}/{bucket_id}"
+    for category, key in keys.items():
+        category_counts = breakdowns.setdefault(category, {})
+        counts = category_counts.setdefault(
+            key,
+            {
+                "documents": 0,
+                "fit_documents": 0,
+                "validation_documents": 0,
+                "quota_tokens": 0,
+                "validation_tokens": 0,
+                "packed_tokens": 0,
+                "characters": 0,
+                "text_bytes": 0,
+                "raw_bytes": 0,
+            },
+        )
+        counts["documents"] += 1
+        counts["fit_documents" if split == "fit" else "validation_documents"] += 1
+        counts["quota_tokens" if split == "fit" else "validation_tokens"] += tokens
+        counts["packed_tokens"] += packed_tokens
+        counts["characters"] += len(text)
+        counts["text_bytes"] += text_bytes
+        counts["raw_bytes"] += raw_bytes
     cumulative["last_document"][item] = str(row.get("document_id", row.get("content_sha256", "")))
     item_key = f"{stage}:{item}"
     cumulative["items"][item_key] = {
@@ -880,19 +940,609 @@ def _journal_overhead_bytes(hashes: list[str]) -> int:
     return 256 + len(hashes) * 192
 
 
-def _manifest(identity, counters, journal):
-    artifacts = tuple(journal.iter_artifacts())
-    manifest = {"version": 1, "complete": False, "status": "provisional", "build_identity_sha256": identity.content_sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
-    manifest["content_sha256"] = sha256_json(manifest)
-    return manifest
-
-
 def _verify_published_units(journal: BuildJournal) -> None:
     """Task 3 may report a provisional result only after every unit is verified."""
 
     pending = [unit.unit_id for unit in journal.iter_units() if not unit.published]
     if pending:
         raise RuntimeError(f"provisional corpus has unpublished unit artifacts: {pending}")
+
+
+def _reverified_unit_artifacts(
+    destination_root: Path, journal: BuildJournal
+) -> tuple[dict[str, object], ...]:
+    """Re-read every published destination before any eligibility evidence."""
+
+    _verify_published_units(journal)
+    verified: list[dict[str, object]] = []
+    for artifact in journal.published_artifacts():
+        relative = artifact.get("destination_relative_path")
+        if not isinstance(relative, str) or relative != artifact.get("path"):
+            raise ValueError("published corpus artifact has an invalid destination mapping")
+        path = require_managed_path(
+            destination_root,
+            destination_root / relative,
+            kind="file",
+            allow_missing=False,
+        )
+        size = int(artifact["size"])
+        digest = str(artifact["sha256"])
+        if path.stat().st_size != size or sha256_file(path) != digest:
+            raise ValueError(f"published corpus artifact failed re-verification: {relative}")
+        if artifact.get("destination_sha256") != digest:
+            raise ValueError(f"published corpus artifact journal checksum mismatch: {relative}")
+        verified.append(
+            {
+                "unit_id": str(artifact["unit_id"]),
+                "path": relative,
+                "size": size,
+                "sha256": digest,
+            }
+        )
+    return tuple(sorted(verified, key=lambda item: str(item["path"])))
+
+
+def _json_evidence_payload(payload: Mapping[str, object], hash_field: str) -> dict[str, object]:
+    evidence = dict(payload)
+    evidence.pop(hash_field, None)
+    evidence[hash_field] = sha256_json(evidence)
+    return evidence
+
+
+def _publish_json_evidence(
+    publisher: DrivePublisher,
+    relative_path: str,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Publish one immutable JSON file without replacing an existing name."""
+
+    relative = Path(relative_path)
+    if relative.is_absolute() or relative == Path(".") or ".." in relative.parts:
+        raise ValueError("final evidence path must be a safe relative path")
+    destination = require_managed_path(
+        publisher.destination_root,
+        publisher.destination_root / relative,
+        kind="file",
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    require_managed_path(
+        publisher.destination_root, destination.parent, kind="directory", allow_missing=False
+    )
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    partial = require_managed_path(
+        publisher.destination_root, Path(f"{destination}.partial"), kind="file"
+    )
+    with publisher._publication_lock():
+        if destination.exists():
+            if destination.read_bytes() != encoded:
+                raise FileExistsError(
+                    f"refusing to overwrite different final evidence: {destination}"
+                )
+        else:
+            if partial.exists():
+                if partial.read_bytes() != encoded:
+                    raise FileExistsError(
+                        f"refusing to replace different partial evidence: {partial}"
+                    )
+            else:
+                with open_exclusive_nofollow(partial, "wb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            publisher._move_partial_to_final(partial, destination)
+        if destination.stat().st_size != len(encoded) or sha256_file(destination) != hashlib.sha256(encoded).hexdigest():
+            raise ValueError(f"final evidence failed publication verification: {destination}")
+    return {
+        "path": relative.as_posix(),
+        "size": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _existing_json_evidence(
+    destination_root: Path, relative_path: str, hash_field: str
+) -> tuple[dict[str, object], dict[str, object]] | None:
+    path = destination_root / relative_path
+    if not path.exists():
+        return None
+    path = require_managed_path(
+        destination_root, path, kind="file", allow_missing=False
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{relative_path} must contain a JSON object")
+    stored = payload.get(hash_field)
+    unsigned = dict(payload)
+    unsigned.pop(hash_field, None)
+    if stored != sha256_json(unsigned):
+        raise ValueError(f"{relative_path} checksum does not match its content")
+    return payload, {
+        "path": relative_path,
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _calibration_payload(
+    identity: BuildIdentity,
+    counters: Mapping[tuple[str, str], int],
+    cumulative: Mapping[str, Any],
+    *,
+    status: str,
+) -> dict[str, object]:
+    progress = cumulative.get("progress", {})
+    return _json_evidence_payload(
+        {
+            "version": 1,
+            "status": status,
+            "build_identity_sha256": identity.content_sha256,
+            "accepted_quota_tokens": sum(counters.values()),
+            "committed_units": int(cumulative.get("committed_units", 0)),
+            "elapsed_seconds": float(progress.get("elapsed_seconds", 0.0))
+            if isinstance(progress, Mapping)
+            else 0.0,
+            "peak_rss_bytes": _rss_bytes(),
+        },
+        "calibration_report_sha256",
+    )
+
+
+def _write_calibration_report(
+    request: LocalCorpusRequest,
+    identity: BuildIdentity,
+    journal: BuildJournal,
+    counters: Mapping[tuple[str, str], int],
+    cumulative: Mapping[str, Any],
+    *,
+    status: str,
+) -> dict[str, object]:
+    _reverified_unit_artifacts(Path(request.destination_root), journal)
+    publisher = DrivePublisher(
+        local_root=request.local_root,
+        destination_root=request.destination_root,
+        policy=StoragePolicy(request.max_working_bytes, request.min_free_bytes),
+        journal=journal,
+    )
+    existing = _existing_json_evidence(
+        Path(request.destination_root),
+        "calibration_report.json",
+        "calibration_report_sha256",
+    )
+    if existing is not None:
+        if existing[0].get("build_identity_sha256") != identity.content_sha256:
+            raise ValueError("calibration report identity does not match this build")
+        return existing[1]
+    payload = _calibration_payload(identity, counters, cumulative, status=status)
+    return _publish_json_evidence(publisher, "calibration_report.json", payload)
+
+
+def _unit_cumulative_deltas(journal: BuildJournal) -> dict[str, dict[str, int]]:
+    """Recover per-split document/character counters from atomic snapshots."""
+
+    totals: dict[str, dict[str, int]] = {}
+    previous = _empty_cumulative()
+    for unit in journal.iter_units_in_commit_order():
+        saved = unit.state.get("cumulative")
+        if not isinstance(saved, Mapping):
+            raise ValueError(f"unit {unit.unit_id} is missing cumulative evidence")
+        for saved_split, public_split in (("fit", unit.stage), ("validation", "validation")):
+            current_stats = saved.get(saved_split)
+            previous_stats = previous.get(saved_split)
+            if not isinstance(current_stats, Mapping) or not isinstance(previous_stats, Mapping):
+                raise ValueError(f"unit {unit.unit_id} has invalid split evidence")
+            target = totals.setdefault(
+                public_split,
+                {"document_count": 0, "total_chars": 0, "text_bytes": 0},
+            )
+            for source_name, target_name in (
+                ("documents", "document_count"),
+                ("chars", "total_chars"),
+                ("bytes", "text_bytes"),
+            ):
+                delta = int(current_stats.get(source_name, 0)) - int(
+                    previous_stats.get(source_name, 0)
+                )
+                if delta < 0:
+                    raise ValueError("cumulative journal counters moved backwards")
+                target[target_name] += delta
+        previous = json.loads(json.dumps(saved))
+    return totals
+
+
+def _source_and_stage_evidence(
+    request: LocalCorpusRequest,
+    counters: Mapping[tuple[str, str], int],
+    cumulative: Mapping[str, Any],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    stages: dict[str, object] = {}
+    selected_sources: set[str] = set()
+    item_evidence = cumulative.get("items", {})
+    if not isinstance(item_evidence, Mapping):
+        raise ValueError("journal item evidence is invalid")
+    breakdowns = cumulative.get("breakdowns", {})
+    if not isinstance(breakdowns, Mapping):
+        raise ValueError("journal breakdown evidence is invalid")
+    breakdown_items = breakdowns.get("items", {})
+    breakdown_roles = breakdowns.get("roles", {})
+    if not isinstance(breakdown_items, Mapping) or not isinstance(breakdown_roles, Mapping):
+        raise ValueError("journal item/role breakdown evidence is invalid")
+    for plan in request.plans:
+        stage = str(plan["stage"])
+        items: dict[str, object] = {}
+        roles: dict[str, dict[str, int]] = {}
+        for item in plan["items"]:
+            item_id = str(item["id"])
+            source_id = str(item["source_id"])
+            selected_sources.add(source_id)
+            requested = int(item["token_quota"])
+            actual = int(counters.get((stage, item_id), 0))
+            saved = item_evidence.get(f"{stage}:{item_id}", {})
+            if not isinstance(saved, Mapping):
+                saved = {}
+            last_document_tokens = int(saved.get("last_document_tokens", 0))
+            overshoot = actual - requested
+            passed = actual >= requested and overshoot <= last_document_tokens
+            if not passed:
+                raise ValueError(
+                    f"quota audit failed for {stage}/{item_id}: "
+                    f"actual={actual} requested={requested} last_document={last_document_tokens}"
+                )
+            role = str(item["role"])
+            role_stats = roles.setdefault(
+                role, {"requested_tokens": 0, "actual_tokens": 0}
+            )
+            role_stats["requested_tokens"] += requested
+            role_stats["actual_tokens"] += actual
+            items[item_id] = {
+                "source_id": source_id,
+                "bucket_id": item.get("bucket_id"),
+                "role": role,
+                "requested_tokens": requested,
+                "actual_tokens": actual,
+                "last_document_tokens": last_document_tokens,
+                "overshoot_tokens": overshoot,
+                "passed": True,
+                **dict(breakdown_items.get(f"{stage}:{item_id}", {})),
+            }
+            if int(items[item_id].get("quota_tokens", 0)) != actual:
+                raise ValueError(f"item breakdown does not match quota counter: {stage}/{item_id}")
+        for role, role_stats in roles.items():
+            detail = breakdown_roles.get(f"{stage}:{role}", {})
+            if not isinstance(detail, Mapping):
+                raise ValueError(f"role breakdown is invalid: {stage}/{role}")
+            role_stats.update(dict(detail))
+            if int(role_stats.get("quota_tokens", 0)) != int(role_stats["actual_tokens"]):
+                raise ValueError(f"role breakdown does not match quota counters: {stage}/{role}")
+        stages[stage] = {
+            "plan_sha256": str(plan["plan_sha256"]),
+            "requested_tokens": sum(int(item["token_quota"]) for item in plan["items"]),
+            "actual_tokens": sum(
+                int(counters.get((stage, str(item["id"])), 0))
+                for item in plan["items"]
+            ),
+            "roles": {name: roles[name] for name in sorted(roles)},
+            "items": {name: items[name] for name in sorted(items)},
+        }
+    sources = []
+    for source_id in sorted(selected_sources):
+        source = request.registry.by_id[source_id]
+        if source.license_review not in {"required", "cleared"}:
+            raise ValueError(f"source {source_id!r} has invalid license review state")
+        sources.append(
+            {
+                "id": source.id,
+                "hf_name": source.hf_name,
+                "revision": source.revision,
+                "role": source.role,
+                "license": source.license,
+                "license_review": source.license_review,
+            }
+        )
+    return stages, sources
+
+
+def _split_evidence(
+    request: LocalCorpusRequest,
+    tokenizer,
+    artifacts: tuple[dict[str, object], ...],
+    journal: BuildJournal,
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    units = {unit.unit_id: unit for unit in journal.iter_units()}
+    raw_by_split: dict[str, list[dict[str, object]]] = {}
+    shards_by_split: dict[str, list[dict[str, object]]] = {}
+    for artifact in artifacts:
+        unit = units[str(artifact["unit_id"])]
+        name = Path(str(artifact["path"])).name
+        if name == "fit.jsonl" or name.startswith("fit_"):
+            split = unit.stage
+        elif name == "holdout.jsonl" or name.startswith("holdout_"):
+            split = "validation"
+        else:
+            raise ValueError(f"unknown committed corpus artifact: {artifact['path']}")
+        public = {
+            "path": str(artifact["path"]),
+            "size": int(artifact["size"]),
+            "sha256": str(artifact["sha256"]),
+        }
+        if name.endswith(".jsonl"):
+            raw_by_split.setdefault(split, []).append(public)
+        elif name.endswith(".bin"):
+            shards_by_split.setdefault(split, []).append(public)
+    deltas = _unit_cumulative_deltas(journal)
+    eos_id = tokenizer.token_to_id("<|eos|>")
+    if eos_id is None:
+        raise ValueError("tokenizer must define <|eos|>")
+    split_stats: dict[str, object] = {}
+    metadata_payloads: dict[str, dict[str, object]] = {}
+    for split in sorted(set(raw_by_split) | set(shards_by_split)):
+        shards = []
+        eos_count = 0
+        maximum_id = -1
+        for index, artifact in enumerate(sorted(shards_by_split.get(split, []), key=lambda item: str(item["path"]))):
+            path = require_managed_path(
+                request.destination_root,
+                Path(request.destination_root) / str(artifact["path"]),
+                kind="file",
+                allow_missing=False,
+            )
+            if int(artifact["size"]) % np.dtype(np.uint16).itemsize:
+                raise ValueError(f"shard byte size is not aligned: {artifact['path']}")
+            values = np.memmap(path, mode="r", dtype=np.uint16)
+            if values.size:
+                maximum_id = max(maximum_id, int(values.max()))
+                eos_count += int(np.count_nonzero(values == eos_id))
+            shards.append(
+                {
+                    "relative_path": str(artifact["path"]),
+                    "index": index,
+                    "byte_size": int(artifact["size"]),
+                    "num_tokens": int(values.size),
+                    "sha256": str(artifact["sha256"]),
+                }
+            )
+        expected_documents = int(deltas.get(split, {}).get("document_count", 0))
+        if eos_count != expected_documents:
+            raise ValueError(
+                f"{split} EOS/document mismatch: eos={eos_count} documents={expected_documents}"
+            )
+        if maximum_id >= tokenizer.get_vocab_size():
+            raise ValueError(
+                f"{split} token ID {maximum_id} exceeds tokenizer vocabulary"
+            )
+        metadata = build_split_metadata(
+            split=split,
+            tokenizer_sha256=sha256_file(Path(request.tokenizer_dir) / "tokenizer.json"),
+            dtype="uint16",
+            append_eos=True,
+            shard_size_tokens=request.shard_size_tokens,
+            total_documents=expected_documents,
+            shards=shards,
+        )
+        metadata["maximum_token_id"] = maximum_id
+        metadata["eos_count"] = eos_count
+        metadata.pop("metadata_sha256")
+        metadata["metadata_sha256"] = sha256_json(metadata)
+        metadata_payloads[split] = metadata
+        raw_chunks = sorted(raw_by_split.get(split, []), key=lambda item: str(item["path"]))
+        tokenizer_tokens = int(metadata["total_tokens"]) - expected_documents
+        stage_quota_tokens = sum(
+            int(value)
+            for (stage, _item), value in _state(journal)[0].items()
+            if stage == split
+        )
+        if split != "validation" and tokenizer_tokens != stage_quota_tokens:
+            raise ValueError(
+                f"{split} packed token count does not match journal quota counters"
+            )
+        split_stats[split] = {
+            "storage_format": "chunked_prebuilt_v1",
+            "metadata_path": f"{split}_metadata.json",
+            "document_count": expected_documents,
+            "raw_bytes": sum(int(item["size"]) for item in raw_chunks),
+            "total_chars": int(deltas.get(split, {}).get("total_chars", 0)),
+            "text_bytes": int(deltas.get(split, {}).get("text_bytes", 0)),
+            "documents_sha256": sha256_json(
+                [{"path": item["path"], "sha256": item["sha256"]} for item in raw_chunks]
+            ),
+            "quota_tokens": stage_quota_tokens
+            if split != "validation"
+            else tokenizer_tokens,
+            "tokens": tokenizer_tokens,
+            "packed_tokens": int(metadata["total_tokens"]),
+            "raw_chunks": raw_chunks,
+            "shards": [
+                {"path": shard["path"], "num_tokens": shard["num_tokens"], "sha256": shard["sha256"]}
+                for shard in metadata["shards"]
+            ],
+        }
+    return split_stats, metadata_payloads
+
+
+def _validated_quality_evidence(cumulative: Mapping[str, Any]) -> dict[str, object]:
+    quality = cumulative.get("quality")
+    if not isinstance(quality, Mapping):
+        raise ValueError("quality evidence is missing")
+    reasons = quality.get("rejection_reasons")
+    if not isinstance(reasons, Mapping):
+        raise ValueError("quality rejection evidence is missing")
+    total = int(quality.get("total_documents", -1))
+    accepted = int(quality.get("accepted_documents", -1))
+    rejected = int(quality.get("rejected_documents", -1))
+    reason_total = sum(int(value) for value in reasons.values())
+    corpus = cumulative.get("corpus", {})
+    discarded = cumulative.get("quota_discarded", {})
+    expected_accepted = int(corpus.get("documents", 0)) + int(
+        discarded.get("documents", 0)
+    )
+    if (
+        quality.get("enabled") is not True
+        or quality.get("exact_dedup") is not True
+        or not isinstance(quality.get("contamination_engine"), str)
+        or not quality.get("contamination_engine")
+        or not isinstance(quality.get("contamination_patterns_sha256"), str)
+        or len(str(quality.get("contamination_patterns_sha256"))) != 64
+        or total != accepted + rejected
+        or rejected != reason_total
+        or accepted != expected_accepted
+    ):
+        raise ValueError(
+            "quality counts and mandatory controls do not reconcile with committed corpus evidence"
+        )
+    return dict(quality)
+
+
+def _finalize_corpus(
+    request: LocalCorpusRequest,
+    identity: BuildIdentity,
+    journal: BuildJournal,
+    counters: Mapping[tuple[str, str], int],
+    cumulative: Mapping[str, Any],
+    tokenizer,
+    publisher: DrivePublisher,
+) -> dict[str, object]:
+    """Finalize already-committed evidence; never reopen upstream sources."""
+
+    unit_artifacts = _reverified_unit_artifacts(Path(request.destination_root), journal)
+    stages, sources = _source_and_stage_evidence(request, counters, cumulative)
+    split_stats, metadata_payloads = _split_evidence(
+        request, tokenizer, unit_artifacts, journal
+    )
+    if any(float(plan.get("validation_fraction", 0.0)) > 0 for plan in request.plans):
+        validation = split_stats.get("validation")
+        if not isinstance(validation, Mapping) or int(validation.get("document_count", 0)) < 1:
+            raise ValueError("validation holdout is empty; corpus cannot be finalized")
+    breakdowns = cumulative.get("breakdowns", {})
+    if not isinstance(breakdowns, Mapping):
+        raise ValueError("journal breakdown evidence is invalid")
+    quota_audit = _json_evidence_payload(
+        {
+            "version": 1,
+            "passed": True,
+            "method": "tokenizer_exact_one_pass",
+            "tokenizer_sha256": identity.tokenizer_sha256,
+            "plan_sha256": identity.plan_sha256,
+            "stages": stages,
+        },
+        "audit_sha256",
+    )
+    license_audit = _json_evidence_payload(
+        {
+            "version": 1,
+            "passed": True,
+            "source_registry_sha256": identity.source_registry_sha256,
+            "sources": sources,
+            "document_license_counts": dict(sorted(cumulative.get("licenses", {}).items())),
+        },
+        "audit_sha256",
+    )
+    quality = _validated_quality_evidence(cumulative)
+    quality_audit = _json_evidence_payload(
+        {
+            "version": 1,
+            "passed": True,
+            "quality_policy_sha256": identity.quality_policy_sha256,
+            "contamination_sha256": identity.contamination_sha256,
+            "exact_dedup": True,
+            "quality": quality,
+            "rejected": cumulative.get("rejected", {}),
+        },
+        "audit_sha256",
+    )
+    overlap_audit = _json_evidence_payload(
+        {
+            "version": 1,
+            "passed": True,
+            "method": "global_committed_content_sha256_uniqueness",
+            "overlap_count": 0,
+            "validation_hash_count": int(cumulative.get("validation", {}).get("documents", 0)),
+        },
+        "audit_sha256",
+    )
+
+    evidence_records: dict[str, dict[str, object]] = {}
+    for split, metadata in sorted(metadata_payloads.items()):
+        evidence_records[f"{split}_metadata"] = _publish_json_evidence(
+            publisher, f"{split}_metadata.json", metadata
+        )
+    for name, payload in (
+        ("quota_audit", quota_audit),
+        ("license_audit", license_audit),
+        ("quality_audit", quality_audit),
+        ("overlap_audit", overlap_audit),
+    ):
+        evidence_records[name] = _publish_json_evidence(
+            publisher, f"{name}.json", payload
+        )
+    existing_calibration = _existing_json_evidence(
+        Path(request.destination_root),
+        "calibration_report.json",
+        "calibration_report_sha256",
+    )
+    if existing_calibration is None:
+        calibration_payload = _calibration_payload(
+            identity, counters, cumulative, status="complete"
+        )
+        evidence_records["calibration_report"] = _publish_json_evidence(
+            publisher, "calibration_report.json", calibration_payload
+        )
+    else:
+        if (
+            existing_calibration[0].get("build_identity_sha256")
+            != identity.content_sha256
+        ):
+            raise ValueError("calibration report identity does not match this build")
+        evidence_records["calibration_report"] = existing_calibration[1]
+
+    for artifact in evidence_records.values():
+        path = require_managed_path(
+            request.destination_root,
+            Path(request.destination_root) / str(artifact["path"]),
+            kind="file",
+            allow_missing=False,
+        )
+        if path.stat().st_size != int(artifact["size"]) or sha256_file(path) != artifact["sha256"]:
+            raise ValueError(f"final evidence failed re-verification: {artifact['path']}")
+
+    logical_content = {
+        "version": 2,
+        "builder": "local_corpus",
+        "storage_format": "chunked_prebuilt_v1",
+        "build_identity_sha256": identity.content_sha256,
+        "fingerprints": identity.content_payload,
+        "stages": stages,
+        "sources": sources,
+        "split_stats": split_stats,
+        "breakdowns": breakdowns,
+        "unit_artifacts": unit_artifacts,
+        "audits": {
+            name: evidence_records[name]
+            for name in ("quota_audit", "license_audit", "quality_audit", "overlap_audit")
+        },
+    }
+    manifest: dict[str, object] = {
+        **logical_content,
+        "complete": True,
+        "status": "complete",
+        "evidence_schema_version": _EVIDENCE_SCHEMA_VERSION,
+        "quota_counting": {
+            "method": "tokenizer_exact_one_pass",
+            "tokenizer_sha256": identity.tokenizer_sha256,
+        },
+        "quality_filter": quality,
+        "license_document_counts": dict(sorted(cumulative.get("licenses", {}).items())),
+        "validation": split_stats.get("validation", {}),
+        "split_metadata": {
+            split: evidence_records[f"{split}_metadata"]
+            for split in sorted(metadata_payloads)
+        },
+        "calibration_report": evidence_records["calibration_report"],
+        "content_sha256": sha256_json(logical_content),
+    }
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    _publish_json_evidence(publisher, "manifest.json", manifest)
+    return manifest
 
 
 def _progress_runtime(
