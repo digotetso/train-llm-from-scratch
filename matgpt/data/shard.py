@@ -12,9 +12,9 @@ from typing import Any
 
 import numpy as np
 
+from matgpt.data.prepare import effective_validation_split
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json
-from matgpt.data.prepare import effective_validation_split
 
 
 DTYPES = {
@@ -35,11 +35,64 @@ def _flush_shard(
     array = np.asarray(tokens, dtype=DTYPES[dtype])
     array.tofile(path)
     return {
-        "path": str(path),
+        "path": str(path.resolve()),
+        "relative_path": path.name,
         "index": shard_index,
+        "byte_size": path.stat().st_size,
         "num_tokens": int(array.size),
         "sha256": sha256_file(path),
     }
+
+
+def build_split_metadata(
+    *,
+    split: str,
+    tokenizer_sha256: str,
+    dtype: str,
+    append_eos: bool,
+    shard_size_tokens: int,
+    total_documents: int,
+    shards: list[dict[str, object]],
+) -> dict[str, object]:
+    """Build portable split metadata from local shard artifacts.
+
+    Local artifact records retain their absolute ``path`` for publication,
+    while public metadata stores only the checked relative publication path.
+    """
+
+    public_shards = []
+    for shard in shards:
+        relative_path = shard.get("relative_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ValueError("shard artifacts must include a non-empty relative_path")
+        relative = Path(relative_path)
+        if (
+            relative.is_absolute()
+            or relative == Path(".")
+            or ".." in relative.parts
+        ):
+            raise ValueError(f"unsafe shard relative_path: {relative_path!r}")
+        public_shards.append(
+            {
+                key: value
+                for key, value in shard.items()
+                if key not in {"path", "relative_path"}
+            }
+            | {"path": relative_path}
+        )
+
+    metadata: dict[str, object] = {
+        "split": split,
+        "tokenizer_sha256": tokenizer_sha256,
+        "dtype": dtype,
+        "append_eos": append_eos,
+        "shard_size_tokens": shard_size_tokens,
+        "total_documents": total_documents,
+        "total_tokens": sum(int(shard["num_tokens"]) for shard in public_shards),
+        "shards": public_shards,
+    }
+    metadata["metadata_sha256"] = sha256_json(metadata)
+    return metadata
 
 
 def tokenize_jsonl_to_shards(
@@ -70,7 +123,6 @@ def tokenize_jsonl_to_shards(
     out = Path(output_dir)
     shard_tokens: list[int] = []
     shards: list[dict[str, Any]] = []
-    total_tokens = 0
     total_documents = 0
 
     with Path(input_path).open("r", encoding="utf-8") as f:
@@ -98,7 +150,6 @@ def tokenize_jsonl_to_shards(
             # Those IDs are appended to the same shard list:
             for token_id in ids:
                 shard_tokens.append(int(token_id))
-                total_tokens += 1
 
                 # Has the shard reached its requested size?
                 if len(shard_tokens) >= shard_size_tokens:
@@ -111,18 +162,20 @@ def tokenize_jsonl_to_shards(
     if shard_tokens:
         shards.append(_flush_shard(shard_tokens, out, split, len(shards), dtype))
 
-    metadata = {
-        "split": split,
+    metadata = build_split_metadata(
+        split=split,
+        tokenizer_sha256=tokenizer_metadata["tokenizer_sha256"],
+        dtype=dtype,
+        append_eos=append_eos,
+        shard_size_tokens=shard_size_tokens,
+        total_documents=total_documents,
+        shards=shards,
+    )
+    metadata.update({
         "input_path": str(Path(input_path)),
         "tokenizer_dir": str(Path(tokenizer_dir)),
-        "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
-        "dtype": dtype,
-        "append_eos": append_eos,
-        "shard_size_tokens": shard_size_tokens,
-        "total_documents": total_documents,
-        "total_tokens": total_tokens,
-        "shards": shards,
-    }
+    })
+    metadata.pop("metadata_sha256")
     metadata["metadata_sha256"] = sha256_json(metadata)
     (out / f"{split}_metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",

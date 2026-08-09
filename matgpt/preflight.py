@@ -296,7 +296,8 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
     output_root = Path(sharding_cfg["output_dir"]).resolve()
     manifest = _read_json(Path(dataset_cfg["normalized_dir"]) / "manifest.json")
     for split in _configured_data_splits(dataset_cfg):
-        metadata = _read_json(metadata_path_for_split(sharding_cfg["output_dir"], split))
+        metadata_path = metadata_path_for_split(sharding_cfg["output_dir"], split)
+        metadata = _read_json(metadata_path)
         stored_hash = metadata.get("metadata_sha256")
         hash_payload = dict(metadata)
         hash_payload.pop("metadata_sha256", None)
@@ -322,7 +323,10 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
         eos_count = 0
         maximum_id = -1
         for shard in metadata["shards"]:
-            path = Path(shard["path"]).resolve()
+            path = Path(shard["path"])
+            if not path.is_absolute():
+                path = metadata_path.parent / path
+            path = path.resolve()
             try:
                 path.relative_to(output_root)
             except ValueError as exc:

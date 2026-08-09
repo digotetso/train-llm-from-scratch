@@ -564,7 +564,7 @@ def test_preflight_rejects_shard_path_outside_output_root(
         Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / "train_metadata.json"
     )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    source_path = Path(metadata["shards"][0]["path"])
+    source_path = metadata_path.parent / metadata["shards"][0]["path"]
     outside_path = tmp_path / "outside.bin"
     outside_path.write_bytes(source_path.read_bytes())
     metadata["shards"][0]["path"] = str(outside_path)

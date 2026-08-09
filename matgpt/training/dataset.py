@@ -41,22 +41,27 @@ class PackedTokenDataset:
     @classmethod
     def from_metadata(cls, metadata_path: str | Path, context_length: int, seed: int = 42) -> "PackedTokenDataset":
         # Read the shard metadata file.
-        metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+        metadata_file = Path(metadata_path)
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
 
         # Find out whether the token IDs use uint16 or uint32.
         dtype = NUMPY_DTYPES[metadata["dtype"]]
 
         # creates a memory map:
-        shards = [
-            PackedShard(
-                path=Path(shard["path"]),
-                num_tokens=int(shard["num_tokens"]),
+        shards = []
+        for shard in metadata["shards"]:
+            path = Path(shard["path"])
+            if not path.is_absolute():
+                path = metadata_file.parent / path
+            shards.append(
+                PackedShard(
+                    path=path,
+                    num_tokens=int(shard["num_tokens"]),
 
-                # Make the binary file accessible like a NumPy array.
-                data=np.memmap(shard["path"], mode="r", dtype=dtype),
+                    # Make the binary file accessible like a NumPy array.
+                    data=np.memmap(path, mode="r", dtype=dtype),
+                )
             )
-            for shard in metadata["shards"]
-        ]
         return cls(shards=shards, context_length=context_length, seed=seed)
 
 # batch_size means:

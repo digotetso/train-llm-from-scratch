@@ -6,6 +6,7 @@ import numpy as np
 from matgpt.data.shard import tokenize_jsonl_to_shards, tokenize_splits_from_config
 from matgpt.tokenizer.io import load_tokenizer
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
+from matgpt.training.dataset import PackedTokenDataset
 
 
 SPECIAL_TOKENS = ["<|pad|>", "<|bos|>", "<|eos|>", "<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
@@ -40,14 +41,42 @@ def test_tokenize_jsonl_to_uint16_shards_with_eos(tmp_path: Path):
     assert metadata["total_tokens"] > 2
     assert len(metadata["shards"]) >= 1
 
-    first_shard = Path(metadata["shards"][0]["path"])
+    first_shard = tmp_path / "shards" / metadata["shards"][0]["path"]
     tokens = np.fromfile(first_shard, dtype=np.uint16)
     all_tokens = []
     for shard in metadata["shards"]:
-        all_tokens.extend(np.fromfile(shard["path"], dtype=np.uint16).tolist())
+        all_tokens.extend(
+            np.fromfile(tmp_path / "shards" / shard["path"], dtype=np.uint16).tolist()
+        )
     assert all_tokens.count(eos_id) == 2
     assert len(tokens) <= 8
     assert len(metadata["shards"][0]["sha256"]) == 64
+    assert not Path(metadata["shards"][0]["path"]).is_absolute()
+
+
+def test_packed_dataset_reads_legacy_absolute_shard_metadata(tmp_path: Path):
+    shard_path = tmp_path / "legacy.bin"
+    np.arange(16, dtype=np.uint16).tofile(shard_path)
+    metadata_path = tmp_path / "legacy_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "dtype": "uint16",
+                "shards": [
+                    {
+                        "path": str(shard_path),
+                        "num_tokens": 16,
+                        "sha256": "ignored-by-reader",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = PackedTokenDataset.from_metadata(metadata_path, context_length=8)
+
+    assert dataset.shards[0].path == shard_path
 
 
 def test_tokenize_config_supports_named_training_phase_splits(tmp_path: Path):
