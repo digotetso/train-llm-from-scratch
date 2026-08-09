@@ -1,4 +1,7 @@
 import json
+import multiprocessing
+import os
+import signal
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -76,6 +79,21 @@ def _artifact_bytes(root: Path) -> dict[str, bytes]:
     return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file() and path.suffix in {".jsonl", ".bin"}}
 
 
+def _sigint_child(root: str, queue) -> None:
+    """Process target: deliver a genuine SIGINT while a corpus unit is running."""
+
+    request = make_corpus_request(Path(root), plans=[_tiny_plan("main")])
+    previous = signal.getsignal(signal.SIGINT)
+
+    def interrupt_after_commit(_unit) -> None:
+        os.kill(os.getpid(), signal.SIGINT)
+
+    result = build_local_corpus(
+        request, dataset_loader=_loader, on_unit_committed=interrupt_after_commit
+    )
+    queue.put((result.status, signal.getsignal(signal.SIGINT) == previous))
+
+
 def test_builder_counts_once_and_deduplicates_across_stages(tmp_path: Path, monkeypatch):
     import matgpt.data.local_corpus as local_corpus
 
@@ -143,7 +161,7 @@ def test_transient_loader_failure_retries_from_committed_cursor(tmp_path: Path):
 
     result = build_local_corpus(make_corpus_request(tmp_path, plans=[_tiny_plan("main")]), dataset_loader=flaky_loader)
 
-    assert result.status == "complete"
+    assert result.status == "provisional_complete"
     assert attempts >= 2
 
 
@@ -244,6 +262,140 @@ def test_builder_writes_atomic_progress_evidence(tmp_path: Path):
     assert progress["status"] == "calibration_complete"
     assert progress["accepted_quota_tokens"] >= 24
     assert not (request.local_root / "progress.json.partial").exists()
+
+
+def test_unit_commit_persists_cumulative_evidence_and_progress_schema(tmp_path: Path):
+    """A restart derives all counters from the single atomic unit commit."""
+
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    result = build_local_corpus(request, dataset_loader=_loader, stop_after_quota_tokens=24)
+
+    import sqlite3
+    with sqlite3.connect(request.local_root / "corpus.sqlite3") as connection:
+        state = json.loads(connection.execute("SELECT state_json FROM units ORDER BY unit_id DESC LIMIT 1").fetchone()[0])
+    progress = json.loads((request.local_root / "progress.json").read_text(encoding="utf-8"))
+
+    assert result.status == "calibration_complete"
+    assert state["cumulative"]["accepted"]["tokens"] == result.accepted_quota_tokens
+    assert state["cumulative"]["quality"]["contamination_patterns_sha256"]
+    assert state["cumulative"]["last_unit"]
+    assert progress["item_quotas"]
+    assert progress["rejected"]
+    assert progress["storage"]
+
+
+def test_iteration_timeout_restarts_from_last_committed_cursor(tmp_path: Path):
+    """A transient failure raised while consuming a stream resumes without rehashing rows."""
+
+    calls = 0
+
+    def flaky_stream(hf_name: str, **kwargs):
+        nonlocal calls
+        calls += 1
+        rows = _loader(hf_name, **kwargs)
+        if calls != 2:
+            return rows
+
+        def iterator():
+            for index, row in enumerate(rows):
+                if index == 4:
+                    raise TimeoutError("stream interrupted")
+                yield row
+        return iterator()
+
+    result = build_local_corpus(
+        make_corpus_request(tmp_path, plans=[_tiny_plan("main")]), dataset_loader=flaky_stream
+    )
+
+    assert result.status == "provisional_complete"
+    assert calls > 2
+
+
+def test_completed_windows_accumulate_before_bounded_unit_seal(tmp_path: Path):
+    plan = _tiny_plan("main")
+    plan["items"] = [{"id": "common_pile_wikimedia", "source_id": "common_pile_wikimedia", "bucket_id": None, "role": "pretrain_general", "token_quota": 80}]
+    plan["role_quotas"] = {"pretrain_general": 80}
+    plan["total_tokens"] = 80
+    request = replace(
+        make_corpus_request(tmp_path, plans=[plan]), raw_unit_bytes=20_000, shard_size_tokens=10_000
+    )
+
+    result = build_local_corpus(request, dataset_loader=_loader)
+
+    assert result.status == "provisional_complete"
+    assert len(list((request.destination_root / "units").iterdir())) == 1
+
+
+def test_fresh_restart_recovers_crashes_at_seal_commit_and_publish_boundaries(tmp_path: Path, monkeypatch):
+    """Only pre-commit managed files are removed; committed work is reconciled."""
+
+    import matgpt.data.local_corpus as local_corpus
+
+    request = make_corpus_request(tmp_path / "resumed", plans=[_tiny_plan("main")])
+    real_seal = local_corpus._seal_unit
+
+    def crash_after_seal(*args, **kwargs):
+        real_seal(*args, **kwargs)
+        raise RuntimeError("after-seal")
+
+    monkeypatch.setattr(local_corpus, "_seal_unit", crash_after_seal)
+    with pytest.raises(RuntimeError, match="after-seal"):
+        build_local_corpus(request, dataset_loader=_loader)
+    monkeypatch.setattr(local_corpus, "_seal_unit", real_seal)
+    assert any((request.local_root / "units").rglob("*"))
+
+    # Restart deletes only the unreferenced sealed unit, then complete it.
+    resumed = build_local_corpus(request, dataset_loader=_loader)
+    clean_request = make_corpus_request(tmp_path / "clean", plans=[_tiny_plan("main")])
+    clean = build_local_corpus(clean_request, dataset_loader=_loader)
+    assert resumed.manifest["content_sha256"] == clean.manifest["content_sha256"]
+    assert _artifact_bytes(request.destination_root) == _artifact_bytes(clean_request.destination_root)
+
+    post_commit = make_corpus_request(tmp_path / "post-commit", plans=[_tiny_plan("main")])
+    from matgpt.data.local_publish import DrivePublisher
+    real_publish = DrivePublisher.publish
+    calls = 0
+
+    def crash_before_publish(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("post-commit-pre-publish")
+        return real_publish(self, *args, **kwargs)
+
+    monkeypatch.setattr(DrivePublisher, "publish", crash_before_publish)
+    with pytest.raises(RuntimeError, match="post-commit-pre-publish"):
+        build_local_corpus(post_commit, dataset_loader=_loader)
+    monkeypatch.setattr(DrivePublisher, "publish", real_publish)
+    recovered = build_local_corpus(post_commit, dataset_loader=_loader)
+    assert recovered.status == "provisional_complete"
+
+    post_mark = make_corpus_request(tmp_path / "post-mark", plans=[_tiny_plan("main")])
+    real_record = DrivePublisher._record_then_release
+    marked = 0
+
+    def crash_after_mark(self, publication):
+        nonlocal marked
+        real_record(self, publication)
+        marked += 1
+        if marked == 1:
+            raise RuntimeError("after-mark-before-next-publish")
+
+    monkeypatch.setattr(DrivePublisher, "_record_then_release", crash_after_mark)
+    with pytest.raises(RuntimeError, match="after-mark-before-next-publish"):
+        build_local_corpus(post_mark, dataset_loader=_loader)
+    monkeypatch.setattr(DrivePublisher, "_record_then_release", real_record)
+    assert build_local_corpus(post_mark, dataset_loader=_loader).status == "provisional_complete"
+
+
+def test_subprocess_sigint_stops_after_durable_window_and_restores_handler(tmp_path: Path):
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    process = context.Process(target=_sigint_child, args=(str(tmp_path), queue))
+    process.start()
+    process.join(60)
+    assert process.exitcode == 0
+    assert queue.get(timeout=5) == ("stopped_cleanly", True)
 
 
 def test_sigint_request_stops_cleanly_at_a_committed_window_boundary(tmp_path: Path):

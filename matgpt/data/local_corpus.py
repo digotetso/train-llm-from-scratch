@@ -101,8 +101,9 @@ def _build_local_corpus(
             journal=journal,
         )
         publisher.reconcile()
-        counters, cursors = _state(journal)
+        counters, cursors, cumulative = _state(journal)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
+        _restore_quality(quality, cumulative.get("quality", {}))
         discarded_after_quota: set[str] = set()
         for plan in request.plans:
             stage = str(plan["stage"])
@@ -113,15 +114,19 @@ def _build_local_corpus(
                 if all(counters.get((stage, key), 0) >= int(items[key]["token_quota"]) for key in source_items):
                     continue
                 raw_cursor = cursors.get((stage, source_id), 0)
-                dataset = _load_with_retries(loader, source, request.retry_delays)
-                skip = getattr(dataset, "skip", None)
-                if raw_cursor:
-                    import itertools
-                    dataset = skip(raw_cursor) if callable(skip) else itertools.islice(dataset, raw_cursor, None)
+                dataset = _retrying_dataset(
+                    loader, source, request.retry_delays, start_raw_cursor=raw_cursor
+                )
+                pending_fit: list[dict[str, Any]] = []
+                pending_holdout: list[dict[str, Any]] = []
+                pending_hashes: list[str] = []
+                pending_seen: set[str] = set()
+                pending_tokens = 0
                 for window in iter_deterministic_source_windows(
                     source, dataset, stage, quality, seed=int(plan["seed"]),
                     buffer_size=int(plan["buffer_size"]), start_raw_cursor=raw_cursor,
                 ):
+                    cumulative["read"]["documents"] += len(window.records)
                     committed = journal.committed_hashes(str(row["content_sha256"]) for row in window.records)
                     accepted: list[dict[str, Any]] = []
                     pending: set[str] = set()
@@ -134,7 +139,7 @@ def _build_local_corpus(
                         digest = str(row["content_sha256"])
                         if digest in discarded_after_quota:
                             continue
-                        if digest in committed or digest in pending:
+                        if digest in committed or digest in pending or digest in pending_seen:
                             quality.record_rejection("duplicate_exact")
                             continue
                         if not quality.accept(row):
@@ -144,7 +149,7 @@ def _build_local_corpus(
                     fit: list[dict[str, Any]] = []
                     holdout: list[dict[str, Any]] = []
                     accepted_hashes: list[str] = []
-                    unit_tokens = 0
+                    window_tokens = 0
                     for offset in range(0, len(accepted), request.batch_documents):
                         for encoded_row in encode_record_batch(
                             tokenizer, accepted[offset : offset + request.batch_documents]
@@ -162,6 +167,7 @@ def _build_local_corpus(
                                 row["token_ids"] = list(encoded_row.ids)
                                 holdout.append(row)
                                 accepted_hashes.append(str(row["content_sha256"]))
+                                _accepted(cumulative, row, len(encoded_row.ids), "holdout")
                                 continue
                             row["source_split"] = row["split"]
                             row["split"] = "fit"
@@ -169,21 +175,61 @@ def _build_local_corpus(
                             fit.append(row)
                             accepted_hashes.append(str(row["content_sha256"]))
                             counters[(stage, item_id)] = counters.get((stage, item_id), 0) + len(encoded_row.ids)
-                            unit_tokens += len(encoded_row.ids)
-                    publisher.check_capacity(
-                        _unit_storage_bytes(fit, holdout, tokenizer.token_to_id("<|eos|>"))
+                            window_tokens += len(encoded_row.ids)
+                            _accepted(cumulative, row, len(encoded_row.ids), "fit")
+                    pending_fit.extend(fit)
+                    pending_holdout.extend(holdout)
+                    pending_hashes.extend(accepted_hashes)
+                    pending_seen.update(accepted_hashes)
+                    pending_tokens += window_tokens
+                    pending_bytes = _unit_storage_bytes(
+                        pending_fit, pending_holdout, tokenizer.token_to_id("<|eos|>")
                     )
-                    artifacts = _seal_unit(local_root, stage, source_id, window.next_raw_cursor, fit, holdout, tokenizer, request)
+                    source_complete = all(
+                        counters.get((stage, key), 0) >= int(items[key]["token_quota"])
+                        for key in source_items
+                    )
+                    # Units only seal at a completed deterministic window boundary.
+                    # A single oversize window is accepted, then sealed immediately.
+                    if not (
+                        pending_bytes >= request.raw_unit_bytes
+                        or pending_tokens >= request.shard_size_tokens
+                        or source_complete
+                        or _STOP_REQUESTED
+                        or (stop_after_quota_tokens is not None and sum(counters.values()) >= stop_after_quota_tokens)
+                    ):
+                        continue
+                    publisher.check_capacity(
+                        pending_bytes + _journal_overhead_bytes(pending_hashes)
+                    )
+                    artifacts = _seal_unit(local_root, stage, source_id, window.next_raw_cursor, pending_fit, pending_holdout, tokenizer, request)
+                    cursors[(stage, source_id)] = window.next_raw_cursor
+                    _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, window.next_raw_cursor, pending_tokens, artifacts)
                     unit = UnitCommit(
                         unit_id=f"{stage}-{source_id}-{window.next_raw_cursor:020d}",
                         stage=stage, source_id=source_id, row_cursor=window.next_raw_cursor,
-                        quota_tokens=unit_tokens, accepted_hashes=tuple(sorted(accepted_hashes)),
-                        artifacts=tuple(artifacts), state={"item_counters": {key: value for (saved_stage, key), value in counters.items() if saved_stage == stage}},
+                        quota_tokens=pending_tokens, accepted_hashes=tuple(sorted(pending_hashes)),
+                        artifacts=tuple(artifacts), state={
+                            "version": 1,
+                            "item_counters": {key: value for (saved_stage, key), value in counters.items() if saved_stage == stage},
+                            "cumulative": cumulative,
+                        },
                     )
                     journal.commit_unit(unit)
+                    # Persist the deterministic destination mapping before the
+                    # first copy, so a fresh process can finish a post-commit
+                    # crash without guessing a destination.
+                    for artifact in artifacts:
+                        journal.record_destination(
+                            unit.unit_id, str(artifact["path"]), str(artifact["path"])
+                        )
                     for artifact in artifacts:
                         publisher.publish(local_root / str(artifact["path"]), str(artifact["path"]), unit_id=unit.unit_id)
-                    cursors[(stage, source_id)] = window.next_raw_cursor
+                    pending_fit.clear()
+                    pending_holdout.clear()
+                    pending_hashes.clear()
+                    pending_seen.clear()
+                    pending_tokens = 0
                     if on_unit_committed is not None:
                         on_unit_committed(unit)
                     total = sum(counters.values())
@@ -195,7 +241,7 @@ def _build_local_corpus(
                             row_cursor=window.next_raw_cursor,
                             accepted_quota_tokens=total,
                             status="running",
-                        ),
+                        ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
                     )
                     if stop_after_quota_tokens is not None and total >= stop_after_quota_tokens:
                         _write_progress(
@@ -206,7 +252,7 @@ def _build_local_corpus(
                                 row_cursor=window.next_raw_cursor,
                                 accepted_quota_tokens=total,
                                 status="calibration_complete",
-                            ),
+                            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
                         )
                         return LocalCorpusResult("calibration_complete", identity.sha256, total, None)
                     if _STOP_REQUESTED:
@@ -218,7 +264,7 @@ def _build_local_corpus(
                                 row_cursor=window.next_raw_cursor,
                                 accepted_quota_tokens=total,
                                 status="stopped_cleanly",
-                            ),
+                            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
                         )
                         return LocalCorpusResult("stopped_cleanly", identity.sha256, total, None)
                     if all(
@@ -229,6 +275,7 @@ def _build_local_corpus(
                 missing = [key for key in source_items if counters.get((stage, key), 0) < int(items[key]["token_quota"])]
                 if missing:
                     raise ValueError(f"Source {source_id!r} exhausted before quota")
+        _verify_published_units(journal)
         manifest = _manifest(identity, counters, journal)
         total = sum(counters.values())
         _write_progress(
@@ -239,7 +286,7 @@ def _build_local_corpus(
                 row_cursor=0,
                 accepted_quota_tokens=total,
                 status="provisional_complete",
-            ),
+            ), cumulative=cumulative, publisher=publisher, interval_seconds=request.progress_interval_seconds,
         )
         return LocalCorpusResult("provisional_complete", identity.sha256, total, manifest)
 
@@ -308,27 +355,127 @@ def _identity(
     return BuildIdentity(1, "local_corpus", sha256_json(list(request.plans)), sha256_json(asdict(request.registry)), sha256_json(request.quality_policy.contamination_patterns), sha256_json(asdict(request.quality_policy)), tokenizer_sha, sha256_json({"raw_unit_bytes": request.raw_unit_bytes, "shard_size_tokens": request.shard_size_tokens, "selection_sha256": selection_sha, "comparison_sha256": comparison_sha}))
 
 
+def _is_transient_error(error: BaseException) -> bool:
+    """Classify only connection failures and retryable HTTP status failures."""
+
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", getattr(error, "status_code", None))
+    return isinstance(status, int) and (status in {408, 429} or 500 <= status <= 599)
+
+
 def _load_with_retries(loader, source, delays):
     for attempt in range(len(delays) + 1):
         try:
             return loader(source.hf_name, **_loader_kwargs(source))
-        except (TimeoutError, ConnectionError):
+        except BaseException as error:
+            if not _is_transient_error(error):
+                raise
             if attempt == len(delays):
                 raise
             time.sleep(float(delays[attempt]))
     raise RuntimeError("unreachable")
 
 
+def _retrying_dataset(loader, source, delays, *, start_raw_cursor: int):
+    """Reopen a transiently interrupted stream at its exact consumed raw offset.
+
+    This tracks source rows, not accepted records; a failed partially filled
+    deterministic window therefore resumes without duplicating or skipping a
+    raw input.  Schema, license, fingerprint, and quota errors are deliberately
+    not classified as retryable.
+    """
+
+    cursor = start_raw_cursor
+    attempt = 0
+    while True:
+        dataset = _load_with_retries(loader, source, delays)
+        skip = getattr(dataset, "skip", None)
+        dataset = skip(cursor) if cursor and callable(skip) else itertools.islice(dataset, cursor, None)
+        try:
+            for row in dataset:
+                cursor += 1
+                attempt = 0
+                yield row
+            return
+        except BaseException as error:
+            if not _is_transient_error(error) or attempt == len(delays):
+                raise
+            time.sleep(float(delays[attempt]))
+            attempt += 1
+
+
 def _state(journal: BuildJournal):
     counters: dict[tuple[str, str], int] = {}
     cursors: dict[tuple[str, str], int] = {}
+    cumulative: dict[str, Any] = _empty_cumulative()
     for unit in journal.iter_units():
         cursors[(unit.stage, unit.source_id)] = max(cursors.get((unit.stage, unit.source_id), 0), unit.row_cursor)
         values = unit.state.get("item_counters", {})
         if isinstance(values, Mapping):
             for item, value in values.items():
                 if isinstance(value, int): counters[(unit.stage, str(item))] = value
-    return counters, cursors
+        saved = unit.state.get("cumulative")
+        if isinstance(saved, Mapping) and int(saved.get("accepted", {}).get("tokens", -1)) >= int(cumulative["accepted"]["tokens"]):
+            cumulative = json.loads(json.dumps(saved))
+    return counters, cursors, cumulative
+
+
+def _empty_cumulative() -> dict[str, Any]:
+    return {
+        "read": {"documents": 0, "chars": 0, "bytes": 0},
+        "accepted": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
+        "heldout": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
+        "rejected": {"empty_text": 0, "duplicate_exact": 0, "benchmark_contamination": 0, "quality": 0},
+        "licenses": {}, "validation": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0, "digest": None},
+        "fit": {"documents": 0, "tokens": 0, "chars": 0, "bytes": 0},
+        "item_quotas": {}, "source_cursors": {}, "packed": {"raw_units": 0, "shards": 0, "raw_bytes": 0, "token_bytes": 0},
+        "quality": {}, "last_document": {}, "overshoot": {}, "last_unit": None,
+    }
+
+
+def _restore_quality(quality: QualityFilter, saved: object) -> None:
+    if not isinstance(saved, Mapping):
+        return
+    quality.total_documents = int(saved.get("total_documents", 0))
+    quality.accepted_documents = int(saved.get("accepted_documents", 0))
+    quality.rejected_documents = int(saved.get("rejected_documents", 0))
+    reasons = saved.get("rejection_reasons", {})
+    if isinstance(reasons, Mapping):
+        quality.rejection_reasons.update({str(key): int(value) for key, value in reasons.items()})
+
+
+def _accepted(cumulative: dict[str, Any], row: Mapping[str, Any], tokens: int, split: str) -> None:
+    text = str(row.get("text", ""))
+    raw_bytes = len(text.encode("utf-8"))
+    target = cumulative["heldout"] if split == "holdout" else cumulative["accepted"]
+    for name, value in (("documents", 1), ("tokens", tokens), ("chars", len(text)), ("bytes", raw_bytes)):
+        target[name] += value
+    if split == "fit":
+        for name, value in (("documents", 1), ("tokens", tokens), ("chars", len(text)), ("bytes", raw_bytes)):
+            cumulative["fit"][name] += value
+    license_name = str(row.get("license", ""))
+    cumulative["licenses"][license_name] = cumulative["licenses"].get(license_name, 0) + 1
+    item = _item_id(row)
+    cumulative["last_document"][item] = str(row.get("document_id", row.get("content_sha256", "")))
+
+
+def _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, cursor, unit_tokens, artifacts) -> None:
+    report = quality.report()
+    cumulative["quality"] = report
+    reasons = report["rejection_reasons"]
+    for name in cumulative["rejected"]:
+        cumulative["rejected"][name] = int(reasons.get(name, 0))
+    cumulative["item_quotas"] = {f"{saved_stage}:{item}": value for (saved_stage, item), value in sorted(counters.items())}
+    cumulative["source_cursors"] = {f"{saved_stage}:{source}": value for (saved_stage, source), value in sorted(cursors.items())}
+    cumulative["validation"] = dict(cumulative["heldout"])
+    cumulative["validation"]["digest"] = sha256_json(cumulative["validation"])
+    cumulative["packed"]["raw_units"] += 1
+    cumulative["packed"]["shards"] += sum(1 for artifact in artifacts if str(artifact["path"]).endswith(".bin"))
+    cumulative["packed"]["raw_bytes"] += sum(int(artifact["size"]) for artifact in artifacts if str(artifact["path"]).endswith(".jsonl"))
+    cumulative["packed"]["token_bytes"] += sum(int(artifact["size"]) for artifact in artifacts if str(artifact["path"]).endswith(".bin"))
+    cumulative["last_unit"] = {"stage": stage, "source_id": source_id, "row_cursor": cursor, "quota_tokens": unit_tokens}
 
 
 def _seal_unit(root, stage, source_id, cursor, fit, holdout, tokenizer, request):
@@ -367,6 +514,13 @@ def _unit_storage_bytes(
     return raw_bytes + token_bytes
 
 
+def _journal_overhead_bytes(hashes: list[str]) -> int:
+    """Reserve SQLite/index metadata before retaining one more bounded unit."""
+
+    # Hash key, row header, artifact rows, and conservative WAL amplification.
+    return 256 + len(hashes) * 192
+
+
 def _manifest(identity, counters, journal):
     artifacts = tuple(journal.iter_artifacts())
     manifest = {"version": 1, "complete": False, "status": "provisional", "build_identity_sha256": identity.sha256, "quota_counting": {"method": "tokenizer_exact_one_pass"}, "quality_filter": {"exact_dedup": True}, "item_quota_tokens": {f"{stage}:{item}": value for (stage, item), value in sorted(counters.items())}, "artifacts": artifacts}
@@ -374,14 +528,56 @@ def _manifest(identity, counters, journal):
     return manifest
 
 
-def _write_progress(root: Path, progress: LocalCorpusProgress) -> None:
+def _verify_published_units(journal: BuildJournal) -> None:
+    """Task 3 may report a provisional result only after every unit is verified."""
+
+    pending = [unit.unit_id for unit in journal.iter_units() if not unit.published]
+    if pending:
+        raise RuntimeError(f"provisional corpus has unpublished unit artifacts: {pending}")
+
+
+def _write_progress(
+    root: Path,
+    progress: LocalCorpusProgress,
+    *,
+    cumulative: Mapping[str, Any] | None = None,
+    publisher: DrivePublisher | None = None,
+    interval_seconds: float = 0.0,
+) -> None:
     """Atomically persist operator-visible state without changing build identity."""
 
     partial = root / "progress.json.partial"
     final = root / "progress.json"
     if partial.exists():
         partial.unlink()
-    payload = {**asdict(progress), "updated_at": time.time()}
+    cumulative = cumulative or _empty_cumulative()
+    now = time.time()
+    previous = float(cumulative.get("progress", {}).get("last_emitted_at", 0.0))
+    if progress.status == "running" and interval_seconds > 0 and now - previous < interval_seconds:
+        return
+    status = publisher.status() if publisher is not None else {}
+    storage = status.get("storage")
+    payload = {
+        **asdict(progress),
+        "updated_at": now,
+        "item_quotas": cumulative.get("item_quotas", {}),
+        "stage_quotas": cumulative.get("item_quotas", {}),
+        "read": cumulative.get("read", {}),
+        "accepted": cumulative.get("accepted", {}),
+        "heldout": cumulative.get("heldout", {}),
+        "rejected": cumulative.get("rejected", {}),
+        "quality": cumulative.get("quality", {}),
+        "last_unit": cumulative.get("last_unit"),
+        "storage": {
+            "active_bytes": getattr(storage, "active_bytes", 0),
+            "free_bytes": getattr(storage, "free_bytes", 0),
+            "unpublished_bytes": sum(int(item["size"]) for item in status.get("unpublished_artifacts", ())),
+            "published_bytes": sum(int(item["size"]) for item in journal_artifacts(publisher)),
+        },
+        "throughput": {"overall_tokens_per_second": 0.0, "rolling_tokens_per_second": 0.0, "elapsed_seconds": 0.0, "eta_seconds": None},
+        "rss_bytes": _rss_bytes(),
+        "drive": {"verified": bool(publisher is not None), "status": "journal_consistent" if publisher is not None else "unavailable"},
+    }
     with open_exclusive_nofollow(partial, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
         handle.write("\n")
@@ -393,6 +589,23 @@ def _write_progress(root: Path, progress: LocalCorpusProgress) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    print(f"corpus {progress.status}: {progress.stage}/{progress.source_id} cursor={progress.row_cursor} tokens={progress.accepted_quota_tokens}")
+    if isinstance(cumulative, dict):
+        cumulative.setdefault("progress", {})["last_emitted_at"] = now
+
+
+def journal_artifacts(publisher: DrivePublisher | None) -> tuple[dict[str, object], ...]:
+    if publisher is None or publisher.journal is None:
+        return ()
+    return tuple(publisher.journal.iter_artifacts())
+
+
+def _rss_bytes() -> int:
+    try:
+        import resource
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+    except (ImportError, AttributeError):
+        return 0
 
 
 @contextmanager
