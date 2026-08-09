@@ -1387,9 +1387,16 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     (baseline / "tokenizer.json").write_bytes(b"canonical pilot tokenizer")
     (baseline / "special_tokens.json").write_text("{}\n", encoding="utf-8")
     tokenizer_sha256 = sha256_file(baseline / "tokenizer.json")
+    build_identity_sha256 = "e" * 64
     corpus_manifest = recipe_root / "corpora" / "pilot" / "manifest.json"
     corpus_manifest.parent.mkdir(parents=True)
-    corpus_payload = {"version": 1, "complete": True}
+    corpus_payload = {
+        "version": 2,
+        "status": "complete",
+        "complete": True,
+        "tokenizer_sha256": tokenizer_sha256,
+        "build_identity_sha256": build_identity_sha256,
+    }
     corpus_payload["manifest_sha256"] = sha256_json(corpus_payload)
     corpus_manifest.write_text(json.dumps(corpus_payload), encoding="utf-8")
     provenance_path = (
@@ -1410,6 +1417,81 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     provenance["provenance_sha256"] = sha256_json(provenance)
     provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
     return baseline, provenance_path, tokenizer_sha256
+
+
+def _write_pilot_gate_evidence(
+    gate_root: Path,
+    *,
+    tokenizer_sha256: str,
+    build_identity_sha256: str,
+) -> None:
+    gate_root.mkdir(parents=True, exist_ok=True)
+
+    def payload(gate: str, **extra: object) -> dict[str, object]:
+        return {
+            "version": 1,
+            "status": "pass",
+            "gate": gate,
+            "gate_passed": True,
+            "tokenizer_sha256": tokenizer_sha256,
+            "build_identity_sha256": build_identity_sha256,
+            **extra,
+        }
+
+    (gate_root / "preflight.json").write_text(
+        json.dumps(payload("preflight")), encoding="utf-8"
+    )
+    (gate_root / "smoke_resume_verified.json").write_text(
+        json.dumps(payload("smoke", resume_verified=True)), encoding="utf-8"
+    )
+    (gate_root / "pilot_complete.json").write_text(
+        json.dumps(payload("pilot", complete=True, tokens_processed=20_000_000)),
+        encoding="utf-8",
+    )
+    evaluation_dir = gate_root / "evaluation"
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    (evaluation_dir / "review.json").write_text(
+        json.dumps(payload("evaluation", evaluation_passed=True)), encoding="utf-8"
+    )
+
+
+def _write_valid_preserved_pilot_evidence(
+    drive_dir: Path, selected_sha256: str
+) -> tuple[Path, str]:
+    from scripts import prepare_telco_local
+
+    _, provenance_path, _ = prepare_telco_local._canonical_pilot_provenance(
+        drive_dir
+    )
+    recipe_root = provenance_path.parents[2]
+    corpus = json.loads(
+        (recipe_root / "corpora/pilot/manifest.json").read_text(encoding="utf-8")
+    )
+    build_identity_sha256 = str(corpus["build_identity_sha256"])
+    shard_root = recipe_root / "prepared/pilot/shards"
+    shard_root.mkdir(parents=True, exist_ok=True)
+    (shard_root / "pilot_00000.bin").write_bytes(b"pilot shard")
+    (shard_root / "pilot_metadata.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tokenizer_sha256": selected_sha256,
+                "build_identity_sha256": build_identity_sha256,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_pilot_gate_evidence(
+        recipe_root / "evidence/pilot",
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+    run_evaluation = recipe_root / "runs/pilot/evaluation"
+    run_evaluation.mkdir(parents=True, exist_ok=True)
+    run_evaluation.joinpath("review.json").write_bytes(
+        (recipe_root / "evidence/pilot/evaluation/review.json").read_bytes()
+    )
+    return recipe_root, build_identity_sha256
 
 
 def _create_canonical_comparison(
@@ -2103,6 +2185,11 @@ def test_full_calibration_uses_100m_stop_and_writes_complete_metrics(
         observed["request"] = request
         observed["stop"] = kwargs.get("stop_after_quota_tokens")
         identity = prepare_telco_local._expected_build_identity(request)
+        _write_core_calibration_report(
+            request.destination_root,
+            identity=identity.content_sha256,
+            tokens=100_000_007,
+        )
         return LocalCorpusResult(
             "calibration_complete", identity.content_sha256, 100_000_007, None
         )
@@ -2139,6 +2226,21 @@ def test_full_calibration_uses_100m_stop_and_writes_complete_metrics(
     )
     assert report["provider_preflight"]["fsynced_partial_rename"] is True
     assert report["drive_verification_state"] == "verified"
+    core_path = request.destination_root / "calibration_report.json"
+    assert report["core_calibration_report"] == {
+        "path": "calibration_report.json",
+        "size": core_path.stat().st_size,
+        "sha256": sha256_file(core_path),
+        "calibration_report_sha256": json.loads(
+            core_path.read_text(encoding="utf-8")
+        )["calibration_report_sha256"],
+    }
+    assert report["measurement_methods"] == {
+        "source_network_wait": "provider_load_and_next_wall_time",
+        "encode": "tokenizer_encode_batch_wall_time",
+        "contamination": "quality_filter_accept_wall_time",
+        "publication": "publisher_publish_wall_time",
+    }
     for metric in (
         "wall_time_seconds",
         "process_cpu_time_seconds",
@@ -2256,23 +2358,164 @@ def test_full_calibration_reports_storage_pressure_as_a_clean_cli_error(
     ).exists()
 
 
+def _write_core_calibration_report(
+    root: Path,
+    *,
+    identity: str = "a" * 64,
+    status: str = "calibration_complete",
+    tokens: int = 100_000_000,
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        "version": 1,
+        "wall_time_seconds": 100.0,
+        "process_cpu_time_seconds": 50.0,
+        "peak_rss_bytes": 1_000,
+        "source_network": {
+            "method": "provider_load_and_next_wall_time",
+            "wall_time_seconds": 10.0,
+            "operations": 10,
+            "rows": 9,
+        },
+        "encode": {
+            "method": "tokenizer_encode_batch_wall_time",
+            "wall_time_seconds": 20.0,
+            "batches": 5,
+            "documents": 50,
+            "tokens": tokens,
+        },
+        "contamination": {
+            "method": "quality_filter_accept_wall_time",
+            "wall_time_seconds": 5.0,
+            "documents": 50,
+        },
+        "publication": {
+            "method": "publisher_publish_wall_time",
+            "wall_time_seconds": 5.0,
+            "artifacts": 4,
+            "bytes": 2_000,
+        },
+    }
+    payload: dict[str, object] = {
+        "version": 2,
+        "status": status,
+        "build_identity_sha256": identity,
+        "accepted_quota_tokens": tokens,
+        "committed_units": 1,
+        "elapsed_seconds": 100.0,
+        "peak_rss_bytes": 1_000,
+        "metrics": metrics,
+        "throughput": {
+            "encode_tokens_per_second": tokens / 20.0,
+            "contamination_documents_per_second": 10.0,
+            "publication_bytes_per_second": 400.0,
+            "mean_overall_tokens_per_second": tokens / 100.0,
+            "rolling_overall_tokens_per_second": tokens / 100.0,
+        },
+    }
+    payload["calibration_report_sha256"] = sha256_json(payload)
+    path = root / "calibration_report.json"
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def _calibration_report_payload(
+    core_report_path: Path,
     *,
     identity: str = "a" * 64,
     projected_seconds: float = 47 * 3600,
     storage_pressure: bool = False,
 ) -> dict[str, object]:
+    core = json.loads(core_report_path.read_text(encoding="utf-8"))
+    core["throughput"]["rolling_overall_tokens_per_second"] = (
+        12_000_000_000 / projected_seconds
+    )
+    core.pop("calibration_report_sha256")
+    core["calibration_report_sha256"] = sha256_json(core)
+    core_report_path.write_text(
+        json.dumps(core, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    metrics = core["metrics"]
+    throughput = core["throughput"]
     payload: dict[str, object] = {
-        "version": 1,
+        "version": 2,
         "status": "calibration_complete",
         "build_identity_sha256": identity,
-        "actual_committed_quota_tokens": 100_000_000,
+        "actual_committed_quota_tokens": core["accepted_quota_tokens"],
+        "wall_time_seconds": metrics["wall_time_seconds"],
+        "process_cpu_time_seconds": metrics["process_cpu_time_seconds"],
+        "peak_rss_bytes": metrics["peak_rss_bytes"],
+        "source_network_wait_seconds": metrics["source_network"][
+            "wall_time_seconds"
+        ],
+        "encode_tokens_per_second": throughput["encode_tokens_per_second"],
+        "contamination_documents_per_second": throughput[
+            "contamination_documents_per_second"
+        ],
+        "publication_bytes_per_second": throughput[
+            "publication_bytes_per_second"
+        ],
+        "mean_overall_tokens_per_second": throughput[
+            "mean_overall_tokens_per_second"
+        ],
+        "rolling_overall_tokens_per_second": throughput[
+            "rolling_overall_tokens_per_second"
+        ],
         "projected_12b_wall_time_seconds": projected_seconds,
         "unrecovered_storage_pressure": storage_pressure,
         "drive_verification_state": "verified",
+        "measurement_methods": {
+            "source_network_wait": metrics["source_network"]["method"],
+            "encode": metrics["encode"]["method"],
+            "contamination": metrics["contamination"]["method"],
+            "publication": metrics["publication"]["method"],
+        },
+        "core_calibration_report": {
+            "path": "calibration_report.json",
+            "size": core_report_path.stat().st_size,
+            "sha256": sha256_file(core_report_path),
+            "calibration_report_sha256": core["calibration_report_sha256"],
+        },
     }
     payload["operator_report_sha256"] = sha256_json(payload)
     return payload
+
+
+def _full_request_for_cli(prepare_telco_local, common: list[str]):
+    args = prepare_telco_local.build_parser().parse_args(
+        ["--stage", "status", *common]
+    )
+    work_dir, drive_dir = prepare_telco_local._resolved_roots(
+        args.work_dir, args.drive_dir
+    )
+    registry = prepare_telco_local.load_source_registry(Path(args.sources))
+    mixture = prepare_telco_local.load_mixture_config(Path(args.mixture))
+    candidate_config = prepare_telco_local.load_tokenizer_candidate_config(
+        Path(args.candidate_config)
+    )
+    model_config = prepare_telco_local.load_config(Path(args.model_config))
+    _, tokenizer_dir, tokenizer_sha256, _, _ = (
+        prepare_telco_local._selected_tokenizer_evidence(
+            drive_dir=drive_dir,
+            work_dir=work_dir,
+            registry=registry,
+            mixture=mixture,
+            candidate_config=candidate_config,
+            model_config=model_config,
+        )
+    )
+    request = prepare_telco_local._corpus_request(
+        kind="full",
+        work_dir=work_dir,
+        drive_dir=drive_dir,
+        registry=registry,
+        mixture=mixture,
+        candidate_config=candidate_config,
+        model_config=model_config,
+        tokenizer_dir=tokenizer_dir,
+        tokenizer_sha256=tokenizer_sha256,
+    )
+    return request, prepare_telco_local._expected_build_identity(request), drive_dir, tokenizer_sha256
 
 
 @pytest.mark.parametrize(
@@ -2284,28 +2527,39 @@ def _calibration_report_payload(
     ],
 )
 def test_full_resume_calibration_guards_fail_closed(
-    accepted: bool, override: bool, reason: str, match: str
+    tmp_path: Path, accepted: bool, override: bool, reason: str, match: str
 ):
     from scripts import prepare_telco_local
 
+    core_path = _write_core_calibration_report(tmp_path)
+
     with pytest.raises(ValueError, match=match):
         prepare_telco_local._require_accepted_calibration(
-            _calibration_report_payload(projected_seconds=49 * 3600),
+            _calibration_report_payload(
+                core_path, projected_seconds=49 * 3600
+            ),
             expected_build_identity="a" * 64,
+            core_report_path=core_path,
+            core_managed_root=tmp_path,
             accept_calibration=accepted,
             override_guard=override,
             override_reason=reason,
         )
 
 
-def test_full_resume_storage_guard_requires_explicit_reasoned_override():
+def test_full_resume_storage_guard_requires_explicit_reasoned_override(
+    tmp_path: Path,
+):
     from scripts import prepare_telco_local
 
-    report = _calibration_report_payload(storage_pressure=True)
+    core_path = _write_core_calibration_report(tmp_path)
+    report = _calibration_report_payload(core_path, storage_pressure=True)
     with pytest.raises(ValueError, match="storage pressure"):
         prepare_telco_local._require_accepted_calibration(
             report,
             expected_build_identity="a" * 64,
+            core_report_path=core_path,
+            core_managed_root=tmp_path,
             accept_calibration=True,
             override_guard=False,
             override_reason="",
@@ -2314,6 +2568,8 @@ def test_full_resume_storage_guard_requires_explicit_reasoned_override():
     authorization = prepare_telco_local._require_accepted_calibration(
         report,
         expected_build_identity="a" * 64,
+        core_report_path=core_path,
+        core_managed_root=tmp_path,
         accept_calibration=True,
         override_guard=True,
         override_reason="Reviewed migration to a larger local volume",
@@ -2325,17 +2581,103 @@ def test_full_resume_storage_guard_requires_explicit_reasoned_override():
     assert authorization["build_identity_sha256"] == "a" * 64
 
 
-def test_full_resume_rejects_foreign_calibration_identity():
+def test_full_resume_rejects_foreign_calibration_identity(tmp_path: Path):
     from scripts import prepare_telco_local
+
+    core_path = _write_core_calibration_report(tmp_path)
 
     with pytest.raises(ValueError, match="build identity"):
         prepare_telco_local._require_accepted_calibration(
-            _calibration_report_payload(identity="b" * 64),
+            _calibration_report_payload(core_path, identity="b" * 64),
             expected_build_identity="a" * 64,
+            core_report_path=core_path,
+            core_managed_root=tmp_path,
             accept_calibration=True,
             override_guard=True,
             override_reason="Identity mismatch must never be overridable",
         )
+
+
+def test_full_resume_rejects_invalid_core_before_provider_or_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, _, _, _ = _selected_local_cli_fixture(tmp_path, monkeypatch)
+    request, identity, drive_dir, tokenizer_sha256 = _full_request_for_cli(
+        prepare_telco_local, common
+    )
+    core_path = _write_core_calibration_report(
+        request.destination_root,
+        identity=identity.content_sha256,
+        status="stopped_cleanly",
+    )
+    operator = _calibration_report_payload(
+        core_path, identity=identity.content_sha256
+    )
+    operator_path = prepare_telco_local._calibration_operator_path(
+        drive_dir, tokenizer_sha256
+    )
+    operator_path.parent.mkdir(parents=True)
+    operator_path.write_text(
+        json.dumps(operator, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("invalid core evidence must fail before provider/builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        forbidden,
+    )
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", forbidden)
+
+    assert prepare_telco_local.main(
+        ["--stage", "full_resume", *common, "--accept-calibration"]
+    ) == 2
+
+
+def test_status_reports_missing_core_binding_as_false_without_operational_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, _, _, _ = _selected_local_cli_fixture(tmp_path, monkeypatch)
+    request, identity, drive_dir, tokenizer_sha256 = _full_request_for_cli(
+        prepare_telco_local, common
+    )
+    core_path = _write_core_calibration_report(
+        request.destination_root, identity=identity.content_sha256
+    )
+    operator = _calibration_report_payload(
+        core_path, identity=identity.content_sha256
+    )
+    operator_path = prepare_telco_local._calibration_operator_path(
+        drive_dir, tokenizer_sha256
+    )
+    operator_path.parent.mkdir(parents=True)
+    operator_path.write_text(
+        json.dumps(operator, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    core_path.unlink()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("status must not call source/provider/builder")
+
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", forbidden)
+    monkeypatch.setattr(prepare_telco_local, "_load_dataset_function", forbidden)
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        forbidden,
+    )
+
+    status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert status["calibration_gate_satisfied"] is False
+    assert "core" in status["calibration_gate_reason"].lower()
 
 
 @pytest.mark.parametrize(
@@ -2343,14 +2685,16 @@ def test_full_resume_rejects_foreign_calibration_identity():
     [
         ("actual_committed_quota_tokens", None, "committed tokens"),
         ("projected_12b_wall_time_seconds", float("nan"), "projection"),
+        ("projected_12b_wall_time_seconds", 10**1000, "projection"),
     ],
 )
 def test_full_resume_rejects_malformed_calibration_metrics(
-    field: str, value: object, match: str
+    tmp_path: Path, field: str, value: object, match: str
 ):
     from scripts import prepare_telco_local
 
-    report = _calibration_report_payload()
+    core_path = _write_core_calibration_report(tmp_path)
+    report = _calibration_report_payload(core_path)
     report[field] = value
     report.pop("operator_report_sha256")
     report["operator_report_sha256"] = sha256_json(report)
@@ -2359,6 +2703,8 @@ def test_full_resume_rejects_malformed_calibration_metrics(
         prepare_telco_local._require_accepted_calibration(
             report,
             expected_build_identity="a" * 64,
+            core_report_path=core_path,
+            core_managed_root=tmp_path,
             accept_calibration=True,
             override_guard=False,
             override_reason="",
@@ -2406,6 +2752,21 @@ def test_candidate_pilot_refresh_rebuilds_in_fingerprinted_namespace_without_gat
     def fake_build(request, **_kwargs):
         observed["request"] = request
         identity = prepare_telco_local._expected_build_identity(request)
+        request.destination_root.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "version": 2,
+            "status": "complete",
+            "complete": True,
+            "build_identity_sha256": identity.content_sha256,
+            "quota_counting": {
+                "method": "tokenizer_exact_one_pass",
+                "tokenizer_sha256": selected_sha256,
+            },
+        }
+        manifest["manifest_sha256"] = sha256_json(manifest)
+        (request.destination_root / "manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
         return LocalCorpusResult(
             "complete", identity.content_sha256, 20_000_000, {"complete": True}
         )
@@ -2433,6 +2794,78 @@ def test_candidate_pilot_refresh_rebuilds_in_fingerprinted_namespace_without_gat
     )
     assert status["pilot_refresh_gate_satisfied"] is False
     assert status["full_completion_gate_satisfied"] is False
+
+    _write_pilot_gate_evidence(
+        prepare_telco_local._operator_evidence_root(
+            drive_dir, selected_sha256
+        ) / "pilot/colab",
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=str(report["build_identity_sha256"]),
+    )
+    passed_status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert passed_status["pilot_refresh_gate_satisfied"] is True
+
+
+def test_pilot_reuse_rejects_failed_evaluation_with_nested_matching_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    evaluation_path = recipe_root / "runs/pilot/evaluation/review.json"
+    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    evaluation.update(
+        {
+            "status": "fail",
+            "gate_passed": False,
+            "unrelated": {"tokenizer_sha256": selected_sha256},
+            "build_identity_sha256": build_identity_sha256,
+        }
+    )
+    evaluation_path.write_text(json.dumps(evaluation), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+    assert not prepare_telco_local._pilot_refresh_path(
+        drive_dir, selected_sha256
+    ).exists()
+
+
+def test_existing_pilot_refresh_revalidates_current_artifacts_without_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
+    report_path = prepare_telco_local._pilot_refresh_path(
+        drive_dir, selected_sha256
+    )
+    original_report = report_path.read_bytes()
+    evaluation_path = recipe_root / "runs/pilot/evaluation/review.json"
+    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    evaluation["review_note"] = "current bytes drifted after immutable refresh"
+    evaluation_path.write_text(json.dumps(evaluation), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+    assert report_path.read_bytes() == original_report
+    status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert status["pilot_refresh_gate_satisfied"] is False
+    assert "artifact" in status["pilot_refresh_gate_reason"].lower()
 
 
 def test_candidate_pilot_refresh_rejects_changed_builder_identity(

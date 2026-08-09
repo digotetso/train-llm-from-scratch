@@ -263,6 +263,32 @@ class BuildJournal:
         except sqlite3.IntegrityError as error:
             raise ValueError("unit ID or document hash already committed") from error
 
+    def update_latest_cumulative(self, cumulative: Mapping[str, object]) -> None:
+        """Durably refresh operational counters on the latest content unit."""
+
+        row = self.connection.execute(
+            "SELECT rowid, state_json FROM units ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return
+        state = json.loads(str(row["state_json"]))
+        if not isinstance(state, dict):
+            raise ValueError("latest unit state must be a JSON object")
+        state["cumulative"] = json.loads(json.dumps(cumulative))
+        with self.connection:
+            self.connection.execute(
+                "UPDATE units SET state_json = ? WHERE rowid = ?",
+                (
+                    json.dumps(
+                        state,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                    int(row["rowid"]),
+                ),
+            )
+
     def committed_hashes(self, hashes: Iterable[str]) -> set[str]:
         """Return the supplied digests that are already committed."""
 

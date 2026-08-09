@@ -350,11 +350,16 @@ Expected paths:
   evidence/tokenizers/<selected-tokenizer-sha256>/full/calibration_operator_report.json
 ```
 
-The report records actual committed tokens, wall and process CPU time, peak
-RSS, the documented non-CPU wait upper bound, encoding, contamination and
-publication throughput, mean and rolling throughput, projected 12B wall time,
-provider preflight, Drive verification, and the unchanged build identity. No
-GPU is required.
+The core report records durable cumulative measurements across restarts: wall
+time from the build monotonic clock, process CPU time, peak RSS, provider-load
+and iterator-`next()` wall time, tokenizer batch encode time and token count,
+quality-filter time and document count, and publisher time and byte count. The
+operator report reads those exact counters, declares each measurement method,
+derives phase/mean/rolling throughput and the projected 12B wall time, and
+binds both the core report's content checksum and its published file checksum.
+The calibration gate remains false if either report is missing, malformed,
+foreign to the unchanged build identity, or has drifted on disk. No GPU is
+required.
 
 ## Check status without opening a source stream
 

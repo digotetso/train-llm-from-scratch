@@ -11,7 +11,6 @@ import re
 import shutil
 import sqlite3
 import sys
-import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1258,14 +1257,133 @@ def _fingerprint_tree(root: Path, *, managed_root: Path, label: str) -> dict[str
     return {"files": files, "fingerprint_sha256": sha256_json(files)}
 
 
-def _contains_fingerprint(value: object, expected: str) -> bool:
-    if value == expected:
-        return True
-    if isinstance(value, Mapping):
-        return any(_contains_fingerprint(item, expected) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_contains_fingerprint(item, expected) for item in value)
-    return False
+def _file_fingerprint(path: Path, *, managed_root: Path) -> dict[str, Any]:
+    path = require_managed_path(
+        managed_root, path, kind="file", allow_missing=False
+    )
+    return {
+        "path": path.relative_to(managed_root).as_posix(),
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _validated_pilot_manifest(
+    path: Path,
+    *,
+    managed_root: Path,
+    tokenizer_sha256: str,
+    expected_build_identity: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    path = require_managed_path(
+        managed_root, path, kind="file", allow_missing=False
+    )
+    manifest = _load_json_object(path, "Pilot corpus manifest")
+    stored = manifest.get("manifest_sha256")
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    quota_counting = manifest.get("quota_counting", {})
+    manifest_tokenizer = (
+        quota_counting.get("tokenizer_sha256")
+        if isinstance(quota_counting, Mapping)
+        else None
+    ) or manifest.get("tokenizer_sha256")
+    build_identity = manifest.get("build_identity_sha256")
+    if (
+        manifest.get("version") != 2
+        or manifest.get("status") != "complete"
+        or manifest.get("complete") is not True
+        or stored != sha256_json(unsigned)
+        or manifest_tokenizer != tokenizer_sha256
+        or not isinstance(build_identity, str)
+        or SHA256_PATTERN.fullmatch(build_identity) is None
+    ):
+        raise ValueError("Pilot corpus manifest schema or identity is invalid.")
+    if expected_build_identity is not None and build_identity != expected_build_identity:
+        raise ValueError("Pilot corpus manifest build identity mismatch.")
+    return manifest, build_identity
+
+
+def _validated_pilot_gate(
+    payload: Mapping[str, Any],
+    *,
+    gate: str,
+    tokenizer_sha256: str,
+    build_identity_sha256: str,
+) -> None:
+    if (
+        payload.get("version") != 1
+        or payload.get("status") != "pass"
+        or payload.get("gate") != gate
+        or payload.get("gate_passed") is not True
+        or payload.get("tokenizer_sha256") != tokenizer_sha256
+        or payload.get("build_identity_sha256") != build_identity_sha256
+    ):
+        raise ValueError(f"Pilot {gate} evidence schema, status, or identity failed.")
+    if gate == "smoke" and payload.get("resume_verified") is not True:
+        raise ValueError("Pilot smoke evidence does not prove resume verification.")
+    if gate == "pilot" and (
+        payload.get("complete") is not True
+        or not isinstance(payload.get("tokens_processed"), int)
+        or isinstance(payload.get("tokens_processed"), bool)
+        or int(payload["tokens_processed"]) < 20_000_000
+    ):
+        raise ValueError("Pilot completion evidence did not reach 20M tokens.")
+    if gate == "evaluation" and payload.get("evaluation_passed") is not True:
+        raise ValueError("Pilot evaluation evidence did not pass.")
+
+
+def _pilot_colab_evidence(
+    *,
+    drive_dir: Path,
+    gate_root: Path,
+    evaluation_root: Path,
+    tokenizer_sha256: str,
+    build_identity_sha256: str,
+) -> dict[str, Any]:
+    required = {
+        "preflight": gate_root / "preflight.json",
+        "smoke": gate_root / "smoke_resume_verified.json",
+        "pilot": gate_root / "pilot_complete.json",
+    }
+    artifacts: dict[str, Any] = {}
+    for gate, path in required.items():
+        path = require_managed_path(
+            drive_dir, path, kind="file", allow_missing=False
+        )
+        payload = _load_json_object(path, f"Pilot {gate} evidence")
+        _validated_pilot_gate(
+            payload,
+            gate=gate,
+            tokenizer_sha256=tokenizer_sha256,
+            build_identity_sha256=build_identity_sha256,
+        )
+        artifacts[gate] = _file_fingerprint(path, managed_root=drive_dir)
+    evaluation_files = sorted(
+        path
+        for path in evaluation_root.glob("**/*.json")
+        if path.is_file() and not path.is_symlink()
+    )
+    if not evaluation_files:
+        raise ValueError("Pilot evaluation evidence is missing.")
+    evaluations = []
+    for path in evaluation_files:
+        path = require_managed_path(
+            drive_dir, path, kind="file", allow_missing=False
+        )
+        payload = _load_json_object(path, "Pilot evaluation evidence")
+        _validated_pilot_gate(
+            payload,
+            gate="evaluation",
+            tokenizer_sha256=tokenizer_sha256,
+            build_identity_sha256=build_identity_sha256,
+        )
+        evaluations.append(_file_fingerprint(path, managed_root=drive_dir))
+    artifacts["evaluation"] = {
+        "files": evaluations,
+        "fingerprint_sha256": sha256_json(evaluations),
+    }
+    return artifacts
 
 
 def _pilot_reuse_evidence(
@@ -1277,26 +1395,11 @@ def _pilot_reuse_evidence(
     shards_root = recipe_root / "prepared/pilot/shards"
     evidence_root = recipe_root / "evidence/pilot"
     runs_root = recipe_root / "runs/pilot"
-    required_json = {
-        "corpus": corpus_path,
-        "preflight": evidence_root / "preflight.json",
-        "smoke": evidence_root / "smoke_resume_verified.json",
-        "pilot": evidence_root / "pilot_complete.json",
-    }
-    payloads: dict[str, dict[str, Any]] = {}
-    for label, path in required_json.items():
-        path = require_managed_path(
-            drive_dir, path, kind="file", allow_missing=False
-        )
-        payloads[label] = _load_json_object(path, f"Pilot {label} evidence")
-    if payloads["preflight"].get("status") != "pass":
-        raise ValueError("Pilot preflight evidence did not pass.")
-    if payloads["smoke"].get("status") != "pass":
-        raise ValueError("Pilot smoke evidence did not pass.")
-    if payloads["pilot"].get("status") != "pass" or int(
-        payloads["pilot"].get("tokens_processed", 0)
-    ) < 20_000_000:
-        raise ValueError("Pilot completion evidence did not reach 20M tokens.")
+    _, build_identity_sha256 = _validated_pilot_manifest(
+        corpus_path,
+        managed_root=drive_dir,
+        tokenizer_sha256=tokenizer_sha256,
+    )
     if provenance.get("tokenizer_sha256") != tokenizer_sha256:
         raise ValueError("Preserved pilot tokenizer fingerprint mismatch.")
     shard_fingerprint = _fingerprint_tree(
@@ -1307,33 +1410,19 @@ def _pilot_reuse_evidence(
         raise ValueError("Pilot shards have no split metadata evidence.")
     for metadata_path in metadata_files:
         metadata = _load_json_object(metadata_path, "Pilot shard metadata")
-        if not _contains_fingerprint(metadata, tokenizer_sha256):
-            raise ValueError("Pilot shard metadata tokenizer fingerprint mismatch.")
-    for label in ("preflight", "smoke", "pilot"):
-        if not _contains_fingerprint(payloads[label], tokenizer_sha256):
-            raise ValueError(f"Pilot {label} evidence tokenizer fingerprint mismatch.")
-    evaluation_files = sorted(
-        path
-        for path in runs_root.glob("evaluation/**/*.json")
-        if path.is_file() and not path.is_symlink()
+        if (
+            metadata.get("version") != 1
+            or metadata.get("tokenizer_sha256") != tokenizer_sha256
+            or metadata.get("build_identity_sha256") != build_identity_sha256
+        ):
+            raise ValueError("Pilot shard metadata identity mismatch.")
+    gates = _pilot_colab_evidence(
+        drive_dir=drive_dir,
+        gate_root=evidence_root,
+        evaluation_root=runs_root / "evaluation",
+        tokenizer_sha256=tokenizer_sha256,
+        build_identity_sha256=build_identity_sha256,
     )
-    if not evaluation_files:
-        raise ValueError("Pilot evaluation evidence is missing.")
-    evaluation = []
-    for path in evaluation_files:
-        path = require_managed_path(
-            drive_dir, path, kind="file", allow_missing=False
-        )
-        payload = _load_json_object(path, "Pilot evaluation evidence")
-        if not _contains_fingerprint(payload, tokenizer_sha256):
-            raise ValueError("Pilot evaluation tokenizer fingerprint mismatch.")
-        evaluation.append(
-            {
-                "path": path.relative_to(drive_dir).as_posix(),
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
-        )
     artifacts = {
         label: {
             "path": path.relative_to(drive_dir).as_posix(),
@@ -1343,15 +1432,82 @@ def _pilot_reuse_evidence(
         for label, path in {
             "tokenizer": tokenizer_dir / "tokenizer.json",
             "tokenizer_provenance": provenance_path,
-            **required_json,
+            "corpus": corpus_path,
         }.items()
     }
     artifacts["shards"] = shard_fingerprint
-    artifacts["evaluation"] = {
-        "files": evaluation,
-        "fingerprint_sha256": sha256_json(evaluation),
-    }
+    artifacts.update(gates)
+    artifacts["build_identity_sha256"] = build_identity_sha256
     return artifacts
+
+
+def _current_pilot_refresh(
+    report: Mapping[str, Any],
+    *,
+    drive_dir: Path,
+    tokenizer_sha256: str,
+    winner: str,
+    selection: Mapping[str, Any],
+    comparison: Mapping[str, Any],
+    candidate_config: TokenizerCandidateConfig,
+) -> dict[str, Any]:
+    expected_common = {
+        "version": 1,
+        "winner": winner,
+        "selected_tokenizer_sha256": tokenizer_sha256,
+        "selection_file_sha256": sha256_file(drive_dir / "tokenizer_selection.json"),
+        "comparison_file_sha256": sha256_file(drive_dir / "comparison.json"),
+        "selection_comparison_sha256": selection["comparison_sha256"],
+        "comparison_sha256": comparison["comparison_sha256"],
+    }
+    if any(report.get(key) != value for key, value in expected_common.items()):
+        raise ValueError("Pilot refresh is not bound to the current selected workflow.")
+    current = dict(report)
+    if winner == candidate_config.baseline_label:
+        if report.get("action") != "reuse":
+            raise ValueError("Pilot refresh action conflicts with the selected tokenizer.")
+        artifacts = _pilot_reuse_evidence(drive_dir, tokenizer_sha256)
+        if report.get("artifacts") != artifacts:
+            raise ValueError("Pilot refresh recorded artifact fingerprints changed.")
+        current["refreshed_pilot_gates_passed"] = True
+        current["pending_colab_gates"] = []
+        return current
+    if report.get("action") != "rebuild":
+        raise ValueError("Pilot refresh action conflicts with the selected tokenizer.")
+    build_identity = report.get("build_identity_sha256")
+    if not isinstance(build_identity, str) or SHA256_PATTERN.fullmatch(build_identity) is None:
+        raise ValueError("Pilot refresh build identity is invalid.")
+    destination = drive_dir / "corpora" / "pilot" / tokenizer_sha256
+    _validated_pilot_manifest(
+        destination / "manifest.json",
+        managed_root=drive_dir,
+        tokenizer_sha256=tokenizer_sha256,
+        expected_build_identity=build_identity,
+    )
+    corpus_tree = _fingerprint_tree(
+        destination, managed_root=drive_dir, label="Refreshed pilot corpus"
+    )
+    if report.get("artifacts") != {"corpus_tree": corpus_tree}:
+        raise ValueError("Pilot refresh recorded artifact fingerprints changed.")
+    try:
+        current_gates = _pilot_colab_evidence(
+            drive_dir=drive_dir,
+            gate_root=_operator_evidence_root(drive_dir, tokenizer_sha256)
+            / "pilot/colab",
+            evaluation_root=_operator_evidence_root(drive_dir, tokenizer_sha256)
+            / "pilot/colab/evaluation",
+            tokenizer_sha256=tokenizer_sha256,
+            build_identity_sha256=build_identity,
+        )
+    except (FileNotFoundError, OSError, ValueError) as error:
+        current["refreshed_pilot_gates_passed"] = False
+        current["pending_colab_gates"] = ["smoke", "pilot", "evaluation"]
+        current["current_gate_reason"] = str(error)
+        return current
+    current["refreshed_pilot_gates_passed"] = True
+    current["pending_colab_gates"] = []
+    current["current_colab_artifacts"] = current_gates
+    return current
 
 
 def _pilot_refresh_stage(
@@ -1376,11 +1532,20 @@ def _pilot_refresh_stage(
     report_path = _pilot_refresh_path(drive_dir, tokenizer_sha256)
     require_managed_path(drive_dir, report_path, kind="file")
     if report_path.exists() or report_path.is_symlink():
-        return _read_hashed_evidence(
+        report = _read_hashed_evidence(
             report_path,
             hash_field="pilot_refresh_sha256",
             managed_root=drive_dir,
             label="Pilot refresh",
+        )
+        return _current_pilot_refresh(
+            report,
+            drive_dir=drive_dir,
+            tokenizer_sha256=tokenizer_sha256,
+            winner=winner,
+            selection=selection,
+            comparison=comparison,
+            candidate_config=candidate_config,
         )
     common = {
         "version": 1,
@@ -1425,6 +1590,16 @@ def _pilot_refresh_stage(
             raise ValueError("Refreshed pilot corpus did not complete its 20M quota.")
         if result.build_identity_sha256 != expected_identity.content_sha256:
             raise ValueError("Refreshed pilot returned a changed corpus build identity.")
+        destination = Path(request.destination_root)
+        _validated_pilot_manifest(
+            destination / "manifest.json",
+            managed_root=drive_dir,
+            tokenizer_sha256=tokenizer_sha256,
+            expected_build_identity=result.build_identity_sha256,
+        )
+        corpus_tree = _fingerprint_tree(
+            destination, managed_root=drive_dir, label="Refreshed pilot corpus"
+        )
         payload = {
             **common,
             "action": "rebuild",
@@ -1434,6 +1609,7 @@ def _pilot_refresh_stage(
             "provider_preflight": provider,
             "build_identity_sha256": result.build_identity_sha256,
             "actual_committed_quota_tokens": result.accepted_quota_tokens,
+            "artifacts": {"corpus_tree": corpus_tree},
             "destination_namespace": Path(request.destination_root)
             .relative_to(drive_dir)
             .as_posix(),
@@ -1452,16 +1628,6 @@ def _progress_payload(local_root: Path) -> dict[str, Any]:
         return {}
     require_managed_path(local_root, path, kind="file", allow_missing=False)
     return _load_json_object(path, "Corpus progress")
-
-
-def _peak_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        return value if sys.platform == "darwin" else value * 1024
-    except (ImportError, AttributeError):
-        return 0
 
 
 def _full_calibration_stage(
@@ -1497,14 +1663,9 @@ def _full_calibration_stage(
     )
     expected_identity = _expected_build_identity(request)
     provider = _provider_preflight(request)
-    destination_before = _safe_tree_bytes(Path(request.destination_root))
-    wall_started = time.monotonic()
-    cpu_started = time.process_time()
     result = build_local_corpus(
         request, stop_after_quota_tokens=CALIBRATION_TARGET_TOKENS
     )
-    invocation_wall = max(0.0, time.monotonic() - wall_started)
-    process_cpu = max(0.0, time.process_time() - cpu_started)
     if (
         result.status != "calibration_complete"
         or result.accepted_quota_tokens < CALIBRATION_TARGET_TOKENS
@@ -1512,6 +1673,16 @@ def _full_calibration_stage(
         raise ValueError("Calibration stopped before 100M committed quota tokens.")
     if result.build_identity_sha256 != expected_identity.content_sha256:
         raise ValueError("Calibration returned a changed corpus build identity.")
+    destination_root = Path(request.destination_root)
+    core_report, core_binding = _validated_core_calibration_report(
+        destination_root / "calibration_report.json",
+        managed_root=destination_root,
+        expected_build_identity=result.build_identity_sha256,
+    )
+    if core_report["accepted_quota_tokens"] != result.accepted_quota_tokens:
+        raise ValueError(
+            "Committed calibration report token count does not match the builder result."
+        )
     report_path = _calibration_operator_path(drive_dir, tokenizer_sha256)
     if report_path.exists() or report_path.is_symlink():
         existing = _read_hashed_evidence(
@@ -1523,52 +1694,48 @@ def _full_calibration_stage(
         if existing.get("build_identity_sha256") != result.build_identity_sha256:
             raise ValueError("Calibration operator report build identity mismatch.")
         _validated_calibration_report(
-            existing, expected_build_identity=result.build_identity_sha256
+            existing,
+            expected_build_identity=result.build_identity_sha256,
+            core_report_path=destination_root / "calibration_report.json",
+            core_managed_root=destination_root,
         )
         return existing
-    progress = _progress_payload(Path(request.local_root))
-    throughput = progress.get("throughput", {})
-    total_wall = max(
-        invocation_wall,
-        float(throughput.get("elapsed_seconds", 0.0))
-        if isinstance(throughput, Mapping)
-        else 0.0,
-        1e-9,
-    )
-    mean_rate = result.accepted_quota_tokens / total_wall
-    rolling_rate = (
-        float(throughput.get("rolling_tokens_per_second", mean_rate))
-        if isinstance(throughput, Mapping)
-        else mean_rate
-    )
-    if rolling_rate <= 0:
-        rolling_rate = mean_rate
-    quality = progress.get("quality", {})
-    quality_documents = (
-        int(quality.get("total_documents", 0)) if isinstance(quality, Mapping) else 0
-    )
-    destination_after = _safe_tree_bytes(Path(request.destination_root))
+    metrics = core_report["metrics"]
+    throughput = core_report["throughput"]
+    source_network = metrics["source_network"]
+    encode = metrics["encode"]
+    contamination = metrics["contamination"]
+    publication = metrics["publication"]
+    rolling_rate = throughput["rolling_overall_tokens_per_second"]
     payload = {
-        "version": 1,
+        "version": 2,
         "status": "calibration_complete",
         "build_identity_sha256": result.build_identity_sha256,
         "selected_tokenizer_sha256": tokenizer_sha256,
         "actual_committed_quota_tokens": result.accepted_quota_tokens,
-        "wall_time_seconds": total_wall,
-        "process_cpu_time_seconds": process_cpu,
-        "peak_rss_bytes": _peak_rss_bytes(),
-        "source_network_wait_seconds": max(0.0, invocation_wall - process_cpu),
-        "source_network_wait_measurement": "non_cpu_wall_time_upper_bound",
-        "encode_tokens_per_second": result.accepted_quota_tokens
-        / max(process_cpu, 1e-9),
-        "contamination_documents_per_second": quality_documents / total_wall,
-        "publication_bytes_per_second": max(
-            0, destination_after - destination_before
-        )
-        / max(invocation_wall, 1e-9),
-        "mean_overall_tokens_per_second": mean_rate,
+        "wall_time_seconds": metrics["wall_time_seconds"],
+        "process_cpu_time_seconds": metrics["process_cpu_time_seconds"],
+        "peak_rss_bytes": metrics["peak_rss_bytes"],
+        "source_network_wait_seconds": source_network["wall_time_seconds"],
+        "encode_tokens_per_second": throughput["encode_tokens_per_second"],
+        "contamination_documents_per_second": throughput[
+            "contamination_documents_per_second"
+        ],
+        "publication_bytes_per_second": throughput[
+            "publication_bytes_per_second"
+        ],
+        "mean_overall_tokens_per_second": throughput[
+            "mean_overall_tokens_per_second"
+        ],
         "rolling_overall_tokens_per_second": rolling_rate,
         "projected_12b_wall_time_seconds": FULL_TARGET_TOKENS / rolling_rate,
+        "measurement_methods": {
+            "source_network_wait": source_network["method"],
+            "encode": encode["method"],
+            "contamination": contamination["method"],
+            "publication": publication["method"],
+        },
+        "core_calibration_report": core_binding,
         "drive_verification_state": "verified",
         "unrecovered_storage_pressure": False,
         "provider_preflight": provider,
@@ -1590,8 +1757,185 @@ def _strict_integer(value: Any, *, label: str) -> int:
     return value
 
 
+def _strict_nonnegative_number(value: Any, *, label: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{label} is invalid.")
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as error:
+        raise ValueError(f"{label} is invalid.") from error
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{label} is invalid.")
+    return number
+
+
+def _strict_positive_number(value: Any, *, label: str) -> float:
+    number = _strict_nonnegative_number(value, label=label)
+    if number <= 0:
+        raise ValueError(f"{label} must be positive.")
+    return number
+
+
+def _strict_nonnegative_integer(value: Any, *, label: str) -> int:
+    number = _strict_integer(value, label=label)
+    if number < 0 or number > 2**63 - 1:
+        raise ValueError(f"{label} is invalid.")
+    return number
+
+
+def _strict_positive_integer(value: Any, *, label: str) -> int:
+    number = _strict_nonnegative_integer(value, label=label)
+    if number < 1:
+        raise ValueError(f"{label} must be positive.")
+    return number
+
+
+def _same_number(actual: Any, expected: float, *, label: str) -> None:
+    number = _strict_nonnegative_number(actual, label=label)
+    if not math.isclose(number, expected, rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError(f"{label} does not match committed calibration metrics.")
+
+
+def _validated_core_calibration_report(
+    path: Path,
+    *,
+    managed_root: Path,
+    expected_build_identity: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        report = _read_hashed_evidence(
+            path,
+            hash_field="calibration_report_sha256",
+            managed_root=managed_root,
+            label="Committed core calibration report",
+        )
+    except (FileNotFoundError, OSError, ValueError) as error:
+        raise ValueError(
+            f"Committed core calibration report is missing or invalid: {error}"
+        ) from error
+    committed = _strict_nonnegative_integer(
+        report.get("accepted_quota_tokens"),
+        label="Committed core calibration report accepted tokens",
+    )
+    committed_units = _strict_nonnegative_integer(
+        report.get("committed_units"),
+        label="Committed core calibration report units",
+    )
+    if (
+        report.get("version") != 2
+        or report.get("status") != "calibration_complete"
+        or committed < CALIBRATION_TARGET_TOKENS
+        or committed_units < 1
+    ):
+        raise ValueError(
+            "Committed core calibration report must be complete version 2 evidence "
+            "for at least 100M tokens."
+        )
+    if report.get("build_identity_sha256") != expected_build_identity:
+        raise ValueError("Committed core calibration report build identity mismatch.")
+
+    metrics = report.get("metrics")
+    throughput = report.get("throughput")
+    if (
+        not isinstance(metrics, Mapping)
+        or metrics.get("version") != 1
+        or not isinstance(throughput, Mapping)
+    ):
+        raise ValueError("Committed core calibration report metrics schema is invalid.")
+    wall = _strict_positive_number(
+        metrics.get("wall_time_seconds"), label="Calibration wall time"
+    )
+    _strict_nonnegative_number(
+        metrics.get("process_cpu_time_seconds"), label="Calibration process CPU time"
+    )
+    _strict_nonnegative_integer(
+        metrics.get("peak_rss_bytes"), label="Calibration peak RSS"
+    )
+    _same_number(report.get("elapsed_seconds"), wall, label="Calibration elapsed time")
+    if report.get("peak_rss_bytes") != metrics.get("peak_rss_bytes"):
+        raise ValueError("Calibration peak RSS does not match committed metrics.")
+
+    phase_schemas = {
+        "source_network": (
+            "provider_load_and_next_wall_time",
+            ("operations", "rows"),
+        ),
+        "encode": (
+            "tokenizer_encode_batch_wall_time",
+            ("batches", "documents", "tokens"),
+        ),
+        "contamination": (
+            "quality_filter_accept_wall_time",
+            ("documents",),
+        ),
+        "publication": (
+            "publisher_publish_wall_time",
+            ("artifacts", "bytes"),
+        ),
+    }
+    phases: dict[str, Mapping[str, Any]] = {}
+    for phase, (method, counters) in phase_schemas.items():
+        evidence = metrics.get(phase)
+        if not isinstance(evidence, Mapping) or evidence.get("method") != method:
+            raise ValueError(f"Calibration {phase} measurement schema is invalid.")
+        _strict_positive_number(
+            evidence.get("wall_time_seconds"), label=f"Calibration {phase} wall time"
+        )
+        for counter in counters:
+            _strict_nonnegative_integer(
+                evidence.get(counter), label=f"Calibration {phase} {counter}"
+            )
+        phases[phase] = evidence
+
+    source_network = phases["source_network"]
+    encode = phases["encode"]
+    contamination = phases["contamination"]
+    publication = phases["publication"]
+    for phase, evidence, counters in (
+        ("source_network", source_network, ("operations", "rows")),
+        ("encode", encode, ("batches", "documents", "tokens")),
+        ("contamination", contamination, ("documents",)),
+        ("publication", publication, ("artifacts", "bytes")),
+    ):
+        for counter in counters:
+            _strict_positive_integer(
+                evidence[counter], label=f"Calibration {phase} {counter}"
+            )
+    if encode["tokens"] < committed:
+        raise ValueError("Calibration encode token count is below committed tokens.")
+    expected_rates = {
+        "encode_tokens_per_second": float(encode["tokens"])
+        / float(encode["wall_time_seconds"]),
+        "contamination_documents_per_second": float(contamination["documents"])
+        / float(contamination["wall_time_seconds"]),
+        "publication_bytes_per_second": float(publication["bytes"])
+        / float(publication["wall_time_seconds"]),
+        "mean_overall_tokens_per_second": committed / wall,
+    }
+    for field, expected in expected_rates.items():
+        _same_number(throughput.get(field), expected, label=f"Calibration {field}")
+    _strict_positive_number(
+        throughput.get("rolling_overall_tokens_per_second"),
+        label="Calibration rolling throughput",
+    )
+    resolved = require_managed_path(
+        managed_root, path, kind="file", allow_missing=False
+    )
+    binding = {
+        "path": "calibration_report.json",
+        "size": resolved.stat().st_size,
+        "sha256": sha256_file(resolved),
+        "calibration_report_sha256": report["calibration_report_sha256"],
+    }
+    return report, binding
+
+
 def _validated_calibration_report(
-    report: Mapping[str, Any], *, expected_build_identity: str
+    report: Mapping[str, Any],
+    *,
+    expected_build_identity: str,
+    core_report_path: Path,
+    core_managed_root: Path,
 ) -> tuple[int, float, bool]:
     stored = report.get("operator_report_sha256")
     unsigned = dict(report)
@@ -1603,7 +1947,8 @@ def _validated_calibration_report(
         label="Calibration report committed tokens",
     )
     if (
-        report.get("status") != "calibration_complete"
+        report.get("version") != 2
+        or report.get("status") != "calibration_complete"
         or committed < CALIBRATION_TARGET_TOKENS
     ):
         raise ValueError("Calibration report does not prove 100M committed tokens.")
@@ -1611,30 +1956,80 @@ def _validated_calibration_report(
         raise ValueError("Calibration report build identity does not match the full build.")
     if report.get("drive_verification_state") != "verified":
         raise ValueError("Calibration report does not prove Drive verification.")
-    projected = report.get("projected_12b_wall_time_seconds")
-    if (
-        not isinstance(projected, (int, float))
-        or isinstance(projected, bool)
-        or not math.isfinite(float(projected))
-        or float(projected) <= 0
+    core_report, current_binding = _validated_core_calibration_report(
+        core_report_path,
+        managed_root=core_managed_root,
+        expected_build_identity=expected_build_identity,
+    )
+    if report.get("core_calibration_report") != current_binding:
+        raise ValueError("Calibration operator report core binding mismatch.")
+    if core_report["accepted_quota_tokens"] != committed:
+        raise ValueError("Calibration operator and core committed tokens mismatch.")
+    metrics = core_report["metrics"]
+    throughput = core_report["throughput"]
+    expected_methods = {
+        "source_network_wait": metrics["source_network"]["method"],
+        "encode": metrics["encode"]["method"],
+        "contamination": metrics["contamination"]["method"],
+        "publication": metrics["publication"]["method"],
+    }
+    if report.get("measurement_methods") != expected_methods:
+        raise ValueError("Calibration operator measurement methods are invalid.")
+    copied_metrics = {
+        "wall_time_seconds": metrics["wall_time_seconds"],
+        "process_cpu_time_seconds": metrics["process_cpu_time_seconds"],
+        "peak_rss_bytes": metrics["peak_rss_bytes"],
+        "source_network_wait_seconds": metrics["source_network"][
+            "wall_time_seconds"
+        ],
+        "encode_tokens_per_second": throughput["encode_tokens_per_second"],
+        "contamination_documents_per_second": throughput[
+            "contamination_documents_per_second"
+        ],
+        "publication_bytes_per_second": throughput[
+            "publication_bytes_per_second"
+        ],
+        "mean_overall_tokens_per_second": throughput[
+            "mean_overall_tokens_per_second"
+        ],
+        "rolling_overall_tokens_per_second": throughput[
+            "rolling_overall_tokens_per_second"
+        ],
+    }
+    for field, expected in copied_metrics.items():
+        _same_number(report.get(field), float(expected), label=f"Operator {field}")
+    projected = _strict_positive_number(
+        report.get("projected_12b_wall_time_seconds"),
+        label="Calibration report projection",
+    )
+    expected_projection = FULL_TARGET_TOKENS / float(
+        throughput["rolling_overall_tokens_per_second"]
+    )
+    if not math.isclose(
+        projected, expected_projection, rel_tol=1e-12, abs_tol=1e-12
     ):
-        raise ValueError("Calibration report projection is invalid.")
+        raise ValueError("Calibration report projection does not match core metrics.")
     storage_pressure = report.get("unrecovered_storage_pressure")
     if not isinstance(storage_pressure, bool):
         raise ValueError("Calibration report storage-pressure state is invalid.")
-    return committed, float(projected), storage_pressure
+    return committed, projected, storage_pressure
 
 
 def _require_accepted_calibration(
     report: Mapping[str, Any],
     *,
     expected_build_identity: str,
+    core_report_path: Path,
+    core_managed_root: Path,
     accept_calibration: bool,
     override_guard: bool,
     override_reason: str,
 ) -> dict[str, Any]:
     _, projected, storage_pressure = _validated_calibration_report(
-        report, expected_build_identity=expected_build_identity
+        report,
+        expected_build_identity=expected_build_identity,
+        core_report_path=core_report_path,
+        core_managed_root=core_managed_root,
     )
     stored = report["operator_report_sha256"]
     if not accept_calibration:
@@ -1716,25 +2111,12 @@ def _full_resume_stage(
     authorization = _require_accepted_calibration(
         report,
         expected_build_identity=identity.content_sha256,
+        core_report_path=Path(request.destination_root) / "calibration_report.json",
+        core_managed_root=Path(request.destination_root),
         accept_calibration=args.accept_calibration,
         override_guard=args.override_calibration_guard,
         override_reason=args.override_reason,
     )
-    core_report_path = Path(request.destination_root) / "calibration_report.json"
-    core_report = _read_hashed_evidence(
-        core_report_path,
-        hash_field="calibration_report_sha256",
-        managed_root=Path(request.destination_root),
-        label="Committed calibration report",
-    )
-    if (
-        core_report.get("build_identity_sha256") != identity.content_sha256
-        or _strict_integer(
-            core_report.get("accepted_quota_tokens"),
-            label="Committed calibration report accepted tokens",
-        ) < CALIBRATION_TARGET_TOKENS
-    ):
-        raise ValueError("Committed calibration report does not match accepted evidence.")
     provider = _provider_preflight(request)
     operator_path = _resume_operator_path(drive_dir, tokenizer_sha256)
     operator_payload = {
@@ -1802,13 +2184,15 @@ def _status_stage(
     candidate_config: TokenizerCandidateConfig,
     model_config: Mapping[str, Any],
 ) -> dict[str, Any]:
-    _, tokenizer_dir, tokenizer_sha256, _, _ = _selected_tokenizer_evidence(
-        drive_dir=drive_dir,
-        work_dir=work_dir,
-        registry=registry,
-        mixture=mixture,
-        candidate_config=candidate_config,
-        model_config=model_config,
+    winner, tokenizer_dir, tokenizer_sha256, selection, comparison = (
+        _selected_tokenizer_evidence(
+            drive_dir=drive_dir,
+            work_dir=work_dir,
+            registry=registry,
+            mixture=mixture,
+            candidate_config=candidate_config,
+            model_config=model_config,
+        )
     )
     request = _corpus_request(
         kind="full",
@@ -1894,18 +2278,28 @@ def _status_stage(
         else None
     )
     calibration_gate = False
+    calibration_gate_reason = "Calibration operator or core evidence is missing."
     calibration_path = _calibration_operator_path(drive_dir, tokenizer_sha256)
     if calibration_path.is_file() and not calibration_path.is_symlink():
-        calibration = _read_hashed_evidence(
-            calibration_path,
-            hash_field="operator_report_sha256",
-            managed_root=drive_dir,
-            label="Calibration operator report",
-        )
-        _validated_calibration_report(
-            calibration, expected_build_identity=identity.content_sha256
-        )
-        calibration_gate = True
+        try:
+            calibration = _read_hashed_evidence(
+                calibration_path,
+                hash_field="operator_report_sha256",
+                managed_root=drive_dir,
+                label="Calibration operator report",
+            )
+            _validated_calibration_report(
+                calibration,
+                expected_build_identity=identity.content_sha256,
+                core_report_path=(
+                    Path(request.destination_root) / "calibration_report.json"
+                ),
+                core_managed_root=Path(request.destination_root),
+            )
+            calibration_gate = True
+            calibration_gate_reason = "passed"
+        except (FileNotFoundError, OSError, ValueError) as error:
+            calibration_gate_reason = str(error)
     manifest_complete = False
     manifest_path = Path(request.destination_root) / "manifest.json"
     if manifest_path.is_file() and not manifest_path.is_symlink():
@@ -1919,19 +2313,36 @@ def _status_stage(
             and manifest.get("build_identity_sha256") == identity.content_sha256
         )
     pilot_gate = False
+    pilot_gate_reason = "Pilot refresh evidence is missing."
     pilot_path = _pilot_refresh_path(drive_dir, tokenizer_sha256)
     if pilot_path.is_file() and not pilot_path.is_symlink():
-        pilot = _read_hashed_evidence(
-            pilot_path,
-            hash_field="pilot_refresh_sha256",
-            managed_root=drive_dir,
-            label="Pilot refresh",
-        )
-        pilot_gate = bool(
-            pilot.get("selected_tokenizer_sha256") == tokenizer_sha256
-            and pilot.get("refreshed_pilot_gates_passed") is True
-            and pilot.get("pending_colab_gates") == []
-        )
+        try:
+            pilot = _read_hashed_evidence(
+                pilot_path,
+                hash_field="pilot_refresh_sha256",
+                managed_root=drive_dir,
+                label="Pilot refresh",
+            )
+            current_pilot = _current_pilot_refresh(
+                pilot,
+                drive_dir=drive_dir,
+                tokenizer_sha256=tokenizer_sha256,
+                winner=winner,
+                selection=selection,
+                comparison=comparison,
+                candidate_config=candidate_config,
+            )
+            pilot_gate = bool(
+                current_pilot.get("refreshed_pilot_gates_passed") is True
+                and current_pilot.get("pending_colab_gates") == []
+            )
+            pilot_gate_reason = (
+                "passed"
+                if pilot_gate
+                else str(current_pilot.get("current_gate_reason", "Pilot gates pending."))
+            )
+        except (FileNotFoundError, OSError, ValueError) as error:
+            pilot_gate_reason = str(error)
     return {
         "status": "complete" if manifest_complete else journal_state,
         "build_identity_sha256": identity.content_sha256,
@@ -1953,7 +2364,9 @@ def _status_stage(
         "throughput": dict(throughput) if isinstance(throughput, Mapping) else {},
         "eta_seconds": eta,
         "calibration_gate_satisfied": calibration_gate,
+        "calibration_gate_reason": calibration_gate_reason,
         "pilot_refresh_gate_satisfied": pilot_gate,
+        "pilot_refresh_gate_reason": pilot_gate_reason,
         "full_completion_gate_satisfied": bool(
             manifest_complete and calibration_gate and pilot_gate
         ),

@@ -80,9 +80,14 @@ class LocalCorpusResult:
 @dataclass
 class _ProgressRuntime:
     monotonic_clock: Callable[[], float]
+    phase_clock: Callable[[], float]
+    process_clock: Callable[[], float]
+    rss_reader: Callable[[], int]
     callback: Callable[[Mapping[str, Any]], object] | None
     started_at: float
+    process_started_at: float
     elapsed_base: float
+    process_cpu_base: float
     last_emitted_at: float | None
     last_emitted_tokens: int
 
@@ -94,6 +99,9 @@ def _build_local_corpus(
     on_unit_committed: Callable[[UnitCommit], object] | None = None,
     stop_after_quota_tokens: int | None = None,
     monotonic_clock: Callable[[], float] = time.monotonic,
+    phase_clock: Callable[[], float] = time.monotonic,
+    process_clock: Callable[[], float] = time.process_time,
+    rss_reader: Callable[[], int] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], object] | None = None,
 ) -> LocalCorpusResult:
     """Build deterministic source windows without re-encoding accepted rows."""
@@ -112,19 +120,37 @@ def _build_local_corpus(
     loader = _load_dataset_function(dataset_loader)
     journal_path = local_root / "corpus.sqlite3"
     publisher = None
+    rss_reader = rss_reader or _rss_bytes
     with BuildJournal.open(journal_path, identity, managed_root=local_root) as journal:
         _cleanup_uncommitted_partials(local_root, journal)
+        counters, cursors, cumulative = _state(journal)
+        progress_runtime = _progress_runtime(
+            cumulative,
+            monotonic_clock,
+            progress_callback,
+            phase_clock=phase_clock,
+            process_clock=process_clock,
+            rss_reader=rss_reader,
+        )
         publisher = DrivePublisher(
             local_root=local_root,
             destination_root=destination_root,
             policy=StoragePolicy(request.max_working_bytes, request.min_free_bytes),
             journal=journal,
         )
-        publisher.reconcile()
-        counters, cursors, cumulative = _state(journal)
-        progress_runtime = _progress_runtime(
-            cumulative, monotonic_clock, progress_callback
-        )
+        reconcile_started = float(phase_clock())
+        recovered = publisher.reconcile()
+        reconcile_elapsed = max(0.0, float(phase_clock()) - reconcile_started)
+        if isinstance(recovered, tuple) and recovered:
+            _record_phase(
+                cumulative,
+                "publication",
+                reconcile_elapsed,
+                artifacts=len(recovered),
+                bytes=sum(item.size for item in recovered),
+            )
+            _snapshot_progress_state(cumulative, progress_runtime, sum(counters.values()))
+            journal.update_latest_cumulative(cumulative)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
         _restore_quality(quality, cumulative.get("quality", {}))
         restored_total = sum(counters.values())
@@ -170,6 +196,14 @@ def _build_local_corpus(
                     request.retry_delays,
                     start_raw_cursor=raw_cursor,
                     on_raw_row=observe_raw_row,
+                    phase_clock=phase_clock,
+                    phase_callback=lambda elapsed, operations, rows: _record_phase(
+                        cumulative,
+                        "source_network",
+                        elapsed,
+                        operations=operations,
+                        rows=rows,
+                    ),
                 )
                 pending_fit: list[dict[str, Any]] = []
                 pending_holdout: list[dict[str, Any]] = []
@@ -202,7 +236,18 @@ def _build_local_corpus(
                         if digest in committed or digest in pending or digest in pending_seen:
                             quality.record_rejection("duplicate_exact")
                             continue
-                        if not quality.accept(row):
+                        contamination_started = float(phase_clock())
+                        accepted_by_quality = quality.accept(row)
+                        _record_phase(
+                            cumulative,
+                            "contamination",
+                            max(
+                                0.0,
+                                float(phase_clock()) - contamination_started,
+                            ),
+                            documents=1,
+                        )
+                        if not accepted_by_quality:
                             continue
                         if counters.get((stage, item_id), 0) >= int(
                             items[item_id]["token_quota"]
@@ -217,9 +262,18 @@ def _build_local_corpus(
                     window_tokens = 0
                     before_item_tokens = {key: counters.get((stage, key), 0) for key in source_items}
                     for offset in range(0, len(accepted), request.batch_documents):
-                        for encoded_row in encode_record_batch(
-                            tokenizer, accepted[offset : offset + request.batch_documents]
-                        ):
+                        batch = accepted[offset : offset + request.batch_documents]
+                        encode_started = float(phase_clock())
+                        encoded_batch = encode_record_batch(tokenizer, batch)
+                        _record_phase(
+                            cumulative,
+                            "encode",
+                            max(0.0, float(phase_clock()) - encode_started),
+                            batches=1,
+                            documents=len(encoded_batch),
+                            tokens=sum(len(item.ids) for item in encoded_batch),
+                        )
+                        for encoded_row in encoded_batch:
                             row = dict(encoded_row.record)
                             item_id = _item_id(row)
                             if counters.get((stage, item_id), 0) >= int(
@@ -338,7 +392,26 @@ def _build_local_corpus(
                     )
                     journal.commit_unit(unit)
                     for artifact in artifacts:
-                        publisher.publish(local_root / str(artifact["path"]), str(artifact["path"]), unit_id=unit.unit_id)
+                        publication_started = float(phase_clock())
+                        publisher.publish(
+                            local_root / str(artifact["path"]),
+                            str(artifact["path"]),
+                            unit_id=unit.unit_id,
+                        )
+                        _record_phase(
+                            cumulative,
+                            "publication",
+                            max(
+                                0.0,
+                                float(phase_clock()) - publication_started,
+                            ),
+                            artifacts=1,
+                            bytes=int(artifact["size"]),
+                        )
+                    _snapshot_progress_state(
+                        cumulative, progress_runtime, sum(counters.values())
+                    )
+                    journal.update_latest_cumulative(cumulative)
                     pending_fit.clear()
                     pending_holdout.clear()
                     pending_hashes.clear()
@@ -475,6 +548,9 @@ def build_local_corpus(
     on_unit_committed: Callable[[UnitCommit], object] | None = None,
     stop_after_quota_tokens: int | None = None,
     monotonic_clock: Callable[[], float] = time.monotonic,
+    phase_clock: Callable[[], float] = time.monotonic,
+    process_clock: Callable[[], float] = time.process_time,
+    rss_reader: Callable[[], int] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], object] | None = None,
 ) -> LocalCorpusResult:
     """Build a provisional, deterministic corpus and restore SIGINT on exit."""
@@ -486,6 +562,9 @@ def build_local_corpus(
             on_unit_committed=on_unit_committed,
             stop_after_quota_tokens=stop_after_quota_tokens,
             monotonic_clock=monotonic_clock,
+            phase_clock=phase_clock,
+            process_clock=process_clock,
+            rss_reader=rss_reader,
             progress_callback=progress_callback,
         )
 
@@ -677,6 +756,8 @@ def _retrying_dataset(
     *,
     start_raw_cursor: int,
     on_raw_row: Callable[[Mapping[str, Any]], object] | None = None,
+    phase_clock: Callable[[], float] = time.monotonic,
+    phase_callback: Callable[[float, int, int], object] | None = None,
 ):
     """Reopen a transiently interrupted stream at its exact consumed raw offset.
 
@@ -689,17 +770,43 @@ def _retrying_dataset(
     cursor = start_raw_cursor
     attempt = 0
     while True:
-        dataset = _load_with_retries(loader, source, delays)
+        load_started = float(phase_clock())
+        try:
+            dataset = _load_with_retries(loader, source, delays)
+        finally:
+            if phase_callback is not None:
+                phase_callback(
+                    max(0.0, float(phase_clock()) - load_started), 1, 0
+                )
         skip = getattr(dataset, "skip", None)
         dataset = skip(cursor) if cursor and callable(skip) else itertools.islice(dataset, cursor, None)
+        iterator = iter(dataset)
         try:
-            for row in dataset:
+            while True:
+                next_started = float(phase_clock())
+                try:
+                    row = next(iterator)
+                except StopIteration:
+                    if phase_callback is not None:
+                        phase_callback(
+                            max(0.0, float(phase_clock()) - next_started), 1, 0
+                        )
+                    return
+                except BaseException:
+                    if phase_callback is not None:
+                        phase_callback(
+                            max(0.0, float(phase_clock()) - next_started), 1, 0
+                        )
+                    raise
+                if phase_callback is not None:
+                    phase_callback(
+                        max(0.0, float(phase_clock()) - next_started), 1, 1
+                    )
                 cursor += 1
                 attempt = 0
                 if on_raw_row is not None:
                     on_raw_row(row)
                 yield row
-            return
         except BaseException as error:
             if not _is_transient_error(error) or attempt == len(delays):
                 raise
@@ -766,7 +873,67 @@ def _empty_cumulative() -> dict[str, Any]:
         },
         "item_quotas": {}, "source_cursors": {}, "packed": {"raw_units": 0, "shards": 0, "raw_bytes": 0, "token_bytes": 0},
         "quality": {}, "items": {}, "last_document": {}, "overshoot": {}, "last_unit": None,
+        "metrics": _empty_metrics(),
     }
+
+
+def _empty_metrics() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "wall_time_seconds": 0.0,
+        "process_cpu_time_seconds": 0.0,
+        "peak_rss_bytes": 0,
+        "source_network": {
+            "method": "provider_load_and_next_wall_time",
+            "wall_time_seconds": 0.0,
+            "operations": 0,
+            "rows": 0,
+        },
+        "encode": {
+            "method": "tokenizer_encode_batch_wall_time",
+            "wall_time_seconds": 0.0,
+            "batches": 0,
+            "documents": 0,
+            "tokens": 0,
+        },
+        "contamination": {
+            "method": "quality_filter_accept_wall_time",
+            "wall_time_seconds": 0.0,
+            "documents": 0,
+        },
+        "publication": {
+            "method": "publisher_publish_wall_time",
+            "wall_time_seconds": 0.0,
+            "artifacts": 0,
+            "bytes": 0,
+        },
+    }
+
+
+def _metrics(cumulative: dict[str, Any]) -> dict[str, Any]:
+    saved = cumulative.get("metrics")
+    if saved is None:
+        saved = _empty_metrics()
+        cumulative["metrics"] = saved
+    if not isinstance(saved, dict) or saved.get("version") != 1:
+        raise ValueError("cumulative metrics evidence is invalid")
+    return saved
+
+
+def _record_phase(
+    cumulative: dict[str, Any], phase: str, elapsed: float, **counts: int
+) -> None:
+    metrics = _metrics(cumulative)
+    target = metrics.get(phase)
+    if not isinstance(target, dict) or elapsed < 0:
+        raise ValueError(f"cumulative {phase} metrics are invalid")
+    target["wall_time_seconds"] = float(target["wall_time_seconds"]) + float(
+        elapsed
+    )
+    for name, value in counts.items():
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"cumulative {phase} metric {name} is invalid")
+        target[name] = int(target.get(name, 0)) + value
 
 
 def _restore_quality(quality: QualityFilter, saved: object) -> None:
@@ -1104,17 +1271,58 @@ def _calibration_payload(
     status: str,
 ) -> dict[str, object]:
     progress = cumulative.get("progress", {})
+    metrics = cumulative.get("metrics", {})
+    if not isinstance(metrics, Mapping) or metrics.get("version") != 1:
+        raise ValueError("calibration requires durable cumulative metrics")
+    source_network = metrics.get("source_network", {})
+    encode = metrics.get("encode", {})
+    contamination = metrics.get("contamination", {})
+    publication = metrics.get("publication", {})
+    if not all(
+        isinstance(value, Mapping)
+        for value in (source_network, encode, contamination, publication)
+    ):
+        raise ValueError("calibration phase metrics are invalid")
+    accepted_tokens = sum(counters.values())
+    wall_time = float(metrics.get("wall_time_seconds", 0.0))
+    rolling_rate = (
+        float(progress.get("rolling_tokens_per_second", 0.0))
+        if isinstance(progress, Mapping)
+        else 0.0
+    )
+    mean_rate = accepted_tokens / wall_time if wall_time > 0 else 0.0
+
+    def rate(count: object, elapsed: object) -> float:
+        seconds = float(elapsed)
+        return float(count) / seconds if seconds > 0 else 0.0
+
     return _json_evidence_payload(
         {
-            "version": 1,
+            "version": 2,
             "status": status,
             "build_identity_sha256": identity.content_sha256,
-            "accepted_quota_tokens": sum(counters.values()),
+            "accepted_quota_tokens": accepted_tokens,
             "committed_units": int(cumulative.get("committed_units", 0)),
-            "elapsed_seconds": float(progress.get("elapsed_seconds", 0.0))
-            if isinstance(progress, Mapping)
-            else 0.0,
-            "peak_rss_bytes": _rss_bytes(),
+            "elapsed_seconds": wall_time,
+            "peak_rss_bytes": int(metrics.get("peak_rss_bytes", 0)),
+            "metrics": json.loads(json.dumps(metrics)),
+            "throughput": {
+                "encode_tokens_per_second": rate(
+                    encode.get("tokens", 0), encode.get("wall_time_seconds", 0.0)
+                ),
+                "contamination_documents_per_second": rate(
+                    contamination.get("documents", 0),
+                    contamination.get("wall_time_seconds", 0.0),
+                ),
+                "publication_bytes_per_second": rate(
+                    publication.get("bytes", 0),
+                    publication.get("wall_time_seconds", 0.0),
+                ),
+                "mean_overall_tokens_per_second": mean_rate,
+                "rolling_overall_tokens_per_second": (
+                    rolling_rate if rolling_rate > 0 else mean_rate
+                ),
+            },
         },
         "calibration_report_sha256",
     )
@@ -1583,16 +1791,29 @@ def _progress_runtime(
     cumulative: Mapping[str, Any],
     monotonic_clock: Callable[[], float],
     callback: Callable[[Mapping[str, Any]], object] | None,
+    *,
+    phase_clock: Callable[[], float] = time.monotonic,
+    process_clock: Callable[[], float] = time.process_time,
+    rss_reader: Callable[[], int] | None = None,
 ) -> _ProgressRuntime:
     now = float(monotonic_clock())
+    process_now = float(process_clock())
     saved = cumulative.get("progress", {})
     if not isinstance(saved, Mapping):
         saved = {}
+    saved_metrics = cumulative.get("metrics", {})
+    if not isinstance(saved_metrics, Mapping):
+        saved_metrics = {}
     return _ProgressRuntime(
         monotonic_clock=monotonic_clock,
+        phase_clock=phase_clock,
+        process_clock=process_clock,
+        rss_reader=rss_reader or _rss_bytes,
         callback=callback,
         started_at=now,
+        process_started_at=process_now,
         elapsed_base=float(saved.get("elapsed_seconds", 0.0)),
+        process_cpu_base=float(saved_metrics.get("process_cpu_time_seconds", 0.0)),
         last_emitted_at=None,
         last_emitted_tokens=int(saved.get("accepted_quota_tokens", 0)),
     )
@@ -1602,10 +1823,20 @@ def _snapshot_progress_state(
     cumulative: dict[str, Any], runtime: _ProgressRuntime, accepted_tokens: int
 ) -> None:
     now = float(runtime.monotonic_clock())
+    process_now = float(runtime.process_clock())
+    elapsed = runtime.elapsed_base + max(0.0, now - runtime.started_at)
     cumulative["progress"] = {
-        "elapsed_seconds": runtime.elapsed_base + max(0.0, now - runtime.started_at),
+        "elapsed_seconds": elapsed,
         "accepted_quota_tokens": accepted_tokens,
     }
+    metrics = _metrics(cumulative)
+    metrics["wall_time_seconds"] = elapsed
+    metrics["process_cpu_time_seconds"] = runtime.process_cpu_base + max(
+        0.0, process_now - runtime.process_started_at
+    )
+    metrics["peak_rss_bytes"] = max(
+        int(metrics.get("peak_rss_bytes", 0)), int(runtime.rss_reader())
+    )
 
 
 def _current_progress_context(stage, source_id, records, items, counters):
@@ -1773,7 +2004,17 @@ def _write_progress(
         cumulative["progress"] = {
             "elapsed_seconds": elapsed,
             "accepted_quota_tokens": progress.accepted_quota_tokens,
+            "overall_tokens_per_second": overall_rate,
+            "rolling_tokens_per_second": rolling_rate,
         }
+        metrics = _metrics(cumulative)
+        metrics["wall_time_seconds"] = elapsed
+        metrics["process_cpu_time_seconds"] = runtime.process_cpu_base + max(
+            0.0, float(runtime.process_clock()) - runtime.process_started_at
+        )
+        metrics["peak_rss_bytes"] = max(
+            int(metrics.get("peak_rss_bytes", 0)), int(runtime.rss_reader())
+        )
     runtime.last_emitted_at = monotonic_now
     runtime.last_emitted_tokens = progress.accepted_quota_tokens
     if runtime.callback is not None:

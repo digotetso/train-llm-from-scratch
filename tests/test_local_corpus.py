@@ -100,6 +100,34 @@ def _last_cumulative(request: LocalCorpusRequest) -> dict:
     return json.loads(row[0])["cumulative"]
 
 
+def _assert_equivalent_durable_metric_work(
+    resumed_metrics: dict, clean_metrics: dict
+) -> None:
+    assert resumed_metrics["version"] == clean_metrics["version"] == 1
+    for phase in ("source_network", "encode", "contamination", "publication"):
+        assert resumed_metrics[phase]["method"] == clean_metrics[phase]["method"]
+        assert resumed_metrics[phase]["wall_time_seconds"] >= 0
+        assert clean_metrics[phase]["wall_time_seconds"] >= 0
+    for phase, counters in (
+        ("encode", ("batches", "documents", "tokens")),
+        ("contamination", ("documents",)),
+        ("publication", ("artifacts", "bytes")),
+    ):
+        for counter in counters:
+            assert resumed_metrics[phase][counter] == clean_metrics[phase][counter]
+    # A resumed streaming provider must replay up to its durable row cursor. Those
+    # real provider `next()` calls are measured, even though downstream durable
+    # encode/filter/publication work remains byte-identical.
+    assert resumed_metrics["source_network"]["operations"] >= clean_metrics[
+        "source_network"
+    ]["operations"]
+    assert resumed_metrics["source_network"]["rows"] >= clean_metrics[
+        "source_network"
+    ]["rows"]
+    for field in ("wall_time_seconds", "process_cpu_time_seconds", "peak_rss_bytes"):
+        assert resumed_metrics[field] >= 0
+
+
 def _single_source_plan(
     stage: str, *, token_quota: int = 20, validation_fraction: float = 0.4,
     buffer_size: int = 2,
@@ -295,6 +323,159 @@ def test_calibration_resume_after_post_commit_crash_does_not_read_source_or_fina
         )
     assert resumed_unit_count == unit_count
     assert not (request.destination_root / "manifest.json").exists()
+
+
+def test_calibration_persists_actual_phase_metrics_with_declared_methods(
+    tmp_path: Path,
+):
+    class StepClock:
+        def __init__(self, step: float):
+            self.value = 0.0
+            self.step = step
+
+        def __call__(self) -> float:
+            current = self.value
+            self.value += self.step
+            return current
+
+    request = make_corpus_request(
+        tmp_path, plans=[_single_source_plan("main", token_quota=40)]
+    )
+
+    result = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        stop_after_quota_tokens=24,
+        monotonic_clock=StepClock(10.0),
+        phase_clock=StepClock(1.0),
+        process_clock=StepClock(2.0),
+        rss_reader=lambda: 123_456,
+    )
+    report = json.loads(
+        (request.destination_root / "calibration_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    metrics = report["metrics"]
+
+    assert result.status == "calibration_complete"
+    assert report["version"] == 2
+    assert metrics["version"] == 1
+    assert metrics["wall_time_seconds"] > 0
+    assert metrics["process_cpu_time_seconds"] > 0
+    assert metrics["peak_rss_bytes"] == 123_456
+    assert metrics["source_network"]["method"] == "provider_load_and_next_wall_time"
+    assert metrics["source_network"]["wall_time_seconds"] == pytest.approx(
+        metrics["source_network"]["operations"]
+    )
+    assert metrics["encode"]["method"] == "tokenizer_encode_batch_wall_time"
+    assert metrics["encode"]["wall_time_seconds"] == pytest.approx(
+        metrics["encode"]["batches"]
+    )
+    assert metrics["encode"]["tokens"] > 0
+    assert metrics["contamination"]["method"] == "quality_filter_accept_wall_time"
+    assert metrics["contamination"]["wall_time_seconds"] == pytest.approx(
+        metrics["contamination"]["documents"]
+    )
+    assert metrics["publication"]["method"] == "publisher_publish_wall_time"
+    assert metrics["publication"]["wall_time_seconds"] == pytest.approx(
+        metrics["publication"]["artifacts"]
+    )
+    assert metrics["publication"]["bytes"] > 0
+    assert report["throughput"]["encode_tokens_per_second"] == pytest.approx(
+        metrics["encode"]["tokens"] / metrics["encode"]["wall_time_seconds"]
+    )
+    assert report["throughput"][
+        "contamination_documents_per_second"
+    ] == pytest.approx(
+        metrics["contamination"]["documents"]
+        / metrics["contamination"]["wall_time_seconds"]
+    )
+    assert report["throughput"]["publication_bytes_per_second"] == pytest.approx(
+        metrics["publication"]["bytes"]
+        / metrics["publication"]["wall_time_seconds"]
+    )
+
+
+def test_phase_metrics_resume_from_last_durable_unit_without_reset(
+    tmp_path: Path,
+):
+    class StepClock:
+        def __init__(self, start: float, step: float):
+            self.value = start
+            self.step = step
+
+        def __call__(self) -> float:
+            current = self.value
+            self.value += self.step
+            return current
+
+    request = replace(
+        make_corpus_request(
+            tmp_path,
+            plans=[
+                _single_source_plan(
+                    "main", token_quota=120, validation_fraction=0.0, buffer_size=2
+                )
+            ],
+        ),
+        shard_size_tokens=24,
+    )
+    commits = 0
+
+    def crash_after_first(_unit) -> None:
+        nonlocal commits
+        commits += 1
+        if commits == 1:
+            raise RuntimeError("crash-after-first-metric-unit")
+
+    with pytest.raises(RuntimeError, match="crash-after-first-metric-unit"):
+        build_local_corpus(
+            request,
+            dataset_loader=_loader,
+            on_unit_committed=crash_after_first,
+            stop_after_quota_tokens=80,
+            monotonic_clock=StepClock(0.0, 10.0),
+            phase_clock=StepClock(0.0, 1.0),
+            process_clock=StepClock(0.0, 2.0),
+            rss_reader=lambda: 100,
+        )
+    before = _last_cumulative(request)["metrics"]
+
+    resumed = build_local_corpus(
+        request,
+        dataset_loader=_loader,
+        stop_after_quota_tokens=80,
+        monotonic_clock=StepClock(100.0, 5.0),
+        phase_clock=StepClock(1_000.0, 1.0),
+        process_clock=StepClock(2_000.0, 2.0),
+        rss_reader=lambda: 200,
+    )
+    report = json.loads(
+        (request.destination_root / "calibration_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    after = report["metrics"]
+
+    assert resumed.status == "calibration_complete"
+    for phase, count_field in (
+        ("source_network", "operations"),
+        ("encode", "batches"),
+        ("contamination", "documents"),
+        ("publication", "artifacts"),
+    ):
+        assert after[phase]["wall_time_seconds"] >= before[phase][
+            "wall_time_seconds"
+        ]
+        assert after[phase][count_field] >= before[phase][count_field]
+    assert after["wall_time_seconds"] >= before["wall_time_seconds"]
+    assert after["process_cpu_time_seconds"] >= before["process_cpu_time_seconds"]
+    assert after["peak_rss_bytes"] == 200
+    assert after["publication"]["bytes"] == (
+        _last_cumulative(request)["packed"]["raw_bytes"]
+        + _last_cumulative(request)["packed"]["token_bytes"]
+    )
 
 
 def test_finalization_refuses_inconsistent_journaled_quality_counts(tmp_path: Path):
@@ -542,6 +723,9 @@ def test_forced_interruption_resumes_byte_identically(tmp_path: Path):
     clean_evidence = _last_cumulative(clean_request)
     resumed_evidence.pop("progress", None)
     clean_evidence.pop("progress", None)
+    _assert_equivalent_durable_metric_work(
+        resumed_evidence.pop("metrics"), clean_evidence.pop("metrics")
+    )
     assert resumed_evidence == clean_evidence
 
 
@@ -611,6 +795,9 @@ def test_streaming_validation_evidence_restores_identically_after_restart(tmp_pa
     clean_evidence = _last_cumulative(clean_request)
     resumed_evidence.pop("progress", None)
     clean_evidence.pop("progress", None)
+    _assert_equivalent_durable_metric_work(
+        resumed_evidence.pop("metrics"), clean_evidence.pop("metrics")
+    )
 
     assert resumed.status == clean.status == "complete"
     assert resumed_evidence["validation"]["documents"] > 0
