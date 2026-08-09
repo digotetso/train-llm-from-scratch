@@ -351,3 +351,64 @@ exit 0
 No real corpus data was read, no Drive provider was mutated, and no training or
 evaluation process was started. A real mounted destination still requires the
 existing provider preflight before production use.
+
+## Fix Round 3
+
+Implementation commit: `0244539 fix: bind corpus journal operational identity`.
+
+### RED evidence
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py::test_operational_identity_refuses_changed_destination_or_evidence_root_before_reconcile tests/test_local_corpus.py::test_builder_rejects_symlinked_canonical_evidence_file tests/test_local_corpus.py::test_builder_rejects_copied_selection_outside_root_and_symlink_destination tests/test_local_corpus.py::test_resumed_rolling_rate_uses_only_new_process_tokens_and_interval
+FFF.F                                                                    [100%]
+FAILED test_operational_identity_refuses_changed_destination_or_evidence_root_before_reconcile
+AssertionError: identity must fail before destination reconciliation
+FAILED test_builder_rejects_symlinked_canonical_evidence_file[tokenizer_selection.json]
+Failed: DID NOT RAISE ValueError
+FAILED test_builder_rejects_symlinked_canonical_evidence_file[comparison.json]
+Failed: DID NOT RAISE ValueError
+FAILED test_resumed_rolling_rate_uses_only_new_process_tokens_and_interval
+assert 1.3333333333333333 == 4.0 ± 4.0e-06
+4 failed, 1 passed
+```
+
+### GREEN evidence
+
+```text
+$ uv run pytest -o addopts='' -q tests/test_local_corpus.py tests/test_local_build_state.py tests/test_local_publish.py tests/test_data_quality.py tests/test_local_tokens.py tests/test_telco_prepare.py tests/test_local_tokenizer_sample.py tests/test_telco_notebook_local.py tests/test_tokenizer_candidate.py
+........................................................................ [ 37%]
+........................................................................ [ 75%]
+..............................................                           [100%]
+190 passed in 20.94s
+
+$ uv run python -m compileall -q matgpt tests
+exit 0
+
+$ git diff --check
+exit 0
+```
+
+### Finding resolution and self-review
+
+1. `evidence_root` is now a mandatory request field. The builder requires the
+   root itself, canonical `tokenizer_selection.json`, canonical
+   `comparison.json`, selected tokenizer directory, `tokenizer.json`, and
+   `special_tokens.json` to be exact managed non-symlink paths. The destination
+   is a managed non-symlink descendant. Copied selection paths, symlinked
+   canonical evidence, and symlinked destinations fail before journal creation.
+   The resolved evidence root and destination-relative namespace are stored in
+   `BuildIdentity.operational` and hashed by the journal identity, so a changed
+   root or empty alternate destination refuses before publisher reconciliation.
+2. `BuildIdentity.content_sha256` excludes operational machine paths, while the
+   journal SHA includes them. Corpus results and provisional manifests use the
+   content identity; cross-root clean/resume tests therefore retain identical
+   content identity and artifact bytes. Generic sample identities with no
+   operational payload retain their prior hash/metadata representation.
+3. Progress restores committed elapsed and accepted-token baselines but always
+   starts a new monotonic process anchor. The first resumed rolling rate divides
+   only new tokens by new-process elapsed; overall rate uses total tokens over
+   cumulative elapsed, and ETA uses the current rolling rate. The fake-clock
+   regression stops with real remaining work, advances both time and tokens,
+   and asserts rolling, overall, elapsed, and ETA relationships.
+
+No real data, Drive publication, training, or evaluation was performed.
