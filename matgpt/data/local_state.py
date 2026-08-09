@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Mapping
 
 from matgpt.utils.hashing import sha256_json
 from matgpt.utils.paths import require_managed_path
@@ -43,6 +43,7 @@ class UnitCommit:
     accepted_hashes: tuple[str, ...]
     artifacts: tuple[dict[str, object], ...]
     published: bool = False
+    state: Mapping[str, object] = field(default_factory=dict)
 
 
 _IDENTITY_JSON_KEY = "identity_json"
@@ -103,6 +104,7 @@ class BuildJournal:
                 row_cursor INTEGER NOT NULL,
                 quota_tokens INTEGER NOT NULL,
                 artifacts_json TEXT NOT NULL,
+                state_json TEXT NOT NULL DEFAULT '{}',
                 published INTEGER NOT NULL CHECK (published IN (0, 1))
             );
 
@@ -140,6 +142,9 @@ class BuildJournal:
             connection.execute(
                 "ALTER TABLE artifacts ADD COLUMN destination_relative_path TEXT"
             )
+        unit_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(units)")}
+        if "state_json" not in unit_columns:
+            connection.execute("ALTER TABLE units ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
 
     @staticmethod
     def _ensure_identity(connection: sqlite3.Connection, identity: BuildIdentity) -> None:
@@ -194,8 +199,8 @@ class BuildJournal:
                     """
                     INSERT INTO units(
                         unit_id, stage, source_id, row_cursor, quota_tokens,
-                        artifacts_json, published
-                    ) VALUES (?, ?, ?, ?, ?, ?, 0)
+                        artifacts_json, state_json, published
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                     """,
                     (
                         unit.unit_id,
@@ -204,6 +209,7 @@ class BuildJournal:
                         unit.row_cursor,
                         unit.quota_tokens,
                         artifacts_json,
+                        json.dumps(unit.state, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
                     ),
                 )
                 self.connection.executemany(
@@ -256,7 +262,7 @@ class BuildJournal:
         rows = self.connection.execute(
             """
             SELECT unit_id, stage, source_id, row_cursor, quota_tokens,
-                   artifacts_json, published
+                   artifacts_json, state_json, published
             FROM units
             ORDER BY unit_id
             """
@@ -271,6 +277,7 @@ class BuildJournal:
                 accepted_hashes=self._hashes_for_unit(str(row["unit_id"])),
                 artifacts=tuple(json.loads(str(row["artifacts_json"]))),
                 published=bool(row["published"]),
+                state=json.loads(str(row["state_json"])),
             )
 
     def units(self) -> tuple[UnitCommit, ...]:
