@@ -607,6 +607,100 @@ def test_builder_rejects_copied_selection_outside_root_and_symlink_destination(
     assert not (symlink_request.local_root / "corpus.sqlite3").exists()
 
 
+def _request_through_symlinked_ancestor(
+    request: LocalCorpusRequest, real_parent: Path, alias_parent: Path
+) -> LocalCorpusRequest:
+    def alias(path: Path) -> Path:
+        return alias_parent / path.relative_to(real_parent)
+
+    return replace(
+        request,
+        evidence_root=alias(request.evidence_root),
+        tokenizer_dir=alias(request.tokenizer_dir),
+        tokenizer_selection_path=alias(request.tokenizer_selection_path),
+        local_root=alias(request.local_root),
+        destination_root=alias(request.destination_root),
+    )
+
+
+def test_fresh_build_rejects_symlinked_evidence_root_ancestor_before_state_hooks(
+    tmp_path: Path, monkeypatch
+):
+    import matgpt.data.local_corpus as local_corpus
+
+    real_parent = tmp_path / "real-parent"
+    request = make_corpus_request(
+        real_parent / "evidence", plans=[_tiny_plan("main")]
+    )
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(real_parent.name)
+    aliased = _request_through_symlinked_ancestor(
+        request, real_parent, alias_parent
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("path preflight must run before evidence/state hooks")
+
+    monkeypatch.setattr(Path, "read_text", unexpected)
+    monkeypatch.setattr(local_corpus.BuildJournal, "open", unexpected)
+    monkeypatch.setattr(local_corpus, "_cleanup_uncommitted_partials", unexpected)
+    monkeypatch.setattr(local_corpus.DrivePublisher, "reconcile", unexpected)
+
+    with pytest.raises(ValueError, match="canonical non-symlink"):
+        build_local_corpus(aliased, dataset_loader=_loader)
+
+    assert not (request.local_root / "corpus.sqlite3").exists()
+
+
+def test_resume_rejects_symlinked_evidence_root_ancestor_before_journal_open(
+    tmp_path: Path, monkeypatch
+):
+    import matgpt.data.local_corpus as local_corpus
+
+    real_parent = tmp_path / "real-parent"
+    request = make_corpus_request(
+        real_parent / "evidence", plans=[_tiny_plan("main")]
+    )
+    build_local_corpus(
+        request, dataset_loader=_loader, stop_after_quota_tokens=24
+    )
+    journal_before = (request.local_root / "corpus.sqlite3").stat()
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(real_parent.name)
+    aliased = _request_through_symlinked_ancestor(
+        request, real_parent, alias_parent
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("resume alias must fail before evidence/state hooks")
+
+    monkeypatch.setattr(Path, "read_text", unexpected)
+    monkeypatch.setattr(local_corpus.BuildJournal, "open", unexpected)
+    monkeypatch.setattr(local_corpus, "_cleanup_uncommitted_partials", unexpected)
+    monkeypatch.setattr(local_corpus.DrivePublisher, "reconcile", unexpected)
+
+    with pytest.raises(ValueError, match="canonical non-symlink"):
+        build_local_corpus(aliased, dataset_loader=_loader)
+
+    journal_after = (request.local_root / "corpus.sqlite3").stat()
+    assert (journal_after.st_size, journal_after.st_mtime_ns) == (
+        journal_before.st_size,
+        journal_before.st_mtime_ns,
+    )
+
+
+def test_builder_does_not_canonicalize_lexical_root_aliases(tmp_path: Path):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    aliased_root = request.evidence_root.parent / "unused" / ".." / request.evidence_root.name
+
+    with pytest.raises(ValueError, match="lexical aliases"):
+        build_local_corpus(
+            replace(request, evidence_root=aliased_root), dataset_loader=_loader
+        )
+
+    assert not (request.local_root / "corpus.sqlite3").exists()
+
+
 def test_builder_requires_enabled_dedup_and_contamination_controls(tmp_path: Path):
     request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
     request = replace(

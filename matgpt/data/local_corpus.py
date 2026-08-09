@@ -464,31 +464,47 @@ def _selected_tokenizer_sha(
 ) -> tuple[str, str, str, Mapping[str, str]]:
     if request.evidence_root is None:
         raise ValueError("evidence_root is required")
+    evidence_root = _require_canonical_nonsymlink_path(
+        request.evidence_root, "evidence_root"
+    )
+    selection = _require_canonical_nonsymlink_path(
+        request.tokenizer_selection_path, "tokenizer_selection_path"
+    )
+    comparison_path = _require_canonical_nonsymlink_path(
+        evidence_root / "comparison.json", "comparison.json"
+    )
+    tokenizer_dir = _require_canonical_nonsymlink_path(
+        request.tokenizer_dir, "tokenizer_dir"
+    )
+    tokenizer_json = _require_canonical_nonsymlink_path(
+        tokenizer_dir / "tokenizer.json", "tokenizer.json"
+    )
+    special_tokens = _require_canonical_nonsymlink_path(
+        tokenizer_dir / "special_tokens.json", "special_tokens.json"
+    )
+    destination_root = _require_canonical_nonsymlink_path(
+        request.destination_root, "destination_root"
+    )
+    _require_canonical_nonsymlink_path(request.local_root, "local_root")
+
     evidence_root = require_managed_path(
-        request.evidence_root,
-        request.evidence_root,
+        evidence_root,
+        evidence_root,
         kind="directory",
         allow_missing=False,
     )
-    selection = _absolute_lexical(request.tokenizer_selection_path)
     canonical_selection = evidence_root / "tokenizer_selection.json"
     if selection != canonical_selection:
         raise ValueError("tokenizer selection must be directly below evidence_root")
     selection = require_managed_path(
         evidence_root, canonical_selection, kind="file", allow_missing=False
     )
-    data = json.loads(selection.read_text(encoding="utf-8"))
-    comparison_path = evidence_root / "comparison.json"
     comparison_path = require_managed_path(
         evidence_root, comparison_path, kind="file", allow_missing=False
     )
-    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
-    if not isinstance(data, Mapping) or not isinstance(comparison, Mapping):
-        raise ValueError("approved tokenizer selection comparison evidence is invalid")
-    selected_sha = validate_tokenizer_selection(data, comparison)
     tokenizer_dir = require_managed_path(
         evidence_root,
-        request.tokenizer_dir,
+        tokenizer_dir,
         kind="directory",
         allow_missing=False,
     )
@@ -499,15 +515,21 @@ def _selected_tokenizer_sha(
     )
     require_managed_path(
         evidence_root,
-        tokenizer_dir / "special_tokens.json",
+        special_tokens,
         kind="file",
         allow_missing=False,
     )
     destination_root = require_managed_path(
-        evidence_root, request.destination_root, kind="directory"
+        evidence_root, destination_root, kind="directory"
     )
     if destination_root == evidence_root:
         raise ValueError("corpus destination must be a managed evidence_root descendant")
+
+    data = json.loads(selection.read_text(encoding="utf-8"))
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    if not isinstance(data, Mapping) or not isinstance(comparison, Mapping):
+        raise ValueError("approved tokenizer selection comparison evidence is invalid")
+    selected_sha = validate_tokenizer_selection(data, comparison)
     actual = sha256_file(tokenizer_json)
     metadata = load_tokenizer_metadata(tokenizer_dir)
     if selected_sha != actual:
@@ -524,7 +546,19 @@ def _selected_tokenizer_sha(
 
 
 def _absolute_lexical(path: str | Path) -> Path:
-    return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+    expanded = Path(path).expanduser()
+    return expanded if expanded.is_absolute() else Path.cwd() / expanded
+
+
+def _require_canonical_nonsymlink_path(path: str | Path, label: str) -> Path:
+    lexical = _absolute_lexical(path)
+    resolved = lexical.resolve(strict=False)
+    if lexical != resolved:
+        raise ValueError(
+            f"{label} must be a canonical non-symlink path; "
+            "symbolic link and lexical aliases are not accepted"
+        )
+    return lexical
 
 
 def _identity(
