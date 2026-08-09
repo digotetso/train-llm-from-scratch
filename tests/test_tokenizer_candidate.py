@@ -783,6 +783,28 @@ def test_local_cli_cross_checks_available_contamination_manifests(
     assert not work_dir.exists()
 
 
+def test_local_cli_requires_both_contamination_manifests_before_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    def reject_expensive_sample(*_args, **_kwargs):
+        raise AssertionError("test must not reach the real 200M sample builder")
+
+    monkeypatch.setattr(
+        prepare_telco_local, "build_tokenizer_sample", reject_expensive_sample
+    )
+    common, work_dir, _ = _local_cli_common_args(tmp_path)
+    paths = _complete_contamination_evidence(tmp_path / "evidence")
+
+    result = prepare_telco_local.main(
+        ["--stage", "tokenizer_sample", *_with_contamination(common, paths)]
+    )
+
+    assert result != 0
+    assert not work_dir.exists()
+
+
 def test_local_cli_accepts_complete_manifest_bound_contamination_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

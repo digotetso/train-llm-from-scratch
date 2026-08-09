@@ -238,11 +238,12 @@ def _verified_contamination_paths(
         if path.suffix != ".jsonl" or path.stem not in OPEN_TELCO_CONFIGS:
             raise ValueError(f"Unexpected Open Telco contamination file: {path}")
         manifest_path = path.parent / "manifest.json"
-        if manifest_path.exists():
-            manifest = _load_json_object(manifest_path, "Open Telco manifest")
-            source_id = manifest.get("source_id")
-        else:
-            source_id = path.parent.name
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError(
+                f"Contamination evidence requires a real manifest: {manifest_path}"
+            )
+        manifest = _load_json_object(manifest_path, "Open Telco manifest")
+        source_id = manifest.get("source_id")
         if source_id not in grouped:
             raise ValueError(f"Cannot identify Lite/Full contamination evidence: {path}")
         previous_root = roots.setdefault(source_id, path.parent)
@@ -259,15 +260,12 @@ def _verified_contamination_paths(
         if set(evidence) != set(OPEN_TELCO_CONFIGS):
             raise ValueError(f"{source_id} requires all four config JSONL files.")
         manifest_path = roots[source_id] / "manifest.json"
-        if manifest_path.exists():
-            if manifest_path.is_symlink() or not manifest_path.is_file():
-                raise ValueError(f"{source_id} manifest must be a real file.")
-            _verify_open_telco_manifest(
-                manifest_path,
-                source_id=source_id,
-                evidence_by_config=evidence,
-                registry=registry,
-            )
+        _verify_open_telco_manifest(
+            manifest_path,
+            source_id=source_id,
+            evidence_by_config=evidence,
+            registry=registry,
+        )
     return [
         grouped[source_id][config]
         for source_id in OPEN_TELCO_SOURCES

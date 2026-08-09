@@ -128,9 +128,9 @@ uv run python scripts/prepare_telco_local.py \
 
 All eight unique files are mandatory and each must yield at least one normalized
 pattern. A missing, duplicate, empty, or unexpectedly named file fails before
-the sample builder is called. When either evaluation directory contains its
-generated `manifest.json`, the CLI also verifies its checksum, pinned source
-identity, exact four-config set, counts, byte sizes, and file checksums.
+the sample builder is called. Both evaluation directories must contain their
+generated `manifest.json`; the CLI verifies each manifest's checksum, pinned
+source identity, exact four-config set, counts, byte sizes, and file checksums.
 
 Expected local outputs:
 
