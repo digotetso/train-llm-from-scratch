@@ -291,6 +291,122 @@ pilot, and evaluation gates must be refreshed under the new tokenizer
 fingerprint before a full-run approval. This increment records the decision but
 does not perform that later refresh.
 
+## Stage 5: refresh the selected-tokenizer pilot data
+
+`pilot_refresh` verifies the canonical comparison and selection again. The
+selected tokenizer SHA-256 owns each new namespace:
+
+```text
+<streamed-drive-publish-root>/
+  evidence/tokenizers/<selected-tokenizer-sha256>/pilot/pilot_refresh.json
+  corpora/pilot/<selected-tokenizer-sha256>/
+```
+
+```bash
+uv run python scripts/prepare_telco_local.py \
+  --stage pilot_refresh \
+  --sources configs/data/telco_300m_sources.yaml \
+  --mixture configs/data/telco_300m_mixture.yaml \
+  --candidate-config configs/data/telco_300m_tokenizer_candidate.yaml \
+  --model-config configs/matgpt_telco_300m.yaml \
+  --work-dir <local-work-root> \
+  --drive-dir <streamed-drive-publish-root>
+```
+
+When `pilot_20m` remains selected, reuse is permitted only if the preserved
+tokenizer provenance, pilot corpus, shard metadata and bytes, preflight, smoke,
+pilot-completion, and evaluation evidence all exist and bind to that tokenizer.
+When `representative_200m` is selected, the command builds a new exact 20M
+pilot corpus. Its report says `ready_for_colab` and lists smoke, pilot, and
+evaluation as pending; local preparation never claims those GPU gates passed.
+
+## Stage 6: retain the first 100M full tokens as calibration
+
+This is the first committed part of the final 12B corpus, not a disposable
+benchmark. The operational stop target is not part of build identity.
+
+```bash
+uv run python scripts/prepare_telco_local.py \
+  --stage full_calibration \
+  --sources configs/data/telco_300m_sources.yaml \
+  --mixture configs/data/telco_300m_mixture.yaml \
+  --candidate-config configs/data/telco_300m_tokenizer_candidate.yaml \
+  --model-config configs/matgpt_telco_300m.yaml \
+  --work-dir <local-work-root> \
+  --drive-dir <streamed-drive-publish-root> \
+  --stop-after-quota-tokens 100000000
+```
+
+Expected paths:
+
+```text
+<local-work-root>/corpus/full/<selected-tokenizer-sha256>/
+  corpus.sqlite3
+  progress.json
+
+<streamed-drive-publish-root>/
+  corpora/full/<selected-tokenizer-sha256>/calibration_report.json
+  corpora/full/<selected-tokenizer-sha256>/units/...
+  evidence/tokenizers/<selected-tokenizer-sha256>/full/calibration_operator_report.json
+```
+
+The report records actual committed tokens, wall and process CPU time, peak
+RSS, the documented non-CPU wait upper bound, encoding, contamination and
+publication throughput, mean and rolling throughput, projected 12B wall time,
+provider preflight, Drive verification, and the unchanged build identity. No
+GPU is required.
+
+## Check status without opening a source stream
+
+`status` reads only canonical files and the SQLite journal. It does not call a
+source loader, encode a document, publish a probe, or resume the builder.
+
+```bash
+uv run python scripts/prepare_telco_local.py \
+  --stage status \
+  --sources configs/data/telco_300m_sources.yaml \
+  --mixture configs/data/telco_300m_mixture.yaml \
+  --candidate-config configs/data/telco_300m_tokenizer_candidate.yaml \
+  --model-config configs/matgpt_telco_300m.yaml \
+  --work-dir <local-work-root> \
+  --drive-dir <streamed-drive-publish-root>
+```
+
+Review exact item quotas, last commit, local/destination bytes, unpublished
+artifacts, free disk, throughput, ETA, and gate booleans. In Finder, also
+confirm each new artifact shows Google Drive's completed cloud-sync icon.
+Filesystem verification proves mounted bytes; the icon is the separate proof
+that File Provider uploaded them remotely.
+
+## Stage 7: explicitly accept calibration and resume
+
+```bash
+uv run python scripts/prepare_telco_local.py \
+  --stage full_resume \
+  --sources configs/data/telco_300m_sources.yaml \
+  --mixture configs/data/telco_300m_mixture.yaml \
+  --candidate-config configs/data/telco_300m_tokenizer_candidate.yaml \
+  --model-config configs/matgpt_telco_300m.yaml \
+  --work-dir <local-work-root> \
+  --drive-dir <streamed-drive-publish-root> \
+  --accept-calibration
+```
+
+The CLI refuses a foreign identity, fewer than 100M committed tokens,
+unverified Drive state, a projection over 48 hours, or unrecovered storage
+pressure. Only after separately reviewing and mitigating the last two may the
+operator add both:
+
+```text
+--override-calibration-guard \
+--override-reason "Reviewed mitigation and operational owner"
+```
+
+The reason is written to the selected-tokenizer operator evidence namespace;
+it never changes build identity. A final `manifest.json` appears only after all
+12B quota, audit, checksum, and publication gates pass. This CLI never starts
+pretraining.
+
 ## Progress, disk pressure, and recovery
 
 While a long stage runs, use another terminal:
@@ -301,12 +417,13 @@ du -sh <local-work-root> <streamed-drive-publish-root>
 ps -o pid,etime,%cpu,%mem,command -ax | grep prepare_telco_local.py
 ```
 
-Stop the sample with `Ctrl-C` before free local disk reaches the checked 25GiB
-floor or the local tree approaches its 20GiB working budget. Drive streaming
-can retain an upload cache, so a small artifact tree is not proof of equivalent
-free local space. A later corpus-builder increment adds automated disk and
-publication backpressure; this tokenizer-only increment relies on the operator
-check above.
+For corpus stages, `Ctrl-C` requests a clean stop after the current deterministic
+source window is sealed, committed, published, and verified. Rerun the identical
+command to resume. A forced kill can leave uncommitted partials; startup removes
+only unreferenced files and resumes from the last committed raw cursor. The
+builder enforces its local working cap and free-space floor before accepting the
+next unit. Drive streaming can retain an upload cache, so a small artifact tree
+is not proof of equivalent free local space.
 
 | Symptom | Safe response |
 |---|---|
@@ -316,6 +433,8 @@ check above.
 | Source exhausted before quota | Preserve logs and evidence; investigate the pinned source/recipe rather than changing quotas mid-run. |
 | Missing/changed schema or license evidence | Stop and review the source registry; do not bypass validation. |
 | Sample chunk integrity failure | Preserve the workspace for diagnosis. Do not edit the chunk or journal. |
+| Destination checksum quarantine | Stop. Preserve `quarantine/`, the journal, and logs; investigate File Provider or disk corruption before retrying. |
+| Disk pressure or working-set pause | Free space without deleting committed evidence, confirm Drive sync/eviction, then rerun the identical command. |
 | Candidate directory already exists | Review whether it is complete; preserve or move it aside before a deliberate fresh run. |
 | Comparison or selection already exists | Treat it as immutable evidence; use a new reviewed publish namespace for a new decision. |
 

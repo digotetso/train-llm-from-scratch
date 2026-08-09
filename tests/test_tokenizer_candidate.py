@@ -2036,3 +2036,455 @@ def test_local_cli_selection_refuses_symlinked_selection_file_without_outside_wr
 
     assert result != 0
     assert outside.read_text(encoding="utf-8") == "preserve\n"
+
+
+def _selected_local_cli_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    winner: str = "representative_200m",
+) -> tuple[list[str], Path, Path, Path, str]:
+    from scripts import prepare_telco_local
+
+    common, _, baseline, candidate, comparison = _create_canonical_comparison(
+        tmp_path, monkeypatch
+    )
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "tokenizer_select",
+            *common,
+            "--comparison",
+            str(comparison),
+            "--winner",
+            winner,
+            "--approve",
+        ]
+    )
+    assert result == 0
+    selected = baseline if winner == "pilot_20m" else candidate
+    selected_sha256 = sha256_file(selected / "tokenizer.json")
+    (selected / "special_tokens.json").write_text(
+        json.dumps({"tokenizer_sha256": selected_sha256}), encoding="utf-8"
+    )
+    return common, Path(common[-3]), Path(common[-1]), selected, selected_sha256
+
+
+def test_local_cli_source_has_no_pretraining_import_or_call():
+    source = Path("scripts/prepare_telco_local.py").read_text(encoding="utf-8")
+    tree = __import__("ast").parse(source)
+    imported = {
+        alias.name
+        for node in __import__("ast").walk(tree)
+        if isinstance(node, (__import__("ast").Import, __import__("ast").ImportFrom))
+        for alias in node.names
+    }
+
+    assert all("pretrain" not in name and "training" not in name for name in imported)
+    assert "run_pretraining" not in source
+
+
+def test_full_calibration_uses_100m_stop_and_writes_complete_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_corpus import LocalCorpusResult
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    observed: dict[str, object] = {}
+
+    def fake_provider_preflight(self):
+        observed["provider_root"] = self.destination_root
+        return {"fsynced_partial_rename": True, "hard_links_required": False}
+
+    def fake_build(request, **kwargs):
+        observed["request"] = request
+        observed["stop"] = kwargs.get("stop_after_quota_tokens")
+        identity = prepare_telco_local._expected_build_identity(request)
+        return LocalCorpusResult(
+            "calibration_complete", identity.content_sha256, 100_000_007, None
+        )
+
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        fake_provider_preflight,
+    )
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", fake_build)
+
+    result = prepare_telco_local.main(
+        [
+            "--stage",
+            "full_calibration",
+            *common,
+            "--stop-after-quota-tokens",
+            "100000000",
+        ]
+    )
+
+    request = observed["request"]
+    assert result == 0
+    assert observed["stop"] == 100_000_000
+    assert selected_sha256 in request.destination_root.parts
+    assert [plan["stage"] for plan in request.plans] == ["main", "cooldown"]
+    report_path = prepare_telco_local._calibration_operator_path(
+        drive_dir, selected_sha256
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["actual_committed_quota_tokens"] == 100_000_007
+    assert report["build_identity_sha256"] == (
+        prepare_telco_local._expected_build_identity(request).content_sha256
+    )
+    assert report["provider_preflight"]["fsynced_partial_rename"] is True
+    assert report["drive_verification_state"] == "verified"
+    for metric in (
+        "wall_time_seconds",
+        "process_cpu_time_seconds",
+        "peak_rss_bytes",
+        "source_network_wait_seconds",
+        "encode_tokens_per_second",
+        "contamination_documents_per_second",
+        "publication_bytes_per_second",
+        "mean_overall_tokens_per_second",
+        "rolling_overall_tokens_per_second",
+        "projected_12b_wall_time_seconds",
+    ):
+        assert isinstance(report[metric], (int, float))
+        assert report[metric] >= 0
+
+
+def test_full_calibration_refuses_to_report_less_than_100m_committed_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_corpus import LocalCorpusResult
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        lambda _self: {
+            "fsynced_partial_rename": True,
+            "hard_links_required": False,
+        },
+    )
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "build_local_corpus",
+        lambda *_args, **_kwargs: LocalCorpusResult(
+            "stopped_cleanly", "a" * 64, 99_999_999, None
+        ),
+    )
+
+    result = prepare_telco_local.main(
+        ["--stage", "full_calibration", *common]
+    )
+
+    assert result != 0
+    assert not prepare_telco_local._calibration_operator_path(
+        drive_dir, selected_sha256
+    ).exists()
+
+
+def test_full_calibration_rejects_changed_builder_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_corpus import LocalCorpusResult
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        lambda _self: {
+            "fsynced_partial_rename": True,
+            "hard_links_required": False,
+        },
+    )
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "build_local_corpus",
+        lambda *_args, **_kwargs: LocalCorpusResult(
+            "calibration_complete", "f" * 64, 100_000_001, None
+        ),
+    )
+
+    result = prepare_telco_local.main(
+        ["--stage", "full_calibration", *common]
+    )
+
+    assert result != 0
+    assert not prepare_telco_local._calibration_operator_path(
+        drive_dir, selected_sha256
+    ).exists()
+
+
+def test_full_calibration_reports_storage_pressure_as_a_clean_cli_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_publish import StoragePressure
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        lambda _self: {
+            "fsynced_partial_rename": True,
+            "hard_links_required": False,
+        },
+    )
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "build_local_corpus",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StoragePressure("working-set cap reached")
+        ),
+    )
+
+    assert prepare_telco_local.main(["--stage", "full_calibration", *common]) == 2
+    assert not prepare_telco_local._calibration_operator_path(
+        drive_dir, selected_sha256
+    ).exists()
+
+
+def _calibration_report_payload(
+    *,
+    identity: str = "a" * 64,
+    projected_seconds: float = 47 * 3600,
+    storage_pressure: bool = False,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "version": 1,
+        "status": "calibration_complete",
+        "build_identity_sha256": identity,
+        "actual_committed_quota_tokens": 100_000_000,
+        "projected_12b_wall_time_seconds": projected_seconds,
+        "unrecovered_storage_pressure": storage_pressure,
+        "drive_verification_state": "verified",
+    }
+    payload["operator_report_sha256"] = sha256_json(payload)
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("accepted", "override", "reason", "match"),
+    [
+        (False, False, "", "--accept-calibration"),
+        (True, False, "", "48 hours"),
+        (True, True, "", "--override-reason"),
+    ],
+)
+def test_full_resume_calibration_guards_fail_closed(
+    accepted: bool, override: bool, reason: str, match: str
+):
+    from scripts import prepare_telco_local
+
+    with pytest.raises(ValueError, match=match):
+        prepare_telco_local._require_accepted_calibration(
+            _calibration_report_payload(projected_seconds=49 * 3600),
+            expected_build_identity="a" * 64,
+            accept_calibration=accepted,
+            override_guard=override,
+            override_reason=reason,
+        )
+
+
+def test_full_resume_storage_guard_requires_explicit_reasoned_override():
+    from scripts import prepare_telco_local
+
+    report = _calibration_report_payload(storage_pressure=True)
+    with pytest.raises(ValueError, match="storage pressure"):
+        prepare_telco_local._require_accepted_calibration(
+            report,
+            expected_build_identity="a" * 64,
+            accept_calibration=True,
+            override_guard=False,
+            override_reason="",
+        )
+
+    authorization = prepare_telco_local._require_accepted_calibration(
+        report,
+        expected_build_identity="a" * 64,
+        accept_calibration=True,
+        override_guard=True,
+        override_reason="Reviewed migration to a larger local volume",
+    )
+
+    assert authorization["override_reason"] == (
+        "Reviewed migration to a larger local volume"
+    )
+    assert authorization["build_identity_sha256"] == "a" * 64
+
+
+def test_full_resume_rejects_foreign_calibration_identity():
+    from scripts import prepare_telco_local
+
+    with pytest.raises(ValueError, match="build identity"):
+        prepare_telco_local._require_accepted_calibration(
+            _calibration_report_payload(identity="b" * 64),
+            expected_build_identity="a" * 64,
+            accept_calibration=True,
+            override_guard=True,
+            override_reason="Identity mismatch must never be overridable",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("actual_committed_quota_tokens", None, "committed tokens"),
+        ("projected_12b_wall_time_seconds", float("nan"), "projection"),
+    ],
+)
+def test_full_resume_rejects_malformed_calibration_metrics(
+    field: str, value: object, match: str
+):
+    from scripts import prepare_telco_local
+
+    report = _calibration_report_payload()
+    report[field] = value
+    report.pop("operator_report_sha256")
+    report["operator_report_sha256"] = sha256_json(report)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_telco_local._require_accepted_calibration(
+            report,
+            expected_build_identity="a" * 64,
+            accept_calibration=True,
+            override_guard=False,
+            override_reason="",
+        )
+
+
+def test_status_never_calls_corpus_builder_or_source_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, _, _, _ = _selected_local_cli_fixture(tmp_path, monkeypatch)
+
+    def reject_source_read(*_args, **_kwargs):
+        raise AssertionError("status must not call a provider or corpus builder")
+
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", reject_source_read)
+    monkeypatch.setattr(
+        prepare_telco_local, "_load_dataset_function", reject_source_read
+    )
+
+    assert prepare_telco_local.main(["--stage", "status", *common]) == 0
+
+
+def test_candidate_pilot_refresh_rebuilds_in_fingerprinted_namespace_without_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_corpus import LocalCorpusResult
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        lambda _self: {
+            "fsynced_partial_rename": True,
+            "hard_links_required": False,
+        },
+    )
+
+    def fake_build(request, **_kwargs):
+        observed["request"] = request
+        identity = prepare_telco_local._expected_build_identity(request)
+        return LocalCorpusResult(
+            "complete", identity.content_sha256, 20_000_000, {"complete": True}
+        )
+
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", fake_build)
+
+    result = prepare_telco_local.main(["--stage", "pilot_refresh", *common])
+
+    request = observed["request"]
+    report = json.loads(
+        prepare_telco_local._pilot_refresh_path(
+            drive_dir, selected_sha256
+        ).read_text(encoding="utf-8")
+    )
+    assert result == 0
+    assert selected_sha256 in request.destination_root.parts
+    assert [plan["stage"] for plan in request.plans] == ["pilot"]
+    assert report["action"] == "rebuild"
+    assert report["status"] == "ready_for_colab"
+    assert report["refreshed_pilot_gates_passed"] is False
+    assert report["pending_colab_gates"] == ["smoke", "pilot", "evaluation"]
+
+    status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert status["pilot_refresh_gate_satisfied"] is False
+    assert status["full_completion_gate_satisfied"] is False
+
+
+def test_candidate_pilot_refresh_rejects_changed_builder_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from matgpt.data.local_corpus import LocalCorpusResult
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        lambda _self: {
+            "fsynced_partial_rename": True,
+            "hard_links_required": False,
+        },
+    )
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "build_local_corpus",
+        lambda *_args, **_kwargs: LocalCorpusResult(
+            "complete", "c" * 64, 20_000_000, {"complete": True}
+        ),
+    )
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+    assert not prepare_telco_local._pilot_refresh_path(
+        drive_dir, selected_sha256
+    ).exists()
+
+
+def test_pilot_reuse_fails_closed_when_any_existing_gate_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    monkeypatch.setattr(
+        prepare_telco_local,
+        "build_local_corpus",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pilot reuse must not rebuild")
+        ),
+    )
+
+    result = prepare_telco_local.main(["--stage", "pilot_refresh", *common])
+
+    assert result != 0
+    assert not prepare_telco_local._pilot_refresh_path(
+        drive_dir, selected_sha256
+    ).exists()

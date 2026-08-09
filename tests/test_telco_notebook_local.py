@@ -36,8 +36,16 @@ def test_local_notebook_exposes_only_data_and_tokenizer_stages():
         "tokenizer_candidate",
         "tokenizer_compare",
         "tokenizer_select",
+        "pilot_refresh",
+        "full_calibration",
+        "full_resume",
+        "status",
     ):
         assert stage in source
+    assert "STOP_AFTER_QUOTA_TOKENS = 100_000_000" in source
+    assert "ACCEPT_CALIBRATION = False" in source
+    assert "OVERRIDE_CALIBRATION_GUARD = False" in source
+    assert 'OVERRIDE_REASON = ""' in source
     assert "scripts/train.py" not in source
     assert "scripts/pretrain.py" not in source
     assert "run_pretraining" not in source
@@ -83,9 +91,17 @@ def test_local_notebook_builds_one_deterministic_cli_command():
         "tokenizer_candidate",
         "tokenizer_compare",
         "tokenizer_select",
+        "pilot_refresh",
+        "full_calibration",
+        "full_resume",
+        "status",
     }.issubset(stage_values)
     assert "scripts/prepare_telco_local.py" in source
     assert "--baseline-provenance" in source
+    assert "--stop-after-quota-tokens" in source
+    assert "--accept-calibration" in source
+    assert "--override-calibration-guard" in source
+    assert "--override-reason" in source
     assert "shlex.join(command)" in source
 
 
@@ -97,3 +113,16 @@ def test_local_notebook_streams_live_output_without_capture():
     assert "stderr=subprocess.STDOUT" in source
     assert "for line in process.stdout" in source
     assert "capture_output=True" not in source
+
+
+def test_local_notebook_shows_current_progress_and_process_lifecycle():
+    notebook_source = "\n".join(_source(cell) for cell in _cells())
+    checks_source = _code_after_heading("## Checks")
+
+    assert (
+        "closing this notebook kernel stops the local process"
+        in notebook_source.lower()
+    )
+    assert 'LOCAL_WORK_ROOT / "corpus/full"' in checks_source
+    assert 'progress.json' in checks_source
+    assert "json.loads" in checks_source
