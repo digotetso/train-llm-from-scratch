@@ -223,6 +223,40 @@ def test_preflight_passes_complete_synthetic_artifacts(synthetic_preflight_cfg, 
     assert (tmp_path / "preflight.json").exists()
 
 
+def test_preflight_accepts_legacy_shards_without_declared_byte_size(
+    synthetic_preflight_cfg,
+):
+    shard_root = Path(synthetic_preflight_cfg["sharding"]["output_dir"])
+    for split in ("train", "validation"):
+        metadata_path = shard_root / f"{split}_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        for shard in metadata["shards"]:
+            shard.pop("byte_size")
+        _write_hashed_json(metadata_path, metadata, "metadata_sha256")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    assert _check(report, "shards")["status"] == "pass"
+
+
+def test_preflight_rejects_incorrect_declared_shard_byte_size(
+    synthetic_preflight_cfg,
+):
+    metadata_path = (
+        Path(synthetic_preflight_cfg["sharding"]["output_dir"])
+        / "train_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["shards"][0]["byte_size"] += 2
+    _write_hashed_json(metadata_path, metadata, "metadata_sha256")
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "shards")
+    assert check["status"] == "fail"
+    assert "byte_size" in check["message"]
+
+
 def test_preflight_checks_every_configured_training_phase(
     synthetic_preflight_cfg,
     tmp_path,
