@@ -361,6 +361,14 @@ The calibration gate remains false if either report is missing, malformed,
 foreign to the unchanged build identity, or has drifted on disk. No GPU is
 required.
 
+Publication duration, artifact count, and bytes are recorded atomically with
+the first successful journal publication mark, so a crash after Drive release
+cannot erase or double-count them on reconciliation. Legacy journals whose
+published rows predate that ledger fail closed rather than inventing timing.
+Operator JSON is size/depth bounded and recursive evaluation discovery is
+count bounded; malformed, oversized, deeply nested, symlinked, or excessive
+evidence leaves the relevant gate false with a status reason.
+
 ## Check status without opening a source stream
 
 `status` reads only canonical files and the SQLite journal. It does not call a

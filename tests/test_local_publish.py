@@ -182,6 +182,54 @@ def test_journal_record_precedes_local_release_and_reconcile_recovers_crash(
         assert journal.unpublished_artifacts() == ()
 
 
+def test_publication_metrics_are_atomic_and_idempotent_across_return_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local = tmp_path / "local"
+    destination = tmp_path / "drive"
+    journal_path = tmp_path / "state.sqlite3"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+
+    class Clock:
+        def __init__(self):
+            self.values = iter((10.0, 12.5, 20.0, 21.0))
+
+        def __call__(self):
+            return next(self.values)
+
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        journal.commit_unit(
+            _unit(artifacts=({"path": "fit_00000.jsonl", "size": 10,
+                              "sha256": hashlib.sha256(b"committed\n").hexdigest()},))
+        )
+        publisher = _publisher(local, destination, journal=journal,
+                               monotonic_clock=Clock())
+        original = publisher._record_then_release
+
+        def crash_after_atomic_mark(publication):
+            original(publication)
+            raise RuntimeError("crash after atomic publication mark")
+
+        monkeypatch.setattr(publisher, "_record_then_release", crash_after_atomic_mark)
+        with pytest.raises(RuntimeError, match="atomic publication"):
+            publisher.publish(artifact, "text/fit_00000.jsonl", unit_id="fit-00000")
+        assert journal.publication_metrics() == {
+            "method": "publisher_publish_wall_time",
+            "wall_time_seconds": 2.5,
+            "artifacts": 1,
+            "bytes": 10,
+        }
+
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        publisher = _publisher(local, destination, journal=journal,
+                               monotonic_clock=Clock())
+        publisher.reconcile()
+        assert journal.publication_metrics()["artifacts"] == 1
+        assert journal.publication_metrics()["bytes"] == 10
+
+
 @pytest.mark.parametrize("relative_path", ("../escape.bin", "/escape.bin"))
 def test_publish_refuses_destination_path_traversal(tmp_path: Path, relative_path: str):
     local = tmp_path / "local"

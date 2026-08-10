@@ -137,18 +137,11 @@ def _build_local_corpus(
             destination_root=destination_root,
             policy=StoragePolicy(request.max_working_bytes, request.min_free_bytes),
             journal=journal,
+            monotonic_clock=phase_clock,
         )
-        reconcile_started = float(phase_clock())
-        recovered = publisher.reconcile()
-        reconcile_elapsed = max(0.0, float(phase_clock()) - reconcile_started)
-        if isinstance(recovered, tuple) and recovered:
-            _record_phase(
-                cumulative,
-                "publication",
-                reconcile_elapsed,
-                artifacts=len(recovered),
-                bytes=sum(item.size for item in recovered),
-            )
+        publisher.reconcile()
+        _sync_publication_metrics(cumulative, journal)
+        if journal.units():
             _snapshot_progress_state(cumulative, progress_runtime, sum(counters.values()))
             journal.update_latest_cumulative(cumulative)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
@@ -392,22 +385,12 @@ def _build_local_corpus(
                     )
                     journal.commit_unit(unit)
                     for artifact in artifacts:
-                        publication_started = float(phase_clock())
                         publisher.publish(
                             local_root / str(artifact["path"]),
                             str(artifact["path"]),
                             unit_id=unit.unit_id,
                         )
-                        _record_phase(
-                            cumulative,
-                            "publication",
-                            max(
-                                0.0,
-                                float(phase_clock()) - publication_started,
-                            ),
-                            artifacts=1,
-                            bytes=int(artifact["size"]),
-                        )
+                    _sync_publication_metrics(cumulative, journal)
                     _snapshot_progress_state(
                         cumulative, progress_runtime, sum(counters.values())
                     )
@@ -934,6 +917,12 @@ def _record_phase(
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"cumulative {phase} metric {name} is invalid")
         target[name] = int(target.get(name, 0)) + value
+
+
+def _sync_publication_metrics(
+    cumulative: dict[str, Any], journal: BuildJournal
+) -> None:
+    _metrics(cumulative)["publication"] = journal.publication_metrics()
 
 
 def _restore_quality(quality: QualityFilter, saved: object) -> None:

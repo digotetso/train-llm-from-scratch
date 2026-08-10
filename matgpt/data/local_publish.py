@@ -6,6 +6,7 @@ import fcntl
 import os
 import shutil
 import uuid
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +40,7 @@ class Publication:
     sha256: str
     destination_sha256: str
     unit_id: str | None = None
+    duration_seconds: float = 0.0
 
 
 class StoragePressure(RuntimeError):
@@ -60,6 +62,7 @@ class DrivePublisher:
         policy: StoragePolicy,
         free_bytes: Callable[[Path], int] | None = None,
         journal: BuildJournal | None = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.local_root = _absolute_root(local_root, "local_root")
         self.destination_root = _absolute_root(destination_root, "destination_root")
@@ -74,6 +77,7 @@ class DrivePublisher:
         self.policy = policy
         self.free_bytes = free_bytes or (lambda path: shutil.disk_usage(path).free)
         self.journal = journal
+        self.monotonic_clock = monotonic_clock
         self._publications: list[Publication] = []
         require_managed_path(self.local_root, self.local_root, kind="directory")
         require_managed_path(self.destination_root, self.destination_root, kind="directory")
@@ -112,10 +116,12 @@ class DrivePublisher:
         partial = Path(f"{destination}.partial")
         require_managed_path(self.destination_root, destination, kind="file")
         require_managed_path(self.destination_root, partial, kind="file")
+        started = float(self.monotonic_clock())
         with self._publication_lock():
             destination_sha256 = self._complete_destination(
                 source_path, destination, partial, size, source_sha256
             )
+        duration = max(0.0, float(self.monotonic_clock()) - started)
         publication = Publication(
             source=str(source_path),
             source_relative_path=source_relative_path,
@@ -125,6 +131,7 @@ class DrivePublisher:
             sha256=source_sha256,
             destination_sha256=destination_sha256,
             unit_id=unit_id,
+            duration_seconds=duration,
         )
         self._publications.append(publication)
         self._record_then_release(publication)
@@ -336,7 +343,12 @@ class DrivePublisher:
             return
         if publication.unit_id is None:
             raise ValueError("journal publication is missing its unit_id")
-        self.journal.mark_published(publication.unit_id, publication.source_relative_path, publication.destination_sha256)
+        self.journal.mark_published(
+            publication.unit_id,
+            publication.source_relative_path,
+            publication.destination_sha256,
+            duration_seconds=publication.duration_seconds,
+        )
         source = Path(publication.source)
         if source.exists():
             source = require_managed_path(self.local_root, source, kind="file", allow_missing=False)

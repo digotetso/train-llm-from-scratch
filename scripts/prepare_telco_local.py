@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -18,7 +19,7 @@ from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from matgpt.config import load_config
+from matgpt.config import config_to_yaml, load_config
 from matgpt.data.contamination import pattern_fingerprint
 from matgpt.data.local_corpus import (
     LocalCorpusRequest,
@@ -45,7 +46,7 @@ from matgpt.tokenizer.train import (
     evaluate_tokenizer_on_jsonl,
     train_tokenizer_from_manifest,
 )
-from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
 
@@ -74,6 +75,9 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CALIBRATION_TARGET_TOKENS = 100_000_000
 FULL_TARGET_TOKENS = 12_000_000_000
 CALIBRATION_MAX_WALL_SECONDS = 48 * 60 * 60
+MAX_EVIDENCE_JSON_BYTES = 4 * 1024 * 1024
+MAX_EVALUATION_JSON_FILES = 256
+MAX_JSON_DEPTH = 64
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,14 +220,47 @@ def _load_json_object(path: Path, label: str) -> dict[str, Any]:
         raise ValueError(f"{label} contains invalid JSON constant {value}.")
 
     try:
-        payload = json.loads(
-            path.read_text(encoding="utf-8"), parse_constant=reject_constant
-        )
-    except json.JSONDecodeError as error:
+        size = path.stat().st_size
+        if size > MAX_EVIDENCE_JSON_BYTES:
+            raise ValueError(f"{label} exceeds the bounded JSON size limit.")
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_EVIDENCE_JSON_BYTES + 1)
+        if len(raw) > MAX_EVIDENCE_JSON_BYTES:
+            raise ValueError(f"{label} exceeds the bounded JSON size limit.")
+        payload = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
+    except (json.JSONDecodeError, UnicodeError, RecursionError) as error:
         raise ValueError(f"{label} is invalid JSON: {path}") from error
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must contain a JSON object.")
+    pending = [(payload, 1)]
+    while pending:
+        value, depth = pending.pop()
+        if depth > MAX_JSON_DEPTH:
+            raise ValueError(f"{label} exceeds the maximum JSON nesting depth.")
+        if isinstance(value, Mapping):
+            pending.extend((item, depth + 1) for item in value.values())
+        elif isinstance(value, list):
+            pending.extend((item, depth + 1) for item in value)
     return payload
+
+
+def _bounded_json_files(root: Path, *, managed_root: Path, label: str) -> list[Path]:
+    root = require_managed_path(managed_root, root, kind="directory", allow_missing=False)
+    found: list[Path] = []
+    for directory, names, files in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in names:
+            if (directory_path / name).is_symlink():
+                raise ValueError(f"{label} contains a symbolic-link directory.")
+        for name in files:
+            if not name.endswith(".json"):
+                continue
+            path = directory_path / name
+            require_managed_path(managed_root, path, kind="file", allow_missing=False)
+            found.append(path)
+            if len(found) > MAX_EVALUATION_JSON_FILES:
+                raise ValueError(f"{label} exceeds the maximum JSON file count.")
+    return sorted(found)
 
 
 def _write_json_exclusive(
@@ -1289,16 +1326,24 @@ def _validated_pilot_manifest(
         else None
     ) or manifest.get("tokenizer_sha256")
     build_identity = manifest.get("build_identity_sha256")
+    version = manifest.get("version")
     if (
-        manifest.get("version") != 2
-        or manifest.get("status") != "complete"
+        version not in (1, 2)
+        or (version == 2 and manifest.get("status") != "complete")
         or manifest.get("complete") is not True
         or stored != sha256_json(unsigned)
         or manifest_tokenizer != tokenizer_sha256
-        or not isinstance(build_identity, str)
-        or SHA256_PATTERN.fullmatch(build_identity) is None
+        or (version == 2 and (
+            not isinstance(build_identity, str)
+            or SHA256_PATTERN.fullmatch(build_identity) is None
+        ))
     ):
         raise ValueError("Pilot corpus manifest schema or identity is invalid.")
+    if version == 1:
+        build_identity = sha256_json(
+            {"format": "legacy_telco_prepare_v1", "manifest_sha256": stored,
+             "tokenizer_sha256": tokenizer_sha256}
+        )
     if expected_build_identity is not None and build_identity != expected_build_identity:
         raise ValueError("Pilot corpus manifest build identity mismatch.")
     return manifest, build_identity
@@ -1311,6 +1356,36 @@ def _validated_pilot_gate(
     tokenizer_sha256: str,
     build_identity_sha256: str,
 ) -> None:
+    if "gate" not in payload:
+        if gate == "evaluation":
+            if payload.get("status") in {"fail", "failed", "error"}:
+                raise ValueError("Pilot evaluation evidence records failure.")
+            checkpoint = payload.get("checkpoint")
+            if not isinstance(checkpoint, str) or not checkpoint:
+                raise ValueError("Pilot evaluation evidence has no checkpoint provenance.")
+            if not any(key in payload for key in ("val_loss", "perplexity", "results", "tasks")):
+                raise ValueError("Pilot evaluation evidence has no successful result payload.")
+            return
+        if payload.get("status") != "pass":
+            raise ValueError(f"Pilot {gate} evidence status failed.")
+        if gate == "preflight":
+            checks = payload.get("checks")
+            if not isinstance(checks, list) or not checks or any(
+                not isinstance(check, Mapping) or check.get("status") != "pass"
+                for check in checks
+            ):
+                raise ValueError("Pilot preflight checks did not all pass.")
+            return
+        checkpoint = payload.get("checkpoint")
+        if not isinstance(checkpoint, str) or not checkpoint:
+            raise ValueError(f"Pilot {gate} evidence has no checkpoint provenance.")
+        if gate == "pilot" and (
+            not isinstance(payload.get("tokens_processed"), int)
+            or isinstance(payload.get("tokens_processed"), bool)
+            or payload["tokens_processed"] < 20_000_000
+        ):
+            raise ValueError("Pilot completion evidence did not reach 20M tokens.")
+        return
     if (
         payload.get("version") != 1
         or payload.get("status") != "pass"
@@ -1359,10 +1434,33 @@ def _pilot_colab_evidence(
             build_identity_sha256=build_identity_sha256,
         )
         artifacts[gate] = _file_fingerprint(path, managed_root=drive_dir)
-    evaluation_files = sorted(
-        path
-        for path in evaluation_root.glob("**/*.json")
-        if path.is_file() and not path.is_symlink()
+        if gate == "preflight" and "gate" not in payload:
+            config_check = next(
+                (check for check in payload["checks"] if check.get("name") == "config"),
+                None,
+            )
+            details = config_check.get("details") if isinstance(config_check, Mapping) else None
+            config_path = gate_root.parents[1] / "prepared/pilot/config.yaml"
+            expected_config_sha256 = sha256_text(
+                config_to_yaml(load_config(config_path))
+            )
+            if (
+                not isinstance(details, Mapping)
+                or details.get("config_sha256") != expected_config_sha256
+            ):
+                raise ValueError("Pilot preflight config fingerprint mismatch.")
+            artifacts["config"] = _file_fingerprint(
+                config_path, managed_root=drive_dir
+            )
+        if gate in {"smoke", "pilot"} and "gate" not in payload:
+            checkpoint = evaluation_root.parent / "checkpoints" / Path(
+                str(payload["checkpoint"])
+            ).name
+            artifacts[f"{gate}_checkpoint"] = _file_fingerprint(
+                checkpoint, managed_root=drive_dir
+            )
+    evaluation_files = _bounded_json_files(
+        evaluation_root, managed_root=drive_dir, label="Pilot evaluation evidence"
     )
     if not evaluation_files:
         raise ValueError("Pilot evaluation evidence is missing.")
@@ -1378,7 +1476,21 @@ def _pilot_colab_evidence(
             tokenizer_sha256=tokenizer_sha256,
             build_identity_sha256=build_identity_sha256,
         )
+        if "gate" not in payload:
+            checkpoint = evaluation_root.parent / "checkpoints" / Path(
+                str(payload["checkpoint"])
+            ).name
+            checkpoint_fingerprint = _file_fingerprint(
+                checkpoint, managed_root=drive_dir
+            )
+            payload_status = payload.get("status")
+            if payload_status in {"fail", "failed", "error"}:
+                raise ValueError("Pilot evaluation evidence records failure.")
+        else:
+            checkpoint_fingerprint = None
         evaluations.append(_file_fingerprint(path, managed_root=drive_dir))
+        if checkpoint_fingerprint is not None:
+            evaluations[-1]["checkpoint"] = checkpoint_fingerprint
     artifacts["evaluation"] = {
         "files": evaluations,
         "fingerprint_sha256": sha256_json(evaluations),
@@ -1410,12 +1522,30 @@ def _pilot_reuse_evidence(
         raise ValueError("Pilot shards have no split metadata evidence.")
     for metadata_path in metadata_files:
         metadata = _load_json_object(metadata_path, "Pilot shard metadata")
+        stored_metadata = metadata.get("metadata_sha256")
+        unsigned_metadata = dict(metadata)
+        unsigned_metadata.pop("metadata_sha256", None)
         if (
-            metadata.get("version") != 1
-            or metadata.get("tokenizer_sha256") != tokenizer_sha256
-            or metadata.get("build_identity_sha256") != build_identity_sha256
+            metadata.get("tokenizer_sha256") != tokenizer_sha256
+            or stored_metadata != sha256_json(unsigned_metadata)
+            or (
+                "build_identity_sha256" in metadata
+                and metadata.get("build_identity_sha256") != build_identity_sha256
+            )
         ):
             raise ValueError("Pilot shard metadata identity mismatch.")
+        shards = metadata.get("shards")
+        if isinstance(shards, list):
+            for shard in shards:
+                if not isinstance(shard, Mapping) or not isinstance(shard.get("path"), str):
+                    raise ValueError("Pilot shard metadata entry is invalid.")
+                shard_path = metadata_path.parent / str(shard["path"])
+                fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
+                if (
+                    shard.get("size") != fingerprint["size"]
+                    or shard.get("sha256") != fingerprint["sha256"]
+                ):
+                    raise ValueError("Pilot shard metadata file fingerprint mismatch.")
     gates = _pilot_colab_evidence(
         drive_dir=drive_dir,
         gate_root=evidence_root,

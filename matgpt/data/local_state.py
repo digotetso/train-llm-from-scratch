@@ -145,6 +145,8 @@ class BuildJournal:
                 published INTEGER NOT NULL CHECK (published IN (0, 1)),
                 destination_sha256 TEXT,
                 published_at TEXT,
+                publication_duration_seconds REAL,
+                publication_event_count INTEGER,
                 PRIMARY KEY (unit_id, relative_path),
                 FOREIGN KEY (unit_id) REFERENCES units(unit_id)
             );
@@ -163,6 +165,14 @@ class BuildJournal:
         if "destination_relative_path" not in columns:
             connection.execute(
                 "ALTER TABLE artifacts ADD COLUMN destination_relative_path TEXT"
+            )
+        if "publication_duration_seconds" not in columns:
+            connection.execute(
+                "ALTER TABLE artifacts ADD COLUMN publication_duration_seconds REAL"
+            )
+        if "publication_event_count" not in columns:
+            connection.execute(
+                "ALTER TABLE artifacts ADD COLUMN publication_event_count INTEGER"
             )
         unit_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(units)")}
         if "state_json" not in unit_columns:
@@ -512,11 +522,15 @@ class BuildJournal:
         unit_id: str,
         relative_path: str,
         destination_sha256: str,
+        *,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Record one artifact publication and complete its unit when all are done."""
 
         relative_path = _normalized_relative_posix_path(relative_path)
         with self.connection:
+            if not isinstance(duration_seconds, (int, float)) or duration_seconds < 0:
+                raise ValueError("publication duration must be non-negative")
             artifact = self.connection.execute(
                 """
                 SELECT published, sha256, destination_sha256 FROM artifacts
@@ -535,12 +549,14 @@ class BuildJournal:
             self.connection.execute(
                 """
                 UPDATE artifacts
-                SET published = 1, destination_sha256 = ?, published_at = ?
+                SET published = 1, destination_sha256 = ?, published_at = ?,
+                    publication_duration_seconds = ?, publication_event_count = 1
                 WHERE unit_id = ? AND relative_path = ?
                 """,
                 (
                     destination_sha256,
                     datetime.now(UTC).isoformat(),
+                    float(duration_seconds),
                     unit_id,
                     relative_path,
                 ),
@@ -556,6 +572,29 @@ class BuildJournal:
                 """,
                 (unit_id, unit_id),
             )
+
+    def publication_metrics(self) -> dict[str, object]:
+        """Return the exactly-once publication ledger, refusing legacy gaps."""
+
+        missing = self.connection.execute(
+            "SELECT 1 FROM artifacts WHERE published = 1 AND "
+            "(publication_duration_seconds IS NULL OR publication_event_count IS NULL) "
+            "LIMIT 1"
+        ).fetchone()
+        if missing is not None:
+            raise ValueError("published artifact lacks atomic publication metrics")
+        row = self.connection.execute(
+            "SELECT COALESCE(SUM(publication_duration_seconds), 0.0), "
+            "COALESCE(SUM(publication_event_count), 0), "
+            "COALESCE(SUM(CASE WHEN publication_event_count = 1 THEN size ELSE 0 END), 0) "
+            "FROM artifacts WHERE published = 1"
+        ).fetchone()
+        return {
+            "method": "publisher_publish_wall_time",
+            "wall_time_seconds": float(row[0]),
+            "artifacts": int(row[1]),
+            "bytes": int(row[2]),
+        }
 
     def close(self) -> None:
         self.connection.close()

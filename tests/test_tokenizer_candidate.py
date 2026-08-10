@@ -1387,15 +1387,13 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     (baseline / "tokenizer.json").write_bytes(b"canonical pilot tokenizer")
     (baseline / "special_tokens.json").write_text("{}\n", encoding="utf-8")
     tokenizer_sha256 = sha256_file(baseline / "tokenizer.json")
-    build_identity_sha256 = "e" * 64
     corpus_manifest = recipe_root / "corpora" / "pilot" / "manifest.json"
     corpus_manifest.parent.mkdir(parents=True)
     corpus_payload = {
-        "version": 2,
-        "status": "complete",
+        "version": 1,
         "complete": True,
-        "tokenizer_sha256": tokenizer_sha256,
-        "build_identity_sha256": build_identity_sha256,
+        "quota_counting": {"tokenizer_sha256": tokenizer_sha256},
+        "split_stats": {"pilot": {"documents": 1}},
     }
     corpus_payload["manifest_sha256"] = sha256_json(corpus_payload)
     corpus_manifest.write_text(json.dumps(corpus_payload), encoding="utf-8")
@@ -1464,22 +1462,33 @@ def _write_valid_preserved_pilot_evidence(
         drive_dir
     )
     recipe_root = provenance_path.parents[2]
-    corpus = json.loads(
-        (recipe_root / "corpora/pilot/manifest.json").read_text(encoding="utf-8")
+    _, build_identity_sha256 = prepare_telco_local._validated_pilot_manifest(
+        recipe_root / "corpora/pilot/manifest.json",
+        managed_root=drive_dir,
+        tokenizer_sha256=selected_sha256,
     )
-    build_identity_sha256 = str(corpus["build_identity_sha256"])
     shard_root = recipe_root / "prepared/pilot/shards"
     shard_root.mkdir(parents=True, exist_ok=True)
     (shard_root / "pilot_00000.bin").write_bytes(b"pilot shard")
+    from matgpt.data.shard import build_split_metadata
+
+    metadata = build_split_metadata(
+        split="pilot",
+        tokenizer_sha256=selected_sha256,
+        dtype="uint16",
+        append_eos=True,
+        shard_size_tokens=1024,
+        total_documents=1,
+        shards=[{
+            "relative_path": "pilot_00000.bin",
+            "num_tokens": 5,
+            "num_documents": 1,
+            "size": 11,
+            "sha256": sha256_file(shard_root / "pilot_00000.bin"),
+        }],
+    )
     (shard_root / "pilot_metadata.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "tokenizer_sha256": selected_sha256,
-                "build_identity_sha256": build_identity_sha256,
-            }
-        ),
-        encoding="utf-8",
+        json.dumps(metadata), encoding="utf-8"
     )
     _write_pilot_gate_evidence(
         recipe_root / "evidence/pilot",
@@ -2680,6 +2689,71 @@ def test_status_reports_missing_core_binding_as_false_without_operational_reads(
     assert "core" in status["calibration_gate_reason"].lower()
 
 
+@pytest.mark.parametrize("kind", ("oversized", "deep"))
+def test_full_resume_and_status_bound_hostile_operator_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+):
+    from scripts import prepare_telco_local
+
+    common, _, _, _, _ = _selected_local_cli_fixture(tmp_path, monkeypatch)
+    request, _, drive_dir, tokenizer_sha256 = _full_request_for_cli(
+        prepare_telco_local, common
+    )
+    path = prepare_telco_local._calibration_operator_path(drive_dir, tokenizer_sha256)
+    path.parent.mkdir(parents=True)
+    if kind == "oversized":
+        path.write_bytes(b'{"padding":"' + b"x" * (4 * 1024 * 1024) + b'"}')
+    else:
+        value: object = "leaf"
+        for _ in range(80):
+            value = {"nested": value}
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("hostile evidence must not trigger operational reads")
+
+    monkeypatch.setattr(prepare_telco_local, "build_local_corpus", forbidden)
+    monkeypatch.setattr(prepare_telco_local, "_load_dataset_function", forbidden)
+    monkeypatch.setattr(
+        prepare_telco_local.DrivePublisher,
+        "preflight_destination_provider",
+        forbidden,
+    )
+    assert prepare_telco_local.main(
+        ["--stage", "full_resume", *common, "--accept-calibration"]
+    ) == 2
+    status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert status["calibration_gate_satisfied"] is False
+    expected_reason = "size" if kind == "oversized" else "nesting"
+    assert expected_reason in status["calibration_gate_reason"].lower()
+    assert not (request.destination_root / "manifest.json").exists()
+
+
+def test_pilot_status_bounds_recursive_evaluation_json_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
+    evaluation = recipe_root / "runs/pilot/evaluation"
+    template = (evaluation / "review.json").read_bytes()
+    for index in range(256):
+        (evaluation / f"extra_{index:03d}.json").write_bytes(template)
+    status = prepare_telco_local.run(
+        prepare_telco_local.build_parser().parse_args(["--stage", "status", *common])
+    )
+    assert status["pilot_refresh_gate_satisfied"] is False
+    assert "maximum json file count" in status["pilot_refresh_gate_reason"].lower()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "match"),
     [
@@ -2835,6 +2909,54 @@ def test_pilot_reuse_rejects_failed_evaluation_with_nested_matching_sha(
     assert not prepare_telco_local._pilot_refresh_path(
         drive_dir, selected_sha256
     ).exists()
+
+
+def test_pilot_reuse_accepts_current_repo_legacy_producer_schemas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    checkpoint = recipe_root / "runs/pilot/checkpoints/latest.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"canonical checkpoint")
+    evidence = recipe_root / "evidence/pilot"
+    config_path = recipe_root / "prepared/pilot/config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_bytes(Path("configs/matgpt_telco_300m.yaml").read_bytes())
+    from matgpt.config import config_to_yaml, load_config
+    from matgpt.utils.hashing import sha256_text
+    config_sha256 = sha256_text(config_to_yaml(load_config(config_path)))
+    (evidence / "preflight.json").write_text(json.dumps({
+        "status": "pass", "checks": [{"name": "config", "status": "pass",
+        "details": {"config_sha256": config_sha256}}]
+    }), encoding="utf-8")
+    checkpoint_reference = "/content/drive/MyDrive/example/checkpoints/latest.pt"
+    (evidence / "smoke_resume_verified.json").write_text(json.dumps({
+        "status": "pass", "checkpoint": checkpoint_reference
+    }), encoding="utf-8")
+    (evidence / "pilot_complete.json").write_text(json.dumps({
+        "status": "pass", "tokens_processed": 20_000_000,
+        "checkpoint": checkpoint_reference
+    }), encoding="utf-8")
+    evaluation = recipe_root / "runs/pilot/evaluation/current/base.json"
+    evaluation.parent.mkdir(parents=True, exist_ok=True)
+    evaluation.write_text(json.dumps({
+        "checkpoint": checkpoint_reference, "val_loss": 2.0,
+        "perplexity": 7.389, "samples": []
+    }), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
+    preflight_path = evidence / "preflight.json"
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    preflight["checks"][0]["details"]["config_sha256"] = "0" * 64
+    preflight_path.write_text(json.dumps(preflight), encoding="utf-8")
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 
 
 def test_existing_pilot_refresh_revalidates_current_artifacts_without_overwrite(
