@@ -116,12 +116,42 @@ class DrivePublisher:
         partial = Path(f"{destination}.partial")
         require_managed_path(self.destination_root, destination, kind="file")
         require_managed_path(self.destination_root, partial, kind="file")
-        started = float(self.monotonic_clock())
         with self._publication_lock():
-            destination_sha256 = self._complete_destination(
-                source_path, destination, partial, size, source_sha256
-            )
-        duration = max(0.0, float(self.monotonic_clock()) - started)
+            if destination.exists():
+                destination_sha256 = self._verified_destination(
+                    destination, size, source_sha256
+                )
+                receipt = (
+                    self.journal.prepared_publication(unit_id, source_relative_path)
+                    if self.journal is not None and unit_id is not None else None
+                )
+                duration = float(receipt["duration_seconds"]) if receipt else 0.0
+            else:
+                if partial.exists() and not self._matches_identity(
+                    partial, size, source_sha256
+                ):
+                    self._quarantine(partial)
+                receipt = (
+                    self.journal.prepared_publication(unit_id, source_relative_path)
+                    if self.journal is not None and unit_id is not None else None
+                )
+                if partial.exists() and receipt is None:
+                    partial.unlink()
+                if not partial.exists():
+                    started = float(self.monotonic_clock())
+                    self._copy_fsynced(source_path, partial)
+                    duration = max(0.0, float(self.monotonic_clock()) - started)
+                    if self.journal is not None and unit_id is not None:
+                        self.journal.prepare_publication(
+                            unit_id, source_relative_path, source_sha256,
+                            size=size, duration_seconds=duration,
+                        )
+                else:
+                    duration = float(receipt["duration_seconds"])
+                self._move_partial_to_final(partial, destination)
+                destination_sha256 = self._verified_destination(
+                    destination, size, source_sha256
+                )
         publication = Publication(
             source=str(source_path),
             source_relative_path=source_relative_path,

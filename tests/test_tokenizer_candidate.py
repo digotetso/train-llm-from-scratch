@@ -1393,7 +1393,10 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
         "version": 1,
         "complete": True,
         "quota_counting": {"tokenizer_sha256": tokenizer_sha256},
-        "split_stats": {"pilot": {"documents": 1}},
+        "stages": {"pilot": {"requested_tokens": 20_000_000,
+                                "quota_tokens": 20_000_000, "documents": 1}},
+        "validation": {"documents": 1},
+        "split_stats": {"pilot": {"documents": 1}, "validation": {"documents": 1}},
     }
     corpus_payload["manifest_sha256"] = sha256_json(corpus_payload)
     corpus_manifest.write_text(json.dumps(corpus_payload), encoding="utf-8")
@@ -1469,7 +1472,12 @@ def _write_valid_preserved_pilot_evidence(
     )
     shard_root = recipe_root / "prepared/pilot/shards"
     shard_root.mkdir(parents=True, exist_ok=True)
-    (shard_root / "pilot_00000.bin").write_bytes(b"pilot shard")
+    pilot_shard = shard_root / "pilot_00000.bin"
+    with pilot_shard.open("wb") as handle:
+        handle.seek(40_000_000 - 1)
+        handle.write(b"\0")
+    validation_shard = shard_root / "validation_00000.bin"
+    validation_shard.write_bytes(b"\0\0")
     from matgpt.data.shard import build_split_metadata
 
     metadata = build_split_metadata(
@@ -1481,14 +1489,24 @@ def _write_valid_preserved_pilot_evidence(
         total_documents=1,
         shards=[{
             "relative_path": "pilot_00000.bin",
-            "num_tokens": 5,
+            "num_tokens": 20_000_000,
             "num_documents": 1,
-            "size": 11,
-            "sha256": sha256_file(shard_root / "pilot_00000.bin"),
+            "byte_size": 40_000_000,
+            "sha256": sha256_file(pilot_shard),
         }],
     )
     (shard_root / "pilot_metadata.json").write_text(
         json.dumps(metadata), encoding="utf-8"
+    )
+    validation_metadata = build_split_metadata(
+        split="validation", tokenizer_sha256=selected_sha256, dtype="uint16",
+        append_eos=True, shard_size_tokens=1024, total_documents=1,
+        shards=[{"relative_path": "validation_00000.bin", "num_tokens": 1,
+                 "num_documents": 1, "byte_size": 2,
+                 "sha256": sha256_file(validation_shard)}],
+    )
+    (shard_root / "validation_metadata.json").write_text(
+        json.dumps(validation_metadata), encoding="utf-8"
     )
     _write_pilot_gate_evidence(
         recipe_root / "evidence/pilot",
@@ -2944,12 +2962,21 @@ def test_pilot_reuse_accepts_current_repo_legacy_producer_schemas(
         "status": "pass", "tokens_processed": 20_000_000,
         "checkpoint": checkpoint_reference
     }), encoding="utf-8")
-    evaluation = recipe_root / "runs/pilot/evaluation/current/base.json"
+    evaluation = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_base.json"
     evaluation.parent.mkdir(parents=True, exist_ok=True)
     evaluation.write_text(json.dumps({
         "checkpoint": checkpoint_reference, "val_loss": 2.0,
         "perplexity": 7.389, "samples": []
     }), encoding="utf-8")
+    evaluation.with_name("checkpoint_00_latest_open_telco.json").write_text(
+        json.dumps({"tasks": [{"task": "teleqna", "accuracy": 0.5}]}), encoding="utf-8"
+    )
+    comparison = evaluation.parent / "checkpoint_comparison/comparison_summary.json"
+    comparison.parent.mkdir(parents=True)
+    comparison.write_text(json.dumps({"validation": {}, "consistency": {},
+        "generations": {}, "checkpoints": {"checkpoint_00": {
+            "path": checkpoint_reference,
+            "evidence": "checkpoints/checkpoint_00.json"}}}), encoding="utf-8")
 
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
     preflight_path = evidence / "preflight.json"

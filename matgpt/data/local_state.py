@@ -147,6 +147,9 @@ class BuildJournal:
                 published_at TEXT,
                 publication_duration_seconds REAL,
                 publication_event_count INTEGER,
+                prepared_publication_seconds REAL,
+                prepared_publication_bytes INTEGER,
+                prepared_publication_sha256 TEXT,
                 PRIMARY KEY (unit_id, relative_path),
                 FOREIGN KEY (unit_id) REFERENCES units(unit_id)
             );
@@ -174,6 +177,13 @@ class BuildJournal:
             connection.execute(
                 "ALTER TABLE artifacts ADD COLUMN publication_event_count INTEGER"
             )
+        for name, sql_type in (
+            ("prepared_publication_seconds", "REAL"),
+            ("prepared_publication_bytes", "INTEGER"),
+            ("prepared_publication_sha256", "TEXT"),
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE artifacts ADD COLUMN {name} {sql_type}")
         unit_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(units)")}
         if "state_json" not in unit_columns:
             connection.execute("ALTER TABLE units ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
@@ -298,7 +308,6 @@ class BuildJournal:
                     int(row["rowid"]),
                 ),
             )
-
     def committed_hashes(self, hashes: Iterable[str]) -> set[str]:
         """Return the supplied digests that are already committed."""
 
@@ -533,7 +542,9 @@ class BuildJournal:
                 raise ValueError("publication duration must be non-negative")
             artifact = self.connection.execute(
                 """
-                SELECT published, sha256, destination_sha256 FROM artifacts
+                SELECT published, sha256, destination_sha256,
+                       prepared_publication_seconds, prepared_publication_bytes,
+                       prepared_publication_sha256 FROM artifacts
                 WHERE unit_id = ? AND relative_path = ?
                 """,
                 (unit_id, relative_path),
@@ -546,6 +557,12 @@ class BuildJournal:
                 if artifact["destination_sha256"] != destination_sha256:
                     raise ValueError("artifact was already published with another hash")
                 return
+            prepared_seconds = artifact["prepared_publication_seconds"]
+            if prepared_seconds is not None:
+                if (artifact["prepared_publication_bytes"] != self.artifact(unit_id, relative_path)["size"]
+                    or artifact["prepared_publication_sha256"] != destination_sha256):
+                    raise ValueError("prepared publication receipt identity mismatch")
+                duration_seconds = float(prepared_seconds)
             self.connection.execute(
                 """
                 UPDATE artifacts
@@ -562,16 +579,49 @@ class BuildJournal:
                 ),
             )
             self.connection.execute(
-                """
-                UPDATE units
-                SET published = NOT EXISTS (
-                    SELECT 1 FROM artifacts
-                    WHERE unit_id = ? AND published = 0
-                )
-                WHERE unit_id = ?
-                """,
+                "UPDATE units SET published = NOT EXISTS (SELECT 1 FROM artifacts "
+                "WHERE unit_id = ? AND published = 0) WHERE unit_id = ?",
                 (unit_id, unit_id),
             )
+
+    def prepare_publication(
+        self, unit_id: str, relative_path: str, destination_sha256: str,
+        *, size: int, duration_seconds: float
+    ) -> None:
+        """Persist copied+fsynced publication work before destination rename."""
+        relative_path = _normalized_relative_posix_path(relative_path)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT size, sha256, prepared_publication_seconds, "
+                "prepared_publication_bytes, prepared_publication_sha256 "
+                "FROM artifacts WHERE unit_id=? AND relative_path=?",
+                (unit_id, relative_path),
+            ).fetchone()
+            if row is None or row["size"] != size or row["sha256"] != destination_sha256:
+                raise ValueError("prepared publication identity mismatch")
+            if row["prepared_publication_seconds"] is not None:
+                if (row["prepared_publication_bytes"] != size
+                    or row["prepared_publication_sha256"] != destination_sha256):
+                    raise ValueError("conflicting prepared publication receipt")
+                return
+            self.connection.execute(
+                "UPDATE artifacts SET prepared_publication_seconds=?, "
+                "prepared_publication_bytes=?, prepared_publication_sha256=? "
+                "WHERE unit_id=? AND relative_path=?",
+                (float(duration_seconds), size, destination_sha256, unit_id, relative_path),
+            )
+
+    def prepared_publication(self, unit_id: str, relative_path: str) -> dict[str, object] | None:
+        row = self.connection.execute(
+            "SELECT prepared_publication_seconds, prepared_publication_bytes, "
+            "prepared_publication_sha256 FROM artifacts WHERE unit_id=? AND relative_path=?",
+            (unit_id, _normalized_relative_posix_path(relative_path)),
+        ).fetchone()
+        if row is None or row["prepared_publication_seconds"] is None:
+            return None
+        return {"duration_seconds": float(row["prepared_publication_seconds"]),
+                "bytes": int(row["prepared_publication_bytes"]),
+                "sha256": str(row["prepared_publication_sha256"])}
 
     def publication_metrics(self) -> dict[str, object]:
         """Return the exactly-once publication ledger, refusing legacy gaps."""

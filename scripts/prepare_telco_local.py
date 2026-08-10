@@ -1340,6 +1340,18 @@ def _validated_pilot_manifest(
     ):
         raise ValueError("Pilot corpus manifest schema or identity is invalid.")
     if version == 1:
+        stages = manifest.get("stages")
+        pilot = stages.get("pilot") if isinstance(stages, Mapping) else None
+        validation = manifest.get("validation")
+        if (
+            not isinstance(pilot, Mapping)
+            or pilot.get("requested_tokens") != 20_000_000
+            or not isinstance(pilot.get("quota_tokens"), int)
+            or pilot["quota_tokens"] < 20_000_000
+            or not isinstance(validation, Mapping)
+            or int(validation.get("documents", 0)) < 1
+        ):
+            raise ValueError("Legacy pilot manifest does not prove the canonical 20M target and validation split.")
         build_identity = sha256_json(
             {"format": "legacy_telco_prepare_v1", "manifest_sha256": stored,
              "tokenizer_sha256": tokenizer_sha256}
@@ -1465,32 +1477,52 @@ def _pilot_colab_evidence(
     if not evaluation_files:
         raise ValueError("Pilot evaluation evidence is missing.")
     evaluations = []
+    roles: set[str] = set()
+    base_checkpoints: dict[str, dict[str, Any]] = {}
     for path in evaluation_files:
         path = require_managed_path(
             drive_dir, path, kind="file", allow_missing=False
         )
         payload = _load_json_object(path, "Pilot evaluation evidence")
-        _validated_pilot_gate(
-            payload,
-            gate="evaluation",
-            tokenizer_sha256=tokenizer_sha256,
-            build_identity_sha256=build_identity_sha256,
-        )
-        if "gate" not in payload:
+        checkpoint_fingerprint = None
+        if "gate" in payload:
+            _validated_pilot_gate(payload, gate="evaluation",
+                tokenizer_sha256=tokenizer_sha256,
+                build_identity_sha256=build_identity_sha256)
+            roles.add("explicit_review")
+        elif path.name.endswith("_base.json"):
+            _validated_pilot_gate(payload, gate="evaluation",
+                tokenizer_sha256=tokenizer_sha256,
+                build_identity_sha256=build_identity_sha256)
             checkpoint = evaluation_root.parent / "checkpoints" / Path(
                 str(payload["checkpoint"])
             ).name
             checkpoint_fingerprint = _file_fingerprint(
                 checkpoint, managed_root=drive_dir
             )
-            payload_status = payload.get("status")
-            if payload_status in {"fail", "failed", "error"}:
-                raise ValueError("Pilot evaluation evidence records failure.")
+            if not all(isinstance(payload.get(key), (int, float)) for key in ("val_loss", "perplexity")):
+                raise ValueError("Pilot loss evaluation metrics are invalid.")
+            roles.add("loss")
+            base_checkpoints[path.name.removesuffix("_base.json")] = checkpoint_fingerprint
+        elif path.name.endswith("_open_telco.json"):
+            tasks = payload.get("tasks")
+            prefix = path.name.removesuffix("_open_telco.json")
+            if not isinstance(tasks, list) or not tasks or prefix not in base_checkpoints:
+                raise ValueError("Pilot task evaluation lacks its checkpoint companion.")
+            checkpoint_fingerprint = base_checkpoints[prefix]
+            roles.add("tasks")
+        elif path.name == "comparison_summary.json":
+            if not all(key in payload for key in ("validation", "consistency", "generations", "checkpoints")):
+                raise ValueError("Pilot checkpoint comparison evidence is incomplete.")
+            checkpoint_fingerprint = None
+            roles.add("comparison")
         else:
             checkpoint_fingerprint = None
         evaluations.append(_file_fingerprint(path, managed_root=drive_dir))
         if checkpoint_fingerprint is not None:
             evaluations[-1]["checkpoint"] = checkpoint_fingerprint
+    if "explicit_review" not in roles and not {"loss", "tasks", "comparison"}.issubset(roles):
+        raise ValueError("Pilot evaluation is missing required loss, task, or comparison evidence.")
     artifacts["evaluation"] = {
         "files": evaluations,
         "fingerprint_sha256": sha256_json(evaluations),
@@ -1518,8 +1550,11 @@ def _pilot_reuse_evidence(
         shards_root, managed_root=drive_dir, label="Pilot shards"
     )
     metadata_files = sorted(shards_root.glob("*_metadata.json"))
-    if not metadata_files:
-        raise ValueError("Pilot shards have no split metadata evidence.")
+    if {path.name for path in metadata_files} != {
+        "pilot_metadata.json", "validation_metadata.json"
+    }:
+        raise ValueError("Pilot shards require complete train and validation metadata.")
+    referenced_shards: set[Path] = set()
     for metadata_path in metadata_files:
         metadata = _load_json_object(metadata_path, "Pilot shard metadata")
         stored_metadata = metadata.get("metadata_sha256")
@@ -1535,17 +1570,31 @@ def _pilot_reuse_evidence(
         ):
             raise ValueError("Pilot shard metadata identity mismatch.")
         shards = metadata.get("shards")
+        if not isinstance(shards, list) or not shards or metadata.get("split") not in {"pilot", "validation"}:
+            raise ValueError("Pilot shard metadata split or shard list is incomplete.")
+        if metadata["split"] == "pilot" and int(metadata.get("total_tokens", 0)) < 20_000_000:
+            raise ValueError("Pilot shard metadata does not prove the canonical 20M target.")
+        if metadata["split"] == "validation" and int(metadata.get("total_tokens", 0)) < 1:
+            raise ValueError("Pilot validation shard metadata is empty.")
         if isinstance(shards, list):
             for shard in shards:
                 if not isinstance(shard, Mapping) or not isinstance(shard.get("path"), str):
                     raise ValueError("Pilot shard metadata entry is invalid.")
                 shard_path = metadata_path.parent / str(shard["path"])
                 fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
+                referenced_shards.add(shard_path.resolve())
                 if (
-                    shard.get("size") != fingerprint["size"]
+                    shard.get("byte_size") != fingerprint["size"]
                     or shard.get("sha256") != fingerprint["sha256"]
+                    or int(shard.get("num_tokens", -1)) * 2 != fingerprint["size"]
                 ):
                     raise ValueError("Pilot shard metadata file fingerprint mismatch.")
+    actual_shards = {
+        path.resolve() for path in shards_root.glob("*.bin")
+        if path.is_file() and not path.is_symlink()
+    }
+    if actual_shards != referenced_shards:
+        raise ValueError("Pilot split metadata does not enumerate every shard exactly.")
     gates = _pilot_colab_evidence(
         drive_dir=drive_dir,
         gate_root=evidence_root,

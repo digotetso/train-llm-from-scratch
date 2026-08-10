@@ -230,6 +230,35 @@ def test_publication_metrics_are_atomic_and_idempotent_across_return_crash(
         assert journal.publication_metrics()["bytes"] == 10
 
 
+def test_reconcile_consumes_pre_rename_receipt_after_rename_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local, destination = tmp_path / "local", tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    journal_path = tmp_path / "state.sqlite3"
+    times = iter((0.0, 10.0))
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        journal.commit_unit(_unit(artifacts=({"path": artifact.name, "size": 10,
+            "sha256": hashlib.sha256(b"committed\n").hexdigest()},)))
+        publisher = _publisher(local, destination, journal=journal,
+                               monotonic_clock=lambda: next(times))
+        original_move = publisher._move_partial_to_final
+        def crash_after_rename(partial, final):
+            original_move(partial, final)
+            raise RuntimeError("crash immediately after rename")
+        monkeypatch.setattr(publisher, "_move_partial_to_final", crash_after_rename)
+        with pytest.raises(RuntimeError, match="after rename"):
+            publisher.publish(artifact, "text/fit_00000.jsonl", unit_id="fit-00000")
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        _publisher(local, destination, journal=journal).reconcile()
+        assert journal.publication_metrics() == {"method": "publisher_publish_wall_time",
+            "wall_time_seconds": 10.0, "artifacts": 1, "bytes": 10}
+        _publisher(local, destination, journal=journal).reconcile()
+        assert journal.publication_metrics()["wall_time_seconds"] == 10.0
+
+
 @pytest.mark.parametrize("relative_path", ("../escape.bin", "/escape.bin"))
 def test_publish_refuses_destination_path_traversal(tmp_path: Path, relative_path: str):
     local = tmp_path / "local"
