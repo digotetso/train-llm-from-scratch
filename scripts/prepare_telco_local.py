@@ -122,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--baseline-provenance",
         help="Canonical preserved-pilot tokenizer provenance JSON.",
     )
+    parser.add_argument(
+        "--migrate-legacy-pilot-provenance",
+        action="store_true",
+        help=(
+            "Create missing canonical pilot provenance after recomputing and "
+            "validating the preserved pilot manifest and tokenizer."
+        ),
+    )
     parser.add_argument("--candidate-tokenizer", help="Candidate tokenizer directory.")
     parser.add_argument("--holdout-manifest", help="Shared complete v3 sample manifest.")
     parser.add_argument("--comparison", help="Reviewed tokenizer comparison JSON.")
@@ -702,6 +710,8 @@ def _pilot_recipe_sha256() -> str:
 def _canonical_pilot_provenance(
     drive_dir: Path,
     supplied: str | None = None,
+    *,
+    migrate_legacy: bool = False,
 ) -> tuple[Path, Path, dict[str, Any]]:
     recipe_sha256 = _pilot_recipe_sha256()
     recipe_id = recipe_sha256[:12]
@@ -720,18 +730,16 @@ def _canonical_pilot_provenance(
         (baseline / "special_tokens.json", "file"),
         (recipe_root / "evidence", "directory"),
         (recipe_root / "evidence" / "pilot", "directory"),
-        (provenance_path, "file"),
     ):
         require_managed_path(drive_dir, path, kind=kind, allow_missing=False)
     if supplied is not None:
-        supplied_path = _required_managed_path(
-            drive_dir, supplied, "--baseline-provenance"
+        supplied_path = require_managed_path(
+            drive_dir, Path(supplied), kind="file", allow_missing=True
         )
-        if supplied_path != provenance_path.resolve():
+        if supplied_path != provenance_path.resolve(strict=False):
             raise ValueError(
                 "--baseline-provenance must be the canonical pilot evidence file."
             )
-    provenance = _load_json_object(provenance_path, "Pilot tokenizer provenance")
     expected_relative_sample = "corpora/pilot/manifest.json"
     expected_relative_tokenizer = "prepared/pilot/tokenizer"
     sample_manifest = recipe_root / expected_relative_sample
@@ -756,6 +764,13 @@ def _canonical_pilot_provenance(
         "tokenizer_sha256": sha256_file(baseline / "tokenizer.json"),
     }
     expected["provenance_sha256"] = sha256_json(expected)
+    if not provenance_path.exists():
+        if not migrate_legacy:
+            raise FileNotFoundError(
+                f"Canonical pilot tokenizer provenance is missing: {provenance_path}"
+            )
+        _write_json_exclusive(provenance_path, expected, managed_root=drive_dir)
+    provenance = _load_json_object(provenance_path, "Pilot tokenizer provenance")
     if provenance != expected:
         raise ValueError(
             "Pilot tokenizer provenance does not match the canonical pilot recipe, "
@@ -815,7 +830,9 @@ def _comparison_stage(
     if not args.baseline_provenance:
         raise ValueError("tokenizer_compare requires --baseline-provenance.")
     baseline, _, pilot_provenance = _canonical_pilot_provenance(
-        drive_dir, args.baseline_provenance
+        drive_dir,
+        args.baseline_provenance,
+        migrate_legacy=args.migrate_legacy_pilot_provenance,
     )
     supplied_baseline = _required_managed_path(
         drive_dir,

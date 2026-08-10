@@ -45,6 +45,7 @@ def test_local_notebook_exposes_only_data_and_tokenizer_stages():
     assert "STOP_AFTER_QUOTA_TOKENS = 100_000_000" in source
     assert "ACCEPT_CALIBRATION = False" in source
     assert "OVERRIDE_CALIBRATION_GUARD = False" in source
+    assert "MIGRATE_LEGACY_PILOT_PROVENANCE = False" in source
     assert 'OVERRIDE_REASON = ""' in source
     assert "scripts/train.py" not in source
     assert "scripts/pretrain.py" not in source
@@ -98,6 +99,7 @@ def test_local_notebook_builds_one_deterministic_cli_command():
     }.issubset(stage_values)
     assert "scripts/prepare_telco_local.py" in source
     assert "--baseline-provenance" in source
+    assert "--migrate-legacy-pilot-provenance" in source
     assert "--stop-after-quota-tokens" in source
     assert "--accept-calibration" in source
     assert "--override-calibration-guard" in source

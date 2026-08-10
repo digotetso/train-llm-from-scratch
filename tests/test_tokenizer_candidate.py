@@ -1944,6 +1944,32 @@ def test_local_cli_comparison_requires_explicit_pilot_provenance_evidence(
     assert not (Path(common[-1]) / "comparison.json").exists()
 
 
+def test_canonical_pilot_provenance_explicitly_migrates_missing_legacy_evidence(
+    tmp_path: Path,
+):
+    from scripts import prepare_telco_local
+
+    drive_dir = tmp_path / "drive"
+    drive_dir.mkdir()
+    baseline, provenance, tokenizer_sha256 = _canonical_pilot_fixture(drive_dir)
+    expected = json.loads(provenance.read_text(encoding="utf-8"))
+    provenance.unlink()
+
+    actual_baseline, actual_path, actual = (
+        prepare_telco_local._canonical_pilot_provenance(
+            drive_dir,
+            str(provenance),
+            migrate_legacy=True,
+        )
+    )
+
+    assert actual_baseline == baseline.resolve()
+    assert actual_path == provenance.resolve()
+    assert actual == expected
+    assert actual["tokenizer_sha256"] == tokenizer_sha256
+    assert json.loads(provenance.read_text(encoding="utf-8")) == expected
+
+
 def test_local_cli_comparison_rejects_an_arbitrary_tokenizer_labeled_pilot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
