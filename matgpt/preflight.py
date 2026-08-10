@@ -554,12 +554,20 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
                     f"{split} shard size mismatch for {path}: "
                     f"observed={observed} expected={expected_bytes}"
                 )
+            if "byte_size" in shard and (
+                type(shard["byte_size"]) is not int
+                or shard["byte_size"] != expected_bytes
+            ):
+                raise ValueError(
+                    f"{split} shard byte_size mismatch for {path}: "
+                    f"observed={shard['byte_size']!r} expected={expected_bytes}"
+                )
             if sha256_file(path) != shard["sha256"]:
                 raise ValueError(f"{split} shard SHA-256 mismatch: {path}")
             shard_files.append(
                 {
                     "path": shard["path"],
-                    "byte_size": int(shard["byte_size"]),
+                    "byte_size": expected_bytes,
                     "num_tokens": expected_tokens,
                     "sha256": shard["sha256"],
                 }
