@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Mapping
@@ -11,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from matgpt.eval.judge import summarize_judgments, validate_judgments
 from matgpt.training.run_summary import write_evaluation_result
+from matgpt.utils.hashing import sha256_file
 
 
 def _reject_json_constant(value: str) -> None:
@@ -93,6 +95,10 @@ def main() -> None:
     parser.add_argument(
         "--reviewer", required=True, choices=("llm", "human"), help="Reviewer type."
     )
+    parser.add_argument(
+        "--comparison-summary", required=True,
+        help="comparison_summary.json whose checkpoints were judged.",
+    )
     parser.add_argument("--output", required=True, help="New scored JSON path.")
     args = parser.parse_args()
 
@@ -103,11 +109,38 @@ def main() -> None:
     raw_rows = _load_jsonl_objects([Path(path) for path in args.judgments])
     judgments = validate_judgments(raw_rows, set(review_key))
     summary = summarize_judgments(judgments, review_key)
+    comparison_path = Path(args.comparison_summary)
+    try:
+        comparison_payload = json.loads(comparison_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError) as error:
+        raise ValueError("invalid comparison summary JSON") from error
+    comparison_checkpoints = comparison_payload.get("checkpoints") \
+        if isinstance(comparison_payload, dict) else None
+    if (
+        not isinstance(comparison_checkpoints, dict)
+        or set(comparison_checkpoints) != set(summary["checkpoints"])
+    ):
+        raise ValueError("comparison checkpoint labels do not match scored judgments")
+    checkpoint_bindings = {}
+    for label, record in comparison_checkpoints.items():
+        checkpoint_path = Path(record.get("path", "")) if isinstance(record, dict) else Path()
+        if not checkpoint_path.is_file():
+            raise ValueError(f"comparison checkpoint is missing: {label}")
+        checkpoint_bindings[label] = {
+            "path": str(checkpoint_path),
+            "size": checkpoint_path.stat().st_size,
+            "sha256": sha256_file(checkpoint_path),
+        }
     result = {
         "reviewer": args.reviewer,
         "review_count": len(judgments),
         "judgments": _join_judgments(judgments, review_key),
         "summary": summary,
+        "comparison": {
+            "path": Path(os.path.relpath(comparison_path, output.parent)).as_posix(),
+            "sha256": sha256_file(comparison_path),
+        },
+        "checkpoints": checkpoint_bindings,
     }
     write_evaluation_result(output, result)
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))

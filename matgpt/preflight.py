@@ -19,6 +19,7 @@ from matgpt.data.prepare import effective_validation_split
 from matgpt.data.shard import resolve_shard_artifact_path
 from matgpt.data.sources import PRETRAIN_ROLES, load_source_registry
 from matgpt.model.gpt import GPT, GPTConfig, count_parameters
+from matgpt.preflight_schema import CHECK_IDS
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.training.dataset import (
     load_verified_shard_metadata,
@@ -29,19 +30,6 @@ from matgpt.training.schedule import build_training_schedule
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 from matgpt.utils.paths import require_managed_path
 
-
-CHECK_IDS = (
-    "config",
-    "source_revision",
-    "dataset_manifest",
-    "dataset_overlap",
-    "tokenizer",
-    "shards",
-    "output_storage",
-    "device",
-    "training_math",
-    "checkpoint",
-)
 
 SUPPORTED_TRAINING_GPUS = (
     ("rtx_pro_6000_blackwell", "RTX PRO 6000 Blackwell", 90.0, True),
@@ -531,6 +519,7 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
         total_tokens = 0
         eos_count = 0
         maximum_id = -1
+        shard_files = []
         for shard in metadata["shards"]:
             try:
                 path = resolve_shard_artifact_path(
@@ -551,6 +540,14 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
                 )
             if sha256_file(path) != shard["sha256"]:
                 raise ValueError(f"{split} shard SHA-256 mismatch: {path}")
+            shard_files.append(
+                {
+                    "path": shard["path"],
+                    "byte_size": int(shard["byte_size"]),
+                    "num_tokens": expected_tokens,
+                    "sha256": shard["sha256"],
+                }
+            )
             values = np.memmap(path, mode="r", dtype=dtype)
             total_tokens += int(values.size)
             if values.size:
@@ -575,6 +572,8 @@ def _check_shards(cfg: dict[str, Any]) -> dict[str, Any]:
             "total_tokens": total_tokens,
             "maximum_id": maximum_id,
             "eos_count": eos_count,
+            "metadata_sha256": metadata["metadata_sha256"],
+            "shard_files_sha256": sha256_json(shard_files),
         }
     return details
 

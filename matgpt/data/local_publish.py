@@ -118,12 +118,17 @@ class DrivePublisher:
         require_managed_path(self.destination_root, partial, kind="file")
         with self._publication_lock():
             if destination.exists():
-                destination_sha256 = self._verified_destination(
-                    destination, size, source_sha256
-                )
                 receipt = (
                     self.journal.prepared_publication(unit_id, source_relative_path)
                     if self.journal is not None and unit_id is not None else None
+                )
+                if self.journal is not None and receipt is None:
+                    raise ValueError(
+                        "existing unpublished destination has no prepared publication "
+                        "receipt; publication duration is unrecoverable"
+                    )
+                destination_sha256 = self._verified_destination(
+                    destination, size, source_sha256
                 )
                 duration = float(receipt["duration_seconds"]) if receipt else 0.0
             else:

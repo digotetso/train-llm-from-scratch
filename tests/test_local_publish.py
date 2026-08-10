@@ -259,6 +259,63 @@ def test_reconcile_consumes_pre_rename_receipt_after_rename_crash(
         assert journal.publication_metrics()["wall_time_seconds"] == 10.0
 
 
+def test_publish_refuses_legacy_final_without_prepared_receipt_before_mutation(
+    tmp_path: Path,
+):
+    local, destination = tmp_path / "local", tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    journal_path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        journal.commit_unit(_unit(artifacts=({"path": artifact.name, "size": 10,
+            "sha256": hashlib.sha256(b"committed\n").hexdigest()},)))
+        journal.record_destination("fit-00000", artifact.name, "text/fit_00000.jsonl")
+        final = destination / "text/fit_00000.jsonl"
+        final.parent.mkdir(parents=True)
+        final.write_bytes(b"committed\n")
+
+        with pytest.raises(ValueError, match="prepared publication receipt"):
+            _publisher(local, destination, journal=journal).publish(
+                artifact, "text/fit_00000.jsonl", unit_id="fit-00000"
+            )
+
+        assert artifact.is_file()
+        assert final.read_bytes() == b"committed\n"
+        assert len(journal.unpublished_artifacts()) == 1
+        assert journal.publication_metrics() == {
+            "method": "publisher_publish_wall_time",
+            "wall_time_seconds": 0.0,
+            "artifacts": 0,
+            "bytes": 0,
+        }
+
+
+def test_fresh_reconcile_refuses_legacy_final_without_prepared_receipt(
+    tmp_path: Path,
+):
+    local, destination = tmp_path / "local", tmp_path / "drive"
+    local.mkdir()
+    artifact = local / "fit_00000.jsonl"
+    artifact.write_bytes(b"committed\n")
+    journal_path = tmp_path / "state.sqlite3"
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        journal.commit_unit(_unit(artifacts=({"path": artifact.name, "size": 10,
+            "sha256": hashlib.sha256(b"committed\n").hexdigest()},)))
+        journal.record_destination("fit-00000", artifact.name, "text/fit_00000.jsonl")
+    final = destination / "text/fit_00000.jsonl"
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"committed\n")
+
+    with BuildJournal.open(journal_path, _identity()) as journal:
+        with pytest.raises(ValueError, match="prepared publication receipt"):
+            _publisher(local, destination, journal=journal).reconcile()
+        assert artifact.is_file()
+        assert final.read_bytes() == b"committed\n"
+        assert len(journal.unpublished_artifacts()) == 1
+        assert journal.publication_metrics()["artifacts"] == 0
+
+
 @pytest.mark.parametrize("relative_path", ("../escape.bin", "/escape.bin"))
 def test_publish_refuses_destination_path_traversal(tmp_path: Path, relative_path: str):
     local = tmp_path / "local"

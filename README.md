@@ -204,7 +204,8 @@ python scripts/score_story_judgments.py \
   --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-01.jsonl \
   --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-02.jsonl \
   --reviewer llm \
-  --output /path/to/checkpoint-comparison/llm_judge/llm_scores.json
+  --comparison-summary /path/to/checkpoint-comparison/comparison_summary.json \
+  --output /path/to/checkpoint-comparison/llm_judge/results/scored_llm.json
 ```
 
 The scoring command rejects missing, duplicate, unknown, malformed, or

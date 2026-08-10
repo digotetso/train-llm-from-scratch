@@ -14,8 +14,10 @@ import sqlite3
 import sys
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -33,6 +35,8 @@ from matgpt.data.local_sample import LocalSampleRequest, build_tokenizer_sample
 from matgpt.data.mixture import build_mixture_plan, load_mixture_config
 from matgpt.data.quality import DataQualityPolicy, load_contamination_patterns
 from matgpt.data.sources import load_source_registry
+from matgpt.data.token_dtype import DTYPES
+from matgpt.preflight_schema import CHECK_IDS
 from matgpt.tokenizer.candidate import (
     TokenizerCandidateConfig,
     build_tokenizer_sample_plan,
@@ -43,6 +47,7 @@ from matgpt.tokenizer.candidate import (
 )
 from matgpt.tokenizer.io import load_tokenizer_metadata
 from matgpt.tokenizer.train import (
+    REQUIRED_VOCAB_SIZE,
     evaluate_tokenizer_on_jsonl,
     train_tokenizer_from_manifest,
 )
@@ -73,6 +78,8 @@ OPEN_TELCO_SOURCES = ("open_telco_lite", "open_telco_full")
 OPEN_TELCO_CONFIGS = ("oranbench", "sixg_bench", "srsranbench", "teleqna")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CALIBRATION_TARGET_TOKENS = 100_000_000
+PILOT_TOKENS = 20_000_000
+PILOT_SHARD_DTYPE = "uint16"
 FULL_TARGET_TOKENS = 12_000_000_000
 CALIBRATION_MAX_WALL_SECONDS = 48 * 60 * 60
 MAX_EVIDENCE_JSON_BYTES = 4 * 1024 * 1024
@@ -1382,11 +1389,16 @@ def _validated_pilot_gate(
             raise ValueError(f"Pilot {gate} evidence status failed.")
         if gate == "preflight":
             checks = payload.get("checks")
-            if not isinstance(checks, list) or not checks or any(
+            if not isinstance(checks, list) or any(
                 not isinstance(check, Mapping) or check.get("status") != "pass"
                 for check in checks
             ):
                 raise ValueError("Pilot preflight checks did not all pass.")
+            names = [check.get("name") for check in checks]
+            if names != list(CHECK_IDS):
+                raise ValueError(
+                    "Pilot preflight must contain exactly the authoritative required checks."
+                )
             return
         checkpoint = payload.get("checkpoint")
         if not isinstance(checkpoint, str) or not checkpoint:
@@ -1407,6 +1419,18 @@ def _validated_pilot_gate(
         or payload.get("build_identity_sha256") != build_identity_sha256
     ):
         raise ValueError(f"Pilot {gate} evidence schema, status, or identity failed.")
+    if gate == "preflight":
+        checks = payload.get("checks")
+        if not isinstance(checks, list) or [
+            check.get("name") if isinstance(check, Mapping) else None
+            for check in checks
+        ] != list(CHECK_IDS) or any(
+            not isinstance(check, Mapping) or check.get("status") != "pass"
+            for check in checks
+        ):
+            raise ValueError(
+                "Pilot preflight must contain exactly the authoritative required checks."
+            )
     if gate == "smoke" and payload.get("resume_verified") is not True:
         raise ValueError("Pilot smoke evidence does not prove resume verification.")
     if gate == "pilot" and (
@@ -1418,6 +1442,270 @@ def _validated_pilot_gate(
         raise ValueError("Pilot completion evidence did not reach 20M tokens.")
     if gate == "evaluation" and payload.get("evaluation_passed") is not True:
         raise ValueError("Pilot evaluation evidence did not pass.")
+
+
+def _finite_metric(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    )
+
+
+def _checkpoint_from_canonical_reference(
+    value: object, *, drive_dir: Path, checkpoint_root: Path
+) -> Path:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError("Pilot checkpoint reference is invalid.")
+    reference = PurePosixPath(value)
+    if ".." in reference.parts:
+        raise ValueError("Pilot checkpoint reference is unsafe.")
+    local_candidate = Path(value)
+    if local_candidate.is_absolute():
+        try:
+            resolved = local_candidate.resolve(strict=True)
+            if resolved.is_relative_to(drive_dir.resolve()):
+                candidate = resolved
+            else:
+                raise ValueError
+        except (OSError, ValueError):
+            marker_indexes = [
+                index for index, part in enumerate(reference.parts) if part == "recipes"
+            ]
+            if len(marker_indexes) != 1:
+                raise ValueError("Pilot checkpoint reference is outside the canonical namespace.")
+            candidate = drive_dir / Path(*reference.parts[marker_indexes[0]:])
+    else:
+        candidate = drive_dir / Path(*reference.parts)
+    candidate = require_managed_path(
+        drive_dir, candidate, kind="file", allow_missing=False
+    )
+    checkpoint_root = require_managed_path(
+        drive_dir, checkpoint_root, kind="directory", allow_missing=False
+    )
+    if candidate.parent != checkpoint_root:
+        raise ValueError("Pilot checkpoint reference is outside the selected pilot namespace.")
+    return candidate
+
+
+def _validate_task_result(row: object) -> None:
+    if not isinstance(row, Mapping):
+        raise ValueError("Pilot task evaluation row must be an object.")
+    total, correct, accuracy = row.get("total"), row.get("correct"), row.get("accuracy")
+    examples, categories = row.get("examples"), row.get("categories")
+    if (
+        row.get("task_type") != "multiple_choice"
+        or not isinstance(row.get("path"), str)
+        or not row["path"]
+        or type(total) is not int
+        or total < 1
+        or type(correct) is not int
+        or not 0 <= correct <= total
+        or not _finite_metric(accuracy)
+        or not 0.0 <= float(accuracy) <= 1.0
+        or not isinstance(categories, Mapping)
+        or not isinstance(examples, list)
+        or len(examples) != total
+        or abs(float(accuracy) - correct / total) > 1e-12
+    ):
+        raise ValueError("Pilot task evaluation summary is invalid.")
+    category_total = 0
+    category_correct = 0
+    for category, category_row in categories.items():
+        if not isinstance(category, str) or not category or not isinstance(category_row, Mapping):
+            raise ValueError("Pilot task evaluation category is invalid.")
+        row_total = category_row.get("total")
+        row_correct = category_row.get("correct")
+        row_accuracy = category_row.get("accuracy")
+        if (
+            type(row_total) is not int
+            or row_total < 1
+            or type(row_correct) is not int
+            or not 0 <= row_correct <= row_total
+            or not _finite_metric(row_accuracy)
+            or abs(float(row_accuracy) - row_correct / row_total) > 1e-12
+        ):
+            raise ValueError("Pilot task evaluation category metric is invalid.")
+        category_total += row_total
+        category_correct += row_correct
+    if category_total != total or category_correct != correct:
+        raise ValueError("Pilot task evaluation categories do not reconcile.")
+    for example in examples:
+        losses = example.get("choice_losses") if isinstance(example, Mapping) else None
+        if (
+            not isinstance(example, Mapping)
+            or not isinstance(example.get("id"), str)
+            or not isinstance(example.get("category"), str)
+            or type(example.get("answer_index")) is not int
+            or type(example.get("prediction_index")) is not int
+            or type(example.get("correct")) is not bool
+            or not isinstance(losses, list)
+            or not losses
+            or any(not _finite_metric(loss) for loss in losses)
+            or not 0 <= example["answer_index"] < len(losses)
+            or not 0 <= example["prediction_index"] < len(losses)
+            or example["correct"]
+            != (example["answer_index"] == example["prediction_index"])
+        ):
+            raise ValueError("Pilot task evaluation outcome is invalid.")
+
+
+def _validate_finite_tree(value: object) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Pilot evaluation contains a non-finite metric.")
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            _validate_finite_tree(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _validate_finite_tree(nested)
+
+
+def _validated_comparison_evidence(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    drive_dir: Path,
+    checkpoint_root: Path,
+    expected_config_sha256: str,
+) -> dict[str, Path]:
+    checkpoints = payload.get("checkpoints")
+    if not isinstance(checkpoints, Mapping) or len(checkpoints) < 2:
+        raise ValueError("Pilot comparison requires at least two checkpoints.")
+    config = payload.get("config")
+    if not isinstance(config, Mapping) or config.get("sha256") != expected_config_sha256:
+        raise ValueError("Pilot comparison config fingerprint mismatch.")
+    if not all(isinstance(payload.get(key), Mapping) for key in (
+        "protocol", "validation", "consistency", "generations", "llm_judge"
+    )):
+        raise ValueError("Pilot checkpoint comparison evidence is incomplete.")
+    labels = set(checkpoints)
+    if set(payload["consistency"]) != labels or set(payload["generations"]) != labels:
+        raise ValueError("Pilot comparison checkpoint metrics are incomplete.")
+    result: dict[str, Path] = {}
+    for label, record in checkpoints.items():
+        if not isinstance(label, str) or not isinstance(record, Mapping):
+            raise ValueError("Pilot comparison checkpoint record is invalid.")
+        checkpoint = _checkpoint_from_canonical_reference(
+            record.get("path"), drive_dir=drive_dir, checkpoint_root=checkpoint_root
+        )
+        evidence_value = record.get("evidence")
+        if evidence_value != f"checkpoints/{label}.json":
+            raise ValueError("Pilot comparison detailed-evidence path is not canonical.")
+        detailed_path = require_managed_path(
+            path.parent, path.parent / f"checkpoints/{label}.json",
+            kind="file", allow_missing=False,
+        )
+        detailed = _load_json_object(detailed_path, "Pilot comparison checkpoint detail")
+        if (
+            detailed.get("checkpoint_label") != label
+            or _checkpoint_from_canonical_reference(
+                detailed.get("checkpoint_path"), drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root,
+            ) != checkpoint
+            or not isinstance(detailed.get("validation"), list)
+            or not detailed["validation"]
+            or not isinstance(detailed.get("consistency_task"), Mapping)
+            or not isinstance(detailed.get("generations"), list)
+            or not detailed["generations"]
+            or not isinstance(detailed.get("generation_summary"), Mapping)
+        ):
+            raise ValueError("Pilot comparison checkpoint detail is incomplete.")
+        for validation_row in detailed["validation"]:
+            if (
+                not isinstance(validation_row, Mapping)
+                or type(validation_row.get("seed")) is not int
+                or not _finite_metric(validation_row.get("loss"))
+                or not _finite_metric(validation_row.get("perplexity"))
+            ):
+                raise ValueError("Pilot comparison validation metric is invalid.")
+        _validate_task_result(detailed["consistency_task"])
+        _validate_finite_tree(detailed)
+        result[label] = checkpoint
+    for label, summary in payload["consistency"].items():
+        if (
+            not isinstance(summary, Mapping)
+            or type(summary.get("total")) is not int
+            or summary["total"] < 1
+            or type(summary.get("correct")) is not int
+            or not 0 <= summary["correct"] <= summary["total"]
+            or not _finite_metric(summary.get("accuracy"))
+            or abs(float(summary["accuracy"]) - summary["correct"] / summary["total"])
+            > 1e-12
+            or not isinstance(payload["generations"].get(label), Mapping)
+            or not payload["generations"][label]
+        ):
+            raise ValueError("Pilot comparison consistency or repetition metrics are invalid.")
+    _validate_finite_tree(payload)
+    return result
+
+
+def _validated_scored_review(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    comparison_path: Path,
+    checkpoints: Mapping[str, Path],
+    drive_dir: Path,
+    checkpoint_root: Path,
+) -> None:
+    judgments = payload.get("judgments")
+    summary = payload.get("summary")
+    bindings = payload.get("checkpoints")
+    comparison = payload.get("comparison")
+    if (
+        payload.get("reviewer") not in {"llm", "human"}
+        or type(payload.get("review_count")) is not int
+        or payload["review_count"] < 1
+        or not isinstance(judgments, list)
+        or len(judgments) != payload["review_count"]
+        or not isinstance(summary, Mapping)
+        or not isinstance(summary.get("checkpoints"), Mapping)
+        or set(summary["checkpoints"]) != set(checkpoints)
+        or not isinstance(comparison, Mapping)
+        or comparison.get("path") != "../../comparison_summary.json"
+        or comparison.get("sha256") != sha256_file(comparison_path)
+        or not isinstance(bindings, Mapping)
+        or set(bindings) != set(checkpoints)
+    ):
+        raise ValueError("Pilot scored review is incomplete or unbound.")
+    for label, checkpoint in checkpoints.items():
+        binding = bindings[label]
+        if (
+            not isinstance(binding, Mapping)
+            or _checkpoint_from_canonical_reference(
+                binding.get("path"), drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root,
+            ) != checkpoint
+            or binding.get("size") != checkpoint.stat().st_size
+            or binding.get("sha256") != sha256_file(checkpoint)
+        ):
+            raise ValueError("Pilot scored review checkpoint binding mismatch.")
+    seen_review_ids: set[str] = set()
+    for judgment in judgments:
+        review_id = judgment.get("review_id") if isinstance(judgment, Mapping) else None
+        scores = (
+            judgment.get("character_consistency"),
+            judgment.get("object_location_consistency"),
+            judgment.get("causal_coherence"),
+            judgment.get("overall_consistency"),
+        ) if isinstance(judgment, Mapping) else ()
+        if (
+            not isinstance(judgment, Mapping)
+            or not isinstance(review_id, str)
+            or not review_id
+            or review_id in seen_review_ids
+            or judgment.get("checkpoint_label") not in checkpoints
+            or any(type(score) is not int or score not in {0, 1, 2} for score in scores)
+            or not isinstance(judgment.get("flags"), list)
+            or not isinstance(judgment.get("evidence"), str)
+            or not judgment["evidence"]
+            or not isinstance(judgment.get("reason"), str)
+            or not judgment["reason"]
+        ):
+            raise ValueError("Pilot scored review judgment is invalid.")
+        seen_review_ids.add(review_id)
+    _validate_finite_tree(payload)
 
 
 def _pilot_colab_evidence(
@@ -1434,6 +1722,8 @@ def _pilot_colab_evidence(
         "pilot": gate_root / "pilot_complete.json",
     }
     artifacts: dict[str, Any] = {}
+    expected_config_sha256: str | None = None
+    checkpoint_root = evaluation_root.parent / "checkpoints"
     for gate, path in required.items():
         path = require_managed_path(
             drive_dir, path, kind="file", allow_missing=False
@@ -1447,27 +1737,69 @@ def _pilot_colab_evidence(
         )
         artifacts[gate] = _file_fingerprint(path, managed_root=drive_dir)
         if gate == "preflight" and "gate" not in payload:
-            config_check = next(
-                (check for check in payload["checks"] if check.get("name") == "config"),
-                None,
-            )
-            details = config_check.get("details") if isinstance(config_check, Mapping) else None
+            checks = {str(check["name"]): check for check in payload["checks"]}
             config_path = gate_root.parents[1] / "prepared/pilot/config.yaml"
             expected_config_sha256 = sha256_text(
                 config_to_yaml(load_config(config_path))
             )
+            details = checks["config"].get("details")
             if (
                 not isinstance(details, Mapping)
                 or details.get("config_sha256") != expected_config_sha256
             ):
                 raise ValueError("Pilot preflight config fingerprint mismatch.")
+            tokenizer_details = checks["tokenizer"].get("details")
+            if (
+                not isinstance(tokenizer_details, Mapping)
+                or tokenizer_details.get("tokenizer_sha256") != tokenizer_sha256
+                or tokenizer_details.get("vocab_size") != REQUIRED_VOCAB_SIZE
+            ):
+                raise ValueError("Pilot preflight tokenizer fingerprint mismatch.")
+            manifest_path = gate_root.parents[1] / "corpora/pilot/manifest.json"
+            manifest_payload = _load_json_object(
+                manifest_path, "Pilot preflight corpus manifest"
+            )
+            manifest_details = checks["dataset_manifest"].get("details")
+            if (
+                not isinstance(manifest_details, Mapping)
+                or manifest_details.get("manifest_sha256")
+                != manifest_payload.get("manifest_sha256")
+            ):
+                raise ValueError("Pilot preflight manifest fingerprint mismatch.")
+            shard_details = checks["shards"].get("details")
+            if not isinstance(shard_details, Mapping):
+                raise ValueError("Pilot preflight shard fingerprints are missing.")
+            shard_root = gate_root.parents[1] / "prepared/pilot/shards"
+            for split in ("pilot", "validation"):
+                metadata = _load_json_object(
+                    shard_root / f"{split}_metadata.json",
+                    f"Pilot preflight {split} shard metadata",
+                )
+                rows = [
+                    {
+                        "path": shard["path"],
+                        "byte_size": shard["byte_size"],
+                        "num_tokens": shard["num_tokens"],
+                        "sha256": shard["sha256"],
+                    }
+                    for shard in metadata["shards"]
+                ]
+                observed = shard_details.get(split)
+                if (
+                    not isinstance(observed, Mapping)
+                    or observed.get("total_tokens") != metadata["total_tokens"]
+                    or observed.get("metadata_sha256") != metadata["metadata_sha256"]
+                    or observed.get("shard_files_sha256") != sha256_json(rows)
+                ):
+                    raise ValueError("Pilot preflight shard fingerprint mismatch.")
             artifacts["config"] = _file_fingerprint(
                 config_path, managed_root=drive_dir
             )
         if gate in {"smoke", "pilot"} and "gate" not in payload:
-            checkpoint = evaluation_root.parent / "checkpoints" / Path(
-                str(payload["checkpoint"])
-            ).name
+            checkpoint = _checkpoint_from_canonical_reference(
+                payload["checkpoint"], drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root,
+            )
             artifacts[f"{gate}_checkpoint"] = _file_fingerprint(
                 checkpoint, managed_root=drive_dir
             )
@@ -1476,53 +1808,122 @@ def _pilot_colab_evidence(
     )
     if not evaluation_files:
         raise ValueError("Pilot evaluation evidence is missing.")
-    evaluations = []
-    roles: set[str] = set()
-    base_checkpoints: dict[str, dict[str, Any]] = {}
-    for path in evaluation_files:
-        path = require_managed_path(
-            drive_dir, path, kind="file", allow_missing=False
+    payloads = {
+        path: _load_json_object(path, "Pilot evaluation evidence")
+        for path in evaluation_files
+    }
+    explicit_path = evaluation_root / "review.json"
+    if set(payloads) == {explicit_path} and "gate" in payloads[explicit_path]:
+        _validated_pilot_gate(
+            payloads[explicit_path], gate="evaluation",
+            tokenizer_sha256=tokenizer_sha256,
+            build_identity_sha256=build_identity_sha256,
         )
-        payload = _load_json_object(path, "Pilot evaluation evidence")
-        checkpoint_fingerprint = None
-        if "gate" in payload:
-            _validated_pilot_gate(payload, gate="evaluation",
-                tokenizer_sha256=tokenizer_sha256,
-                build_identity_sha256=build_identity_sha256)
-            roles.add("explicit_review")
-        elif path.name.endswith("_base.json"):
-            _validated_pilot_gate(payload, gate="evaluation",
-                tokenizer_sha256=tokenizer_sha256,
-                build_identity_sha256=build_identity_sha256)
-            checkpoint = evaluation_root.parent / "checkpoints" / Path(
-                str(payload["checkpoint"])
-            ).name
-            checkpoint_fingerprint = _file_fingerprint(
-                checkpoint, managed_root=drive_dir
+        evaluations = [_file_fingerprint(explicit_path, managed_root=drive_dir)]
+    else:
+        if expected_config_sha256 is None:
+            raise ValueError("Pilot producer evaluation has no bound config fingerprint.")
+        base_paths = sorted(
+            path for path in payloads
+            if path.parent.parent == evaluation_root and path.name.endswith("_base.json")
+        )
+        if not base_paths:
+            raise ValueError("Pilot loss evaluation evidence is missing.")
+        allowed: set[Path] = set()
+        checkpoints_by_prefix: dict[str, Path] = {}
+        evaluations = []
+        session_root = base_paths[0].parent
+        if any(path.parent != session_root for path in base_paths):
+            raise ValueError("Pilot evaluation evidence spans multiple sessions.")
+        for path in base_paths:
+            payload = payloads[path]
+            checkpoint = _checkpoint_from_canonical_reference(
+                payload.get("checkpoint"), drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root,
             )
-            if not all(isinstance(payload.get(key), (int, float)) for key in ("val_loss", "perplexity")):
+            if (
+                payload.get("status") in {"fail", "failed", "error"}
+                or
+                not _finite_metric(payload.get("val_loss"))
+                or not _finite_metric(payload.get("perplexity"))
+                or float(payload["val_loss"]) <= 0
+                or float(payload["perplexity"]) <= 0
+                or not isinstance(payload.get("samples"), list)
+                or not payload["samples"]
+                or any(
+                    not isinstance(sample, Mapping)
+                    or not isinstance(sample.get("prompt"), str)
+                    or not isinstance(sample.get("text"), str)
+                    for sample in payload["samples"]
+                )
+            ):
                 raise ValueError("Pilot loss evaluation metrics are invalid.")
-            roles.add("loss")
-            base_checkpoints[path.name.removesuffix("_base.json")] = checkpoint_fingerprint
-        elif path.name.endswith("_open_telco.json"):
-            tasks = payload.get("tasks")
-            prefix = path.name.removesuffix("_open_telco.json")
-            if not isinstance(tasks, list) or not tasks or prefix not in base_checkpoints:
+            prefix = path.name.removesuffix("_base.json")
+            task_path = path.with_name(f"{prefix}_open_telco.json")
+            tasks_payload = payloads.get(task_path)
+            tasks = tasks_payload.get("tasks") if isinstance(tasks_payload, Mapping) else None
+            if not isinstance(tasks, list) or not tasks:
                 raise ValueError("Pilot task evaluation lacks its checkpoint companion.")
-            checkpoint_fingerprint = base_checkpoints[prefix]
-            roles.add("tasks")
-        elif path.name == "comparison_summary.json":
-            if not all(key in payload for key in ("validation", "consistency", "generations", "checkpoints")):
-                raise ValueError("Pilot checkpoint comparison evidence is incomplete.")
-            checkpoint_fingerprint = None
-            roles.add("comparison")
-        else:
-            checkpoint_fingerprint = None
-        evaluations.append(_file_fingerprint(path, managed_root=drive_dir))
-        if checkpoint_fingerprint is not None:
-            evaluations[-1]["checkpoint"] = checkpoint_fingerprint
-    if "explicit_review" not in roles and not {"loss", "tasks", "comparison"}.issubset(roles):
-        raise ValueError("Pilot evaluation is missing required loss, task, or comparison evidence.")
+            for task in tasks:
+                _validate_task_result(task)
+            fingerprint = _file_fingerprint(checkpoint, managed_root=drive_dir)
+            checkpoints_by_prefix[prefix] = checkpoint
+            for evidence_path in (path, task_path):
+                evidence_fingerprint = _file_fingerprint(
+                    evidence_path, managed_root=drive_dir
+                )
+                evidence_fingerprint["checkpoint"] = fingerprint
+                evaluations.append(evidence_fingerprint)
+                allowed.add(evidence_path)
+        comparison_path = session_root / "checkpoint_comparison/comparison_summary.json"
+        comparison_payload = payloads.get(comparison_path)
+        if not isinstance(comparison_payload, Mapping):
+            raise ValueError("Pilot checkpoint comparison evidence is missing.")
+        comparison_checkpoints = _validated_comparison_evidence(
+            comparison_path, comparison_payload, drive_dir=drive_dir,
+            checkpoint_root=checkpoint_root,
+            expected_config_sha256=expected_config_sha256,
+        )
+        if set(comparison_checkpoints.values()) != set(checkpoints_by_prefix.values()):
+            raise ValueError("Pilot comparison checkpoint set does not match evaluations.")
+        allowed.add(comparison_path)
+        for label in comparison_checkpoints:
+            allowed.add(comparison_path.parent / f"checkpoints/{label}.json")
+        review_key_path = comparison_path.parent / "llm_judge/review_key.json"
+        review_key = payloads.get(review_key_path)
+        if not isinstance(review_key, Mapping) or not review_key or any(
+            not isinstance(row, Mapping)
+            or row.get("checkpoint_label") not in comparison_checkpoints
+            for row in review_key.values()
+        ):
+            raise ValueError("Pilot comparison review key is invalid.")
+        allowed.add(review_key_path)
+        scored_paths = [
+            path for path in payloads
+            if path.parent == comparison_path.parent / "llm_judge/results"
+            and re.fullmatch(r"scored_(llm|human)\.json", path.name)
+        ]
+        if not scored_paths:
+            raise ValueError("Pilot scored review evidence is missing.")
+        for scored_path in scored_paths:
+            _validated_scored_review(
+                scored_path, payloads[scored_path],
+                comparison_path=comparison_path,
+                checkpoints=comparison_checkpoints,
+                drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root,
+            )
+            allowed.add(scored_path)
+        if set(payloads) != allowed:
+            raise ValueError("Pilot evaluation contains an unknown JSON artifact role.")
+        evaluations.extend(
+            _file_fingerprint(path, managed_root=drive_dir)
+            for path in sorted(allowed - set(base_paths) - {
+                path.with_name(
+                    f"{path.name.removesuffix('_base.json')}_open_telco.json"
+                ) for path in base_paths
+            })
+        )
     artifacts["evaluation"] = {
         "files": evaluations,
         "fingerprint_sha256": sha256_json(evaluations),
@@ -1539,7 +1940,7 @@ def _pilot_reuse_evidence(
     shards_root = recipe_root / "prepared/pilot/shards"
     evidence_root = recipe_root / "evidence/pilot"
     runs_root = recipe_root / "runs/pilot"
-    _, build_identity_sha256 = _validated_pilot_manifest(
+    manifest, build_identity_sha256 = _validated_pilot_manifest(
         corpus_path,
         managed_root=drive_dir,
         tokenizer_sha256=tokenizer_sha256,
@@ -1555,6 +1956,8 @@ def _pilot_reuse_evidence(
     }:
         raise ValueError("Pilot shards require complete train and validation metadata.")
     referenced_shards: set[Path] = set()
+    split_totals: dict[str, int] = {}
+    split_documents: dict[str, int] = {}
     for metadata_path in metadata_files:
         metadata = _load_json_object(metadata_path, "Pilot shard metadata")
         stored_metadata = metadata.get("metadata_sha256")
@@ -1569,32 +1972,102 @@ def _pilot_reuse_evidence(
             )
         ):
             raise ValueError("Pilot shard metadata identity mismatch.")
+        expected_split = metadata_path.name.removesuffix("_metadata.json")
         shards = metadata.get("shards")
-        if not isinstance(shards, list) or not shards or metadata.get("split") not in {"pilot", "validation"}:
+        if (
+            metadata.get("split") != expected_split
+            or metadata.get("dtype") != PILOT_SHARD_DTYPE
+            or metadata.get("append_eos") is not True
+            or not isinstance(shards, list)
+            or not shards
+        ):
             raise ValueError("Pilot shard metadata split or shard list is incomplete.")
-        if metadata["split"] == "pilot" and int(metadata.get("total_tokens", 0)) < 20_000_000:
-            raise ValueError("Pilot shard metadata does not prove the canonical 20M target.")
-        if metadata["split"] == "validation" and int(metadata.get("total_tokens", 0)) < 1:
+        dtype = np.dtype(DTYPES[PILOT_SHARD_DTYPE])
+        seen_names: set[str] = set()
+        token_sum = 0
+        for shard_index, shard in enumerate(shards):
+            if not isinstance(shard, Mapping):
+                raise ValueError("Pilot shard metadata entry is invalid.")
+            relative_value = shard.get("path")
+            if not isinstance(relative_value, str):
+                raise ValueError("Pilot shard metadata entry is invalid.")
+            relative = PurePosixPath(relative_value)
+            if (
+                not relative_value
+                or "\\" in relative_value
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or str(relative) != relative_value
+                or len(relative.parts) != 1
+                or relative.suffix != ".bin"
+                or relative_value in seen_names
+            ):
+                raise ValueError("Pilot shard metadata paths must be unique safe filenames.")
+            seen_names.add(relative_value)
+            num_tokens = shard.get("num_tokens")
+            byte_size = shard.get("byte_size")
+            if (
+                type(num_tokens) is not int
+                or not 0 < num_tokens <= 2**63 - 1
+                or type(byte_size) is not int
+                or not 0 < byte_size <= 2**63 - 1
+                or shard.get("index") != shard_index
+                or num_tokens > (2**63 - 1) // dtype.itemsize
+                or byte_size != num_tokens * dtype.itemsize
+            ):
+                raise ValueError("Pilot shard token and byte counts are invalid.")
+            if token_sum > (2**63 - 1) - num_tokens:
+                raise ValueError("Pilot shard token total exceeds the supported range.")
+            token_sum += num_tokens
+            shard_path = metadata_path.parent / Path(*relative.parts)
+            fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
+            referenced_shards.add(shard_path.resolve())
+            if (
+                byte_size != fingerprint["size"]
+                or shard.get("sha256") != fingerprint["sha256"]
+            ):
+                raise ValueError("Pilot shard metadata file fingerprint mismatch.")
+            values = np.memmap(shard_path, mode="r", dtype=dtype)
+            if values.size != num_tokens or (
+                values.size and int(values.max()) >= REQUIRED_VOCAB_SIZE
+            ):
+                raise ValueError("Pilot shard token IDs exceed the expected vocabulary.")
+        total_tokens = metadata.get("total_tokens")
+        total_documents = metadata.get("total_documents")
+        if (
+            type(total_tokens) is not int
+            or total_tokens != token_sum
+            or type(total_documents) is not int
+            or total_documents < 1
+        ):
+            raise ValueError("Pilot shard metadata totals do not reconcile.")
+        if expected_split == "pilot" and total_tokens != PILOT_TOKENS:
+            raise ValueError("Pilot shard metadata does not prove the exact canonical 20M target.")
+        if expected_split == "validation" and total_tokens < 1:
             raise ValueError("Pilot validation shard metadata is empty.")
-        if isinstance(shards, list):
-            for shard in shards:
-                if not isinstance(shard, Mapping) or not isinstance(shard.get("path"), str):
-                    raise ValueError("Pilot shard metadata entry is invalid.")
-                shard_path = metadata_path.parent / str(shard["path"])
-                fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
-                referenced_shards.add(shard_path.resolve())
-                if (
-                    shard.get("byte_size") != fingerprint["size"]
-                    or shard.get("sha256") != fingerprint["sha256"]
-                    or int(shard.get("num_tokens", -1)) * 2 != fingerprint["size"]
-                ):
-                    raise ValueError("Pilot shard metadata file fingerprint mismatch.")
+        split_totals[expected_split] = total_tokens
+        split_documents[expected_split] = total_documents
     actual_shards = {
         path.resolve() for path in shards_root.glob("*.bin")
         if path.is_file() and not path.is_symlink()
     }
     if actual_shards != referenced_shards:
         raise ValueError("Pilot split metadata does not enumerate every shard exactly.")
+    stages = manifest.get("stages")
+    pilot_stage = stages.get("pilot") if isinstance(stages, Mapping) else None
+    validation = manifest.get("validation")
+    if (
+        not isinstance(pilot_stage, Mapping)
+        or pilot_stage.get("requested_tokens") != split_totals["pilot"]
+        or type(pilot_stage.get("quota_tokens")) is not int
+        or pilot_stage["quota_tokens"] < split_totals["pilot"]
+        or type(pilot_stage.get("documents")) is not int
+        or pilot_stage["documents"] != split_documents["pilot"]
+        or not isinstance(validation, Mapping)
+        or type(validation.get("documents")) is not int
+        or validation["documents"] != split_documents["validation"]
+    ):
+        raise ValueError("Pilot manifest quotas and split metadata do not reconcile.")
     gates = _pilot_colab_evidence(
         drive_dir=drive_dir,
         gate_root=evidence_root,

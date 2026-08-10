@@ -306,7 +306,8 @@ python scripts/score_story_judgments.py \
   --judgments /path/to/result-01.jsonl \
   --judgments /path/to/result-02.jsonl \
   --reviewer llm \
-  --output /path/to/checkpoint_comparison/llm_judge/llm_scores.json
+  --comparison-summary /path/to/checkpoint_comparison/comparison_summary.json \
+  --output /path/to/checkpoint_comparison/llm_judge/results/scored_llm.json
 ```
 
 The LLM is the primary blinded judge. Human review is optional and must use a

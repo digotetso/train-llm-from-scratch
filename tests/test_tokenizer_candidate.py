@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -1439,8 +1439,12 @@ def _write_pilot_gate_evidence(
             **extra,
         }
 
+    from matgpt.preflight import CHECK_IDS as PREFLIGHT_CHECK_IDS
     (gate_root / "preflight.json").write_text(
-        json.dumps(payload("preflight")), encoding="utf-8"
+        json.dumps(payload("preflight", checks=[
+            {"name": name, "status": "pass", "message": "ok", "details": {}}
+            for name in PREFLIGHT_CHECK_IDS
+        ])), encoding="utf-8"
     )
     (gate_root / "smoke_resume_verified.json").write_text(
         json.dumps(payload("smoke", resume_verified=True)), encoding="utf-8"
@@ -1489,6 +1493,7 @@ def _write_valid_preserved_pilot_evidence(
         total_documents=1,
         shards=[{
             "relative_path": "pilot_00000.bin",
+            "index": 0,
             "num_tokens": 20_000_000,
             "num_documents": 1,
             "byte_size": 40_000_000,
@@ -1502,22 +1507,168 @@ def _write_valid_preserved_pilot_evidence(
         split="validation", tokenizer_sha256=selected_sha256, dtype="uint16",
         append_eos=True, shard_size_tokens=1024, total_documents=1,
         shards=[{"relative_path": "validation_00000.bin", "num_tokens": 1,
+                 "index": 0,
                  "num_documents": 1, "byte_size": 2,
                  "sha256": sha256_file(validation_shard)}],
     )
     (shard_root / "validation_metadata.json").write_text(
         json.dumps(validation_metadata), encoding="utf-8"
     )
-    _write_pilot_gate_evidence(
-        recipe_root / "evidence/pilot",
-        tokenizer_sha256=selected_sha256,
-        build_identity_sha256=build_identity_sha256,
+    config_path = recipe_root / "prepared/pilot/config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = yaml.safe_load(Path("configs/matgpt_telco_300m.yaml").read_text())
+    config["dataset"].update({"normalized_dir": str(recipe_root / "corpora/pilot"),
+        "train_split": "pilot", "training_splits": {"pilot": "pilot"}})
+    config["tokenizer"]["output_dir"] = str(recipe_root / "prepared/pilot/tokenizer")
+    config["sharding"]["output_dir"] = str(shard_root)
+    config["run"]["output_dir"] = str(recipe_root / "runs/pilot")
+    config["training"].update({"max_tokens": 20_000_000,
+        "data_phases": [{"name": "pilot", "split": "pilot",
+                         "until_tokens": 20_000_000}]})
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    from matgpt.config import config_to_yaml, load_config
+    from matgpt.preflight import CHECK_IDS as PREFLIGHT_CHECK_IDS
+    from matgpt.utils.hashing import sha256_text
+    config_sha = sha256_text(config_to_yaml(load_config(config_path)))
+    manifest = json.loads((recipe_root / "corpora/pilot/manifest.json").read_text())
+    metadata_by_split = {"pilot": metadata, "validation": validation_metadata}
+    checks = []
+    for name in PREFLIGHT_CHECK_IDS:
+        details: dict[str, object] = {}
+        if name == "config":
+            details = {"config_sha256": config_sha}
+        elif name == "tokenizer":
+            details = {"tokenizer_sha256": selected_sha256, "vocab_size": 32_768}
+        elif name == "dataset_manifest":
+            details = {"manifest_sha256": manifest["manifest_sha256"]}
+        elif name == "shards":
+            details = {
+                split: {
+                    "total_tokens": split_metadata["total_tokens"],
+                    "metadata_sha256": split_metadata["metadata_sha256"],
+                    "shard_files_sha256": sha256_json([
+                        {"path": row["path"], "byte_size": row["byte_size"],
+                         "num_tokens": row["num_tokens"], "sha256": row["sha256"]}
+                        for row in split_metadata["shards"]
+                    ]),
+                }
+                for split, split_metadata in metadata_by_split.items()
+            }
+        checks.append({"name": name, "status": "pass", "message": "ok",
+                       "details": details})
+    evidence_root = recipe_root / "evidence/pilot"
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    (evidence_root / "preflight.json").write_text(
+        json.dumps({"status": "pass", "environment": {}, "checks": checks}),
+        encoding="utf-8",
     )
-    run_evaluation = recipe_root / "runs/pilot/evaluation"
-    run_evaluation.mkdir(parents=True, exist_ok=True)
-    run_evaluation.joinpath("review.json").write_bytes(
-        (recipe_root / "evidence/pilot/evaluation/review.json").read_bytes()
+    checkpoint_root = recipe_root / "runs/pilot/checkpoints"
+    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    for name in ("latest.pt", "best.pt"):
+        (checkpoint_root / name).write_bytes(f"canonical {name}".encode())
+    mount_prefix = PurePosixPath("/content/drive/MyDrive/matgpt_artifacts/matgpt_telco_300m")
+    def mounted(path: Path) -> str:
+        return str(mount_prefix / PurePosixPath(path.relative_to(drive_dir).as_posix()))
+    latest_ref = mounted(checkpoint_root / "latest.pt")
+    (evidence_root / "smoke_resume_verified.json").write_text(json.dumps({
+        "status": "pass", "checkpoint": latest_ref}), encoding="utf-8")
+    (evidence_root / "pilot_complete.json").write_text(json.dumps({
+        "status": "pass", "tokens_processed": 20_000_000,
+        "checkpoint": latest_ref}), encoding="utf-8")
+    evaluation = recipe_root / "runs/pilot/evaluation/current"
+    evaluation.mkdir(parents=True, exist_ok=True)
+    checkpoint_rows = {}
+    for index, name in enumerate(("latest.pt", "best.pt")):
+        label = f"checkpoint_{index:02d}_{Path(name).stem}"
+        checkpoint_ref = mounted(checkpoint_root / name)
+        (evaluation / f"{label}_base.json").write_text(json.dumps({
+            "checkpoint": checkpoint_ref, "evaluation_seed": 42,
+            "validation_seed": 43, "generation_seed": 42,
+            "val_loss": 2.0 + index / 10, "perplexity": 7.389 + index,
+            "samples": [{"prompt": "A router", "text": "A router forwards packets."}],
+        }), encoding="utf-8")
+        (evaluation / f"{label}_open_telco.json").write_text(json.dumps({
+            "tasks": [{"task_type": "multiple_choice", "path": "teleqna.jsonl",
+                "total": 1, "correct": 1, "accuracy": 1.0,
+                "categories": {"routing": {"total": 1, "correct": 1,
+                                              "accuracy": 1.0}},
+                "examples": [{"id": "q1", "category": "routing",
+                    "answer_index": 0, "prediction_index": 0, "correct": True,
+                    "choice_losses": [0.1, 1.0]}]}]
+        }), encoding="utf-8")
+        checkpoint_rows[label] = {"path": checkpoint_ref,
+                                   "evidence": f"checkpoints/{label}.json"}
+    comparison_root = evaluation / "checkpoint_comparison"
+    (comparison_root / "checkpoints").mkdir(parents=True)
+    for label, row in checkpoint_rows.items():
+        (comparison_root / row["evidence"]).write_text(json.dumps({
+            "checkpoint_label": label, "checkpoint_path": row["path"],
+            "validation": [{"seed": 1001, "loss": 2.0, "perplexity": 7.389}],
+            "consistency_task": {"task_type": "multiple_choice",
+                "path": "story_consistency.jsonl", "total": 1,
+                "correct": 1, "accuracy": 1.0,
+                "categories": {"routing": {"total": 1, "correct": 1,
+                                              "accuracy": 1.0}},
+                "examples": [{"id": "q1", "category": "routing",
+                    "answer_index": 0, "prediction_index": 0, "correct": True,
+                    "choice_losses": [0.1, 1.0]}]},
+            "generations": [{"generation_id": f"{label}-g1", "prompt_id": "p1",
+                "prompt_category": "routing", "prompt": "A router", "text": "Story",
+                "generation_seed": 2001, "repetition": {"repeated_4gram_fraction": 0.0}}],
+            "generation_summary": {"repeated_4gram_fraction": 0.0},
+        }), encoding="utf-8")
+    comparison_payload = {
+        "protocol": {"validation_seeds": [1001], "generation_seeds": [2001],
+            "review_seed": 3001, "review_per_checkpoint": 1,
+            "judge_batch_size": 1, "prompt_count": 1,
+            "task_category_counts": {"routing": 1},
+            "same_validation_dataset": "validation_metadata.json",
+            "generation": {"max_new_tokens": 10, "temperature": 0.7,
+                           "top_k": 50, "top_p": 0.95}},
+        "config": {"path": mounted(config_path), "sha256": config_sha},
+        "checkpoints": checkpoint_rows,
+        "validation": {"checkpoints": {label: {"seed_count": 1,
+            "mean_loss": 2.0, "stdev_loss": 0.0, "minimum_loss": 2.0,
+            "maximum_loss": 2.0} for label in checkpoint_rows}, "pairs": []},
+        "consistency": {label: {"total": 1, "correct": 1, "accuracy": 1.0,
+                                 "categories": {}} for label in checkpoint_rows},
+        "generations": {label: {"repeated_4gram_fraction": 0.0}
+                        for label in checkpoint_rows},
+        "llm_judge": {"status": "awaiting_judgments",
+            "batch_directory": "llm_judge/batches", "review_key": "llm_judge/review_key.json",
+            "judge_prompt": "llm_judge/judge_prompt.md", "review_count": 2},
+    }
+    comparison_path = comparison_root / "comparison_summary.json"
+    comparison_path.write_text(json.dumps(comparison_payload), encoding="utf-8")
+    review_key = {
+        f"review-{index:04d}": {"checkpoint_label": label,
+            "generation_id": f"{label}-g1", "prompt_id": "p1",
+            "generation_seed": 2001}
+        for index, label in enumerate(checkpoint_rows, start=1)
+    }
+    (comparison_root / "llm_judge").mkdir(parents=True)
+    (comparison_root / "llm_judge/review_key.json").write_text(
+        json.dumps(review_key), encoding="utf-8"
     )
+    scored = comparison_root / "llm_judge/results/scored_llm.json"
+    scored.parent.mkdir(parents=True)
+    scored.write_text(json.dumps({"reviewer": "llm", "review_count": 2,
+        "judgments": [{"review_id": f"review-{index:04d}",
+            "checkpoint_label": label, "generation_id": f"{label}-g1",
+            "prompt_id": "p1", "generation_seed": 2001,
+            "character_consistency": 2, "object_location_consistency": 2,
+            "causal_coherence": 2, "overall_consistency": 2,
+            "flags": ["none"], "evidence": "The story remains consistent.",
+            "reason": "No contradiction is present."}
+            for index, label in enumerate(checkpoint_rows, start=1)],
+        "summary": {"checkpoints": {label: {"mean_overall_consistency": 2.0}
+                                      for label in checkpoint_rows}},
+        "comparison": {"path": "../../comparison_summary.json",
+                       "sha256": sha256_file(comparison_path)},
+        "checkpoints": {label: {"path": row["path"],
+            "size": (checkpoint_root / Path(row["path"]).name).stat().st_size,
+            "sha256": sha256_file(checkpoint_root / Path(row["path"]).name)}
+            for label, row in checkpoint_rows.items()}},), encoding="utf-8")
     return recipe_root, build_identity_sha256
 
 
@@ -2188,8 +2339,14 @@ def test_local_cli_source_has_no_pretraining_import_or_call():
         if isinstance(node, (__import__("ast").Import, __import__("ast").ImportFrom))
         for alias in node.names
     }
+    imported_modules = {
+        node.module
+        for node in __import__("ast").walk(tree)
+        if isinstance(node, __import__("ast").ImportFrom) and node.module
+    }
 
     assert all("pretrain" not in name and "training" not in name for name in imported)
+    assert "matgpt.preflight" not in imported_modules
     assert "run_pretraining" not in source
 
 
@@ -2762,7 +2919,7 @@ def test_pilot_status_bounds_recursive_evaluation_json_count(
     )
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
     evaluation = recipe_root / "runs/pilot/evaluation"
-    template = (evaluation / "review.json").read_bytes()
+    template = (evaluation / "current/checkpoint_00_latest_base.json").read_bytes()
     for index in range(256):
         (evaluation / f"extra_{index:03d}.json").write_bytes(template)
     status = prepare_telco_local.run(
@@ -2911,7 +3068,7 @@ def test_pilot_reuse_rejects_failed_evaluation_with_nested_matching_sha(
     recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
         drive_dir, selected_sha256
     )
-    evaluation_path = recipe_root / "runs/pilot/evaluation/review.json"
+    evaluation_path = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_base.json"
     evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
     evaluation.update(
         {
@@ -2940,49 +3097,162 @@ def test_pilot_reuse_accepts_current_repo_legacy_producer_schemas(
     recipe_root, _ = _write_valid_preserved_pilot_evidence(
         drive_dir, selected_sha256
     )
-    checkpoint = recipe_root / "runs/pilot/checkpoints/latest.pt"
-    checkpoint.parent.mkdir(parents=True)
-    checkpoint.write_bytes(b"canonical checkpoint")
     evidence = recipe_root / "evidence/pilot"
-    config_path = recipe_root / "prepared/pilot/config.yaml"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_bytes(Path("configs/matgpt_telco_300m.yaml").read_bytes())
-    from matgpt.config import config_to_yaml, load_config
-    from matgpt.utils.hashing import sha256_text
-    config_sha256 = sha256_text(config_to_yaml(load_config(config_path)))
-    (evidence / "preflight.json").write_text(json.dumps({
-        "status": "pass", "checks": [{"name": "config", "status": "pass",
-        "details": {"config_sha256": config_sha256}}]
-    }), encoding="utf-8")
-    checkpoint_reference = "/content/drive/MyDrive/example/checkpoints/latest.pt"
-    (evidence / "smoke_resume_verified.json").write_text(json.dumps({
-        "status": "pass", "checkpoint": checkpoint_reference
-    }), encoding="utf-8")
-    (evidence / "pilot_complete.json").write_text(json.dumps({
-        "status": "pass", "tokens_processed": 20_000_000,
-        "checkpoint": checkpoint_reference
-    }), encoding="utf-8")
-    evaluation = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_base.json"
-    evaluation.parent.mkdir(parents=True, exist_ok=True)
-    evaluation.write_text(json.dumps({
-        "checkpoint": checkpoint_reference, "val_loss": 2.0,
-        "perplexity": 7.389, "samples": []
-    }), encoding="utf-8")
-    evaluation.with_name("checkpoint_00_latest_open_telco.json").write_text(
-        json.dumps({"tasks": [{"task": "teleqna", "accuracy": 0.5}]}), encoding="utf-8"
-    )
-    comparison = evaluation.parent / "checkpoint_comparison/comparison_summary.json"
-    comparison.parent.mkdir(parents=True)
-    comparison.write_text(json.dumps({"validation": {}, "consistency": {},
-        "generations": {}, "checkpoints": {"checkpoint_00": {
-            "path": checkpoint_reference,
-            "evidence": "checkpoints/checkpoint_00.json"}}}), encoding="utf-8")
-
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
     preflight_path = evidence / "preflight.json"
     preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
     preflight["checks"][0]["details"]["config_sha256"] = "0" * 64
     preflight_path.write_text(json.dumps(preflight), encoding="utf-8")
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("claimed_twenty_million_one_token", "swapped_splits", "duplicate_shard",
+     "missing_shard", "traversal", "bad_dtype", "bad_byte_size", "bad_sha",
+     "totals_mismatch", "token_outside_vocab"),
+)
+def test_pilot_reuse_rejects_false_exact_shard_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    shard_root = recipe_root / "prepared/pilot/shards"
+    pilot_path = shard_root / "pilot_metadata.json"
+    validation_path = shard_root / "validation_metadata.json"
+    pilot = json.loads(pilot_path.read_text(encoding="utf-8"))
+    validation = json.loads(validation_path.read_text(encoding="utf-8"))
+    if mutation == "claimed_twenty_million_one_token":
+        shard = pilot["shards"][0]
+        shard["num_tokens"] = 1
+        shard["byte_size"] = 2
+        one_token = shard_root / shard["path"]
+        one_token.write_bytes(b"\0\0")
+        shard["sha256"] = sha256_file(one_token)
+        # This is the historical exploit: the headline still claims 20M.
+        pilot["total_tokens"] = 20_000_000
+    elif mutation == "swapped_splits":
+        pilot["split"], validation["split"] = validation["split"], pilot["split"]
+    elif mutation == "duplicate_shard":
+        pilot["shards"].append(dict(pilot["shards"][0]))
+        pilot["total_tokens"] = 40_000_000
+    elif mutation == "missing_shard":
+        (shard_root / pilot["shards"][0]["path"]).unlink()
+    elif mutation == "traversal":
+        pilot["shards"][0]["path"] = "../pilot_00000.bin"
+    elif mutation == "bad_dtype":
+        pilot["dtype"] = "uint32"
+    elif mutation == "bad_byte_size":
+        pilot["shards"][0]["byte_size"] -= 2
+    elif mutation == "bad_sha":
+        pilot["shards"][0]["sha256"] = "0" * 64
+    elif mutation == "totals_mismatch":
+        pilot["total_tokens"] -= 1
+    else:
+        shard_path = shard_root / pilot["shards"][0]["path"]
+        with shard_path.open("r+b") as handle:
+            handle.write(b"\0\x80")
+        pilot["shards"][0]["sha256"] = sha256_file(shard_path)
+    for path, payload in ((pilot_path, pilot), (validation_path, validation)):
+        payload.pop("metadata_sha256")
+        payload["metadata_sha256"] = sha256_json(payload)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+
+
+def test_pilot_reuse_rejects_single_check_preflight_toy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    evidence = recipe_root / "evidence/pilot/preflight.json"
+    evidence.write_text(json.dumps({
+        "status": "pass",
+        "checks": [{"name": "config", "status": "pass", "message": "ok",
+                    "details": {"config_sha256": "0" * 64}}],
+    }), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+
+
+@pytest.mark.parametrize("mutation", ("missing", "duplicate", "unknown", "failed"))
+def test_pilot_reuse_rejects_non_authoritative_full_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(drive_dir, selected_sha256)
+    path = recipe_root / "evidence/pilot/preflight.json"
+    payload = json.loads(path.read_text())
+    if mutation == "missing":
+        payload["checks"].pop()
+    elif mutation == "duplicate":
+        payload["checks"][-1] = dict(payload["checks"][0])
+    elif mutation == "unknown":
+        payload["checks"][-1]["name"] = "unknown"
+    else:
+        payload["checks"][3]["status"] = "fail"
+        payload["status"] = "fail"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("foreign_same_basename", "empty_task_row", "invalid_task_outcome",
+     "missing_comparison_checkpoint", "arbitrary_scored_review"),
+)
+def test_pilot_reuse_rejects_unbound_or_incomplete_evaluation_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    if mutation == "foreign_same_basename":
+        path = recipe_root / "evidence/pilot/smoke_resume_verified.json"
+        payload = json.loads(path.read_text())
+        payload["checkpoint"] = "/content/drive/MyDrive/foreign/checkpoints/latest.pt"
+    elif mutation == "empty_task_row":
+        path = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_open_telco.json"
+        payload = {"tasks": [{}]}
+    elif mutation == "invalid_task_outcome":
+        path = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_open_telco.json"
+        payload = json.loads(path.read_text())
+        payload["tasks"][0]["examples"][0]["correct"] = False
+    elif mutation == "missing_comparison_checkpoint":
+        path = recipe_root / "runs/pilot/evaluation/current/checkpoint_comparison/comparison_summary.json"
+        payload = json.loads(path.read_text())
+        payload["checkpoints"]["checkpoint_00_latest"]["path"] = (
+            "/content/drive/MyDrive/foreign/checkpoints/latest.pt"
+        )
+    else:
+        path = recipe_root / "runs/pilot/evaluation/current/checkpoint_comparison/llm_judge/results/scored_llm.json"
+        payload = {"reviewer": "llm", "review_count": 1, "judgments": [],
+                   "summary": {}}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 
 
@@ -3003,7 +3273,7 @@ def test_existing_pilot_refresh_revalidates_current_artifacts_without_overwrite(
         drive_dir, selected_sha256
     )
     original_report = report_path.read_bytes()
-    evaluation_path = recipe_root / "runs/pilot/evaluation/review.json"
+    evaluation_path = recipe_root / "runs/pilot/evaluation/current/checkpoint_00_latest_base.json"
     evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
     evaluation["review_note"] = "current bytes drifted after immutable refresh"
     evaluation_path.write_text(json.dumps(evaluation), encoding="utf-8")

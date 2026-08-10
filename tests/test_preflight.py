@@ -11,7 +11,7 @@ from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.preflight import build_preflight_report, run_preflight
 from matgpt.data.sources import load_source_registry
 from matgpt.tokenizer.train import train_tokenizer_from_config
-from matgpt.utils.hashing import sha256_json, sha256_text
+from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 from scripts.preflight_t4 import main as preflight_main
 
 
@@ -210,6 +210,16 @@ def test_preflight_passes_complete_synthetic_artifacts(synthetic_preflight_cfg, 
     assert _check(report, "config")["details"]["config_sha256"] == sha256_text(
         config_to_yaml(synthetic_preflight_cfg)
     )
+    shard_details = _check(report, "shards")["details"]
+    for split, details in shard_details.items():
+        metadata_path = Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / f"{split}_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert details["metadata_sha256"] == metadata["metadata_sha256"]
+        assert details["shard_files_sha256"] == sha256_json([
+            {"path": shard["path"], "byte_size": shard["byte_size"],
+             "num_tokens": shard["num_tokens"], "sha256": sha256_file(metadata_path.parent / shard["path"])}
+            for shard in metadata["shards"]
+        ])
     assert (tmp_path / "preflight.json").exists()
 
 
