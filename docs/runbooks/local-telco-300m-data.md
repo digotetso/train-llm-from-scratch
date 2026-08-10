@@ -337,6 +337,32 @@ When `representative_200m` is selected, the command builds a new exact 20M
 pilot corpus. Its report says `ready_for_colab` and lists smoke, pilot, and
 evaluation as pending; local preparation never claims those GPU gates passed.
 
+### Strict recertification of the preserved `pilot_20m`
+
+If `pilot_refresh` rejects otherwise intact legacy evidence because the old
+smoke record does not prove a current resume verification, preserve the old
+corpus, tokenizer, shards, evidence, and checkpoints. In the guarded Colab
+notebook use these settings, in this order:
+
+```python
+DATA_PLAN = "pilot"
+PREPARED_DATA_MODE = "legacy_jsonl"
+RECERTIFY_SELECTED_PILOT = True
+RUN_STAGE = "prepare"  # then "smoke", "pilot", and "evaluate"
+```
+
+The `prepare` stage verifies that the preserved tokenizer is the explicitly
+selected tokenizer, restores the preserved tokenizer and shards only into the
+temporary Colab runtime, and runs a current preflight and memory benchmark. It
+does not rebuild the corpus, retrain the tokenizer, re-tokenize the data, or
+modify the legacy artifacts. New config, evidence, checkpoints, and evaluation
+outputs are isolated under
+`evidence/tokenizers/<selected-tokenizer-sha256>/pilot/colab/`.
+
+After all four Colab stages finish, rerun `pilot_refresh` on the Mac. The local
+validator prefers the new recertification namespace and fails closed if that
+namespace is partial; it does not silently substitute the older gate files.
+
 ## Stage 6: retain the first 100M full tokens as calibration
 
 This is the first committed part of the final 12B corpus, not a disposable
