@@ -1665,6 +1665,80 @@ def _finite_metric(value: object) -> bool:
     )
 
 
+def _validated_pilot_shard_record(
+    metadata_path: Path,
+    shard: Mapping[str, Any],
+    *,
+    shard_index: int,
+    expected_split: str,
+    drive_dir: Path,
+) -> tuple[Path, dict[str, object], bool]:
+    raw_path = shard.get("path")
+    if not isinstance(raw_path, str) or not raw_path or "\\" in raw_path:
+        raise ValueError("Pilot shard metadata entry is invalid.")
+    reference = PurePosixPath(raw_path)
+    legacy_absolute = reference.is_absolute()
+    if legacy_absolute:
+        expected_name = f"{expected_split}_{shard_index:05d}.bin"
+        if (
+            ".." in reference.parts
+            or reference.parent.name != "shards"
+            or reference.name != expected_name
+        ):
+            raise ValueError(
+                "Legacy pilot shard path does not identify the expected shard."
+            )
+        relative_name = reference.name
+    else:
+        if (
+            ".." in reference.parts
+            or str(reference) != raw_path
+            or len(reference.parts) != 1
+            or reference.suffix != ".bin"
+        ):
+            raise ValueError(
+                "Pilot shard metadata paths must be unique safe filenames."
+            )
+        relative_name = raw_path
+    shard_path = require_managed_path(
+        drive_dir,
+        metadata_path.parent / relative_name,
+        kind="file",
+        allow_missing=False,
+    )
+    num_tokens = shard.get("num_tokens")
+    dtype = np.dtype(DTYPES[PILOT_SHARD_DTYPE])
+    if (
+        type(num_tokens) is not int
+        or not 0 < num_tokens <= 2**63 - 1
+        or shard.get("index") != shard_index
+        or num_tokens > (2**63 - 1) // dtype.itemsize
+    ):
+        raise ValueError("Pilot shard token and byte counts are invalid.")
+    expected_byte_size = num_tokens * dtype.itemsize
+    declared_byte_size = shard.get("byte_size")
+    if (
+        declared_byte_size is not None
+        and (
+            type(declared_byte_size) is not int
+            or declared_byte_size != expected_byte_size
+        )
+    ) or (declared_byte_size is None and not legacy_absolute):
+        raise ValueError("Pilot shard token and byte counts are invalid.")
+    actual_sha256 = sha256_file(shard_path)
+    if (
+        shard_path.stat().st_size != expected_byte_size
+        or shard.get("sha256") != actual_sha256
+    ):
+        raise ValueError("Pilot shard metadata file fingerprint mismatch.")
+    return shard_path, {
+        "path": relative_name,
+        "byte_size": expected_byte_size,
+        "num_tokens": num_tokens,
+        "sha256": actual_sha256,
+    }, legacy_absolute
+
+
 def _checkpoint_from_canonical_reference(
     value: object, *, drive_dir: Path, checkpoint_root: Path
 ) -> Path:
@@ -2092,26 +2166,73 @@ def _pilot_colab_evidence(
                 else gate_root.parents[1] / "prepared/pilot/shards"
             )
             for split in ("pilot", "validation"):
+                metadata_path = shard_root / f"{split}_metadata.json"
                 metadata = _load_json_object(
-                    shard_root / f"{split}_metadata.json",
+                    metadata_path,
                     f"Pilot preflight {split} shard metadata",
                 )
-                rows = [
-                    {
-                        "path": shard["path"],
-                        "byte_size": shard["byte_size"],
-                        "num_tokens": shard["num_tokens"],
-                        "sha256": shard["sha256"],
-                    }
-                    for shard in metadata["shards"]
-                ]
+                rows = []
+                paths = []
+                legacy_rows = []
+                for shard_index, shard in enumerate(metadata["shards"]):
+                    path, row, legacy = _validated_pilot_shard_record(
+                        metadata_path,
+                        shard,
+                        shard_index=shard_index,
+                        expected_split=split,
+                        drive_dir=drive_dir,
+                    )
+                    paths.append(path)
+                    rows.append(row)
+                    legacy_rows.append(legacy)
                 observed = shard_details.get(split)
+                if not isinstance(observed, Mapping):
+                    raise ValueError("Pilot preflight shard fingerprint mismatch.")
                 if (
-                    not isinstance(observed, Mapping)
-                    or observed.get("total_tokens") != metadata["total_tokens"]
-                    or observed.get("metadata_sha256") != metadata["metadata_sha256"]
-                    or observed.get("shard_files_sha256") != sha256_json(rows)
+                    not prebuilt_producer
+                    and all(legacy_rows)
+                    and set(observed) == {
+                        "total_tokens", "eos_count", "maximum_id"
+                    }
                 ):
+                    tokenizer_metadata = load_tokenizer_metadata(
+                        gate_root.parents[1] / "prepared/pilot/tokenizer"
+                    )
+                    special_ids = tokenizer_metadata.get("special_token_ids")
+                    eos_id = (
+                        special_ids.get("<|eos|>")
+                        if isinstance(special_ids, Mapping)
+                        else None
+                    )
+                    if type(eos_id) is not int or not 0 <= eos_id < REQUIRED_VOCAB_SIZE:
+                        raise ValueError("Pilot preflight tokenizer has no valid EOS ID.")
+                    eos_count = 0
+                    maximum_id = -1
+                    for path, row in zip(paths, rows):
+                        values = np.memmap(
+                            path, mode="r", dtype=DTYPES[PILOT_SHARD_DTYPE]
+                        )
+                        if values.size != row["num_tokens"]:
+                            raise ValueError("Pilot preflight shard size mismatch.")
+                        for offset in range(0, int(values.size), 1_048_576):
+                            block = values[offset : offset + 1_048_576]
+                            if block.size:
+                                maximum_id = max(maximum_id, int(block.max()))
+                                eos_count += int(np.count_nonzero(block == eos_id))
+                    valid = observed == {
+                        "total_tokens": metadata["total_tokens"],
+                        "eos_count": eos_count,
+                        "maximum_id": maximum_id,
+                    }
+                else:
+                    valid = (
+                        not any(legacy_rows)
+                        and observed.get("total_tokens") == metadata["total_tokens"]
+                        and observed.get("metadata_sha256")
+                        == metadata["metadata_sha256"]
+                        and observed.get("shard_files_sha256") == sha256_json(rows)
+                    )
+                if not valid:
                     raise ValueError("Pilot preflight shard fingerprint mismatch.")
             artifacts["config"] = _file_fingerprint(
                 config_path, managed_root=drive_dir
@@ -2397,45 +2518,22 @@ def _pilot_reuse_evidence(
         for shard_index, shard in enumerate(shards):
             if not isinstance(shard, Mapping):
                 raise ValueError("Pilot shard metadata entry is invalid.")
-            relative_value = shard.get("path")
-            if not isinstance(relative_value, str):
-                raise ValueError("Pilot shard metadata entry is invalid.")
-            relative = PurePosixPath(relative_value)
-            if (
-                not relative_value
-                or "\\" in relative_value
-                or relative.is_absolute()
-                or ".." in relative.parts
-                or str(relative) != relative_value
-                or len(relative.parts) != 1
-                or relative.suffix != ".bin"
-                or relative_value in seen_names
-            ):
+            shard_path, canonical_row, _ = _validated_pilot_shard_record(
+                metadata_path,
+                shard,
+                shard_index=shard_index,
+                expected_split=expected_split,
+                drive_dir=drive_dir,
+            )
+            relative_value = str(canonical_row["path"])
+            if relative_value in seen_names:
                 raise ValueError("Pilot shard metadata paths must be unique safe filenames.")
             seen_names.add(relative_value)
-            num_tokens = shard.get("num_tokens")
-            byte_size = shard.get("byte_size")
-            if (
-                type(num_tokens) is not int
-                or not 0 < num_tokens <= 2**63 - 1
-                or type(byte_size) is not int
-                or not 0 < byte_size <= 2**63 - 1
-                or shard.get("index") != shard_index
-                or num_tokens > (2**63 - 1) // dtype.itemsize
-                or byte_size != num_tokens * dtype.itemsize
-            ):
-                raise ValueError("Pilot shard token and byte counts are invalid.")
+            num_tokens = int(canonical_row["num_tokens"])
             if token_sum > (2**63 - 1) - num_tokens:
                 raise ValueError("Pilot shard token total exceeds the supported range.")
             token_sum += num_tokens
-            shard_path = metadata_path.parent / Path(*relative.parts)
-            fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
             referenced_shards.add(shard_path.resolve())
-            if (
-                byte_size != fingerprint["size"]
-                or shard.get("sha256") != fingerprint["sha256"]
-            ):
-                raise ValueError("Pilot shard metadata file fingerprint mismatch.")
             values = np.memmap(shard_path, mode="r", dtype=dtype)
             if values.size != num_tokens:
                 raise ValueError("Pilot shard token count differs from its bytes.")

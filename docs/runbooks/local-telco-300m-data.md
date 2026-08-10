@@ -330,6 +330,9 @@ uv run python scripts/prepare_telco_local.py \
 When `pilot_20m` remains selected, reuse is permitted only if the preserved
 tokenizer provenance, pilot corpus, shard metadata and bytes, preflight, smoke,
 pilot-completion, and evaluation evidence all exist and bind to that tokenizer.
+Legacy shard metadata and preflight shard metrics are accepted only after the
+current validator maps the exact expected shard names and rechecks byte sizes,
+SHA-256 fingerprints, token counts, EOS counts, and maximum token IDs.
 When `representative_200m` is selected, the command builds a new exact 20M
 pilot corpus. Its report says `ready_for_colab` and lists smoke, pilot, and
 evaluation as pending; local preparation never claims those GPU gates passed.
