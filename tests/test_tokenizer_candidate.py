@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
@@ -3325,6 +3326,113 @@ def test_pilot_reuse_accepts_verified_legacy_shards_and_preflight_metrics(
     )
     assert report["action"] == "reuse"
     assert report["refreshed_pilot_gates_passed"] is True
+
+
+def test_operator_recertification_gates_bind_to_preserved_pilot_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    _, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    operator_root = (
+        prepare_telco_local._operator_evidence_root(drive_dir, selected_sha256)
+        / "pilot/colab"
+    )
+    _write_pilot_gate_evidence(
+        operator_root,
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+    shutil.copy2(
+        recipe_root / "evidence/pilot/preflight.json",
+        operator_root / "preflight.json",
+    )
+    shutil.copy2(
+        recipe_root / "prepared/pilot/config.yaml",
+        operator_root / "config.yaml",
+    )
+
+    evidence = prepare_telco_local._pilot_colab_evidence(
+        drive_dir=drive_dir,
+        gate_root=operator_root,
+        evaluation_root=operator_root / "evaluation",
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+
+    assert evidence["preflight"]["path"].endswith(
+        "/pilot/colab/preflight.json"
+    )
+    assert evidence["config"]["path"].endswith("/pilot/colab/config.yaml")
+
+
+def test_pilot_reuse_prefers_complete_operator_recertification_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    _, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    operator_root = (
+        prepare_telco_local._operator_evidence_root(drive_dir, selected_sha256)
+        / "pilot/colab"
+    )
+    _write_pilot_gate_evidence(
+        operator_root,
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+    shutil.copy2(
+        recipe_root / "evidence/pilot/preflight.json",
+        operator_root / "preflight.json",
+    )
+    shutil.copy2(
+        recipe_root / "prepared/pilot/config.yaml",
+        operator_root / "config.yaml",
+    )
+    (recipe_root / "evidence/pilot/smoke_resume_verified.json").unlink()
+
+    evidence = prepare_telco_local._pilot_reuse_evidence(
+        drive_dir, selected_sha256
+    )
+
+    assert evidence["smoke"]["path"].endswith(
+        "/pilot/colab/smoke_resume_verified.json"
+    )
+
+
+def test_pilot_reuse_rejects_partial_operator_recertification_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    _, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    operator_root = (
+        prepare_telco_local._operator_evidence_root(drive_dir, selected_sha256)
+        / "pilot/colab"
+    )
+    operator_root.mkdir(parents=True)
+    shutil.copy2(
+        recipe_root / "evidence/pilot/preflight.json",
+        operator_root / "preflight.json",
+    )
+
+    with pytest.raises(ValueError, match="missing"):
+        prepare_telco_local._pilot_reuse_evidence(drive_dir, selected_sha256)
 
 
 @pytest.mark.parametrize(

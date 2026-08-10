@@ -44,6 +44,7 @@ def _notebook_namespace(heading: str) -> dict:
     namespace = {
         "RUN_STAGE": "test_only_skip",
         "PREPARED_DATA_MODE": "test_only_skip",
+        "RECERTIFY_SELECTED_PILOT": False,
         "json": json,
         "shutil": shutil,
         "Path": Path,
@@ -219,6 +220,7 @@ def test_telco_notebook_is_valid_and_defaults_to_prepare_data():
     assert notebook["nbformat"] == 4
     assert 'RUN_STAGE = "prepare_data"' in source
     assert 'DATA_PLAN = "pilot"' in source
+    assert "RECERTIFY_SELECTED_PILOT = False" in source
     assert "ALLOW_FULL_DATA = False" in source
     assert "FULL_APPROVED = False" in source
     assert "GOOGLE_DRIVE_FREE_GB_OVERRIDE = 0.0" in source
@@ -321,7 +323,7 @@ def test_prepare_stage_audits_before_sharding_and_never_pretrains():
     assert 'status\"] == \"ok\"' in source
     assert "memory_fraction" in source
     assert "scripts/pretrain.py" not in source
-    assert source.count('"--min-free-disk-gb", "0"') == 2
+    assert source.count('"--min-free-disk-gb", "0"') == 3
     assert '"--corpus-manifest", CORPUS_DIR / "manifest.json"' in source
     assert '"--output", EVIDENCE_DIR / "quota_audit.json"' in source
 
@@ -675,6 +677,23 @@ def test_prebuilt_routes_colab_outputs_under_selected_tokenizer_namespace():
     assert "EVIDENCE_DIR = COLAB_GATE_ROOT" in paths
     assert "RUN_DIR = COLAB_GATE_ROOT" in paths
     assert 'EVIDENCE_DIR / "config.yaml"' in prepare
+
+
+def test_legacy_pilot_recertification_uses_fresh_selected_namespace():
+    controls = _code_after_heading("## 1. Choose one stage")
+    paths = _code_after_heading("## 6. Build fixed local and Drive paths")
+    prepare = _code_after_heading("## 8. Prepare tokenizer and shards")
+    gates = _code_after_heading("## 9. Verify evidence gates")
+
+    assert "if RECERTIFY_SELECTED_PILOT:" in controls
+    assert 'DATA_PLAN == "pilot"' in controls
+    assert 'PREPARED_DATA_MODE == "legacy_jsonl"' in controls
+    assert "RECERTIFY_SELECTED_PILOT" in paths
+    assert 'DRIVE_ROOT / "evidence/tokenizers" / SELECTED_TOKENIZER_SHA' in paths
+    assert "recertify_prepare" in prepare
+    assert "PILOT_TOKENIZER_DRIVE_DIR" in prepare
+    assert 'EVIDENCE_DIR / "config.yaml"' in prepare
+    assert 'RECIPE_ROOT / "evidence/pilot/quota_audit.json"' in gates
 
 
 def test_candidate_pilot_producer_uses_prebuilt_gate_config_path(

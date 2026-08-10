@@ -2106,10 +2106,21 @@ def _pilot_colab_evidence(
                 _operator_evidence_root(drive_dir, tokenizer_sha256)
                 / "pilot/colab"
             )
-            prebuilt_producer = gate_root == operator_gate_root
+            operator_producer = gate_root == operator_gate_root
+            prebuilt_manifest_path = (
+                drive_dir
+                / "corpora"
+                / "pilot"
+                / tokenizer_sha256
+                / "manifest.json"
+            )
+            prebuilt_producer = (
+                operator_producer and prebuilt_manifest_path.is_file()
+            )
+            legacy_recertification = operator_producer and not prebuilt_producer
             config_path = (
                 gate_root / "config.yaml"
-                if prebuilt_producer
+                if operator_producer
                 else gate_root.parents[1] / "prepared/pilot/config.yaml"
             )
             expected_config_sha256 = sha256_text(
@@ -2128,15 +2139,25 @@ def _pilot_colab_evidence(
                 or tokenizer_details.get("vocab_size") != REQUIRED_VOCAB_SIZE
             ):
                 raise ValueError("Pilot preflight tokenizer fingerprint mismatch.")
-            manifest_path = (
-                drive_dir
-                / "corpora"
-                / "pilot"
-                / tokenizer_sha256
-                / "manifest.json"
-                if prebuilt_producer
-                else gate_root.parents[1] / "corpora/pilot/manifest.json"
-            )
+            if prebuilt_producer:
+                manifest_path = prebuilt_manifest_path
+                shard_root = manifest_path.parent
+            elif legacy_recertification:
+                baseline, provenance_path, provenance = _canonical_pilot_provenance(
+                    drive_dir
+                )
+                if provenance.get("tokenizer_sha256") != tokenizer_sha256:
+                    raise ValueError(
+                        "Pilot recertification tokenizer is not the preserved baseline."
+                    )
+                recipe_root = provenance_path.parents[2]
+                manifest_path = recipe_root / "corpora/pilot/manifest.json"
+                shard_root = recipe_root / "prepared/pilot/shards"
+                if baseline != (recipe_root / "prepared/pilot/tokenizer").resolve():
+                    raise ValueError("Pilot recertification baseline path is invalid.")
+            else:
+                manifest_path = gate_root.parents[1] / "corpora/pilot/manifest.json"
+                shard_root = gate_root.parents[1] / "prepared/pilot/shards"
             manifest_payload = _load_json_object(
                 manifest_path, "Pilot preflight corpus manifest"
             )
@@ -2160,11 +2181,6 @@ def _pilot_colab_evidence(
             shard_details = checks["shards"].get("details")
             if not isinstance(shard_details, Mapping):
                 raise ValueError("Pilot preflight shard fingerprints are missing.")
-            shard_root = (
-                manifest_path.parent
-                if prebuilt_producer
-                else gate_root.parents[1] / "prepared/pilot/shards"
-            )
             for split in ("pilot", "validation"):
                 metadata_path = shard_root / f"{split}_metadata.json"
                 metadata = _load_json_object(
@@ -2586,10 +2602,38 @@ def _pilot_reuse_evidence(
         != validation["quota_tokens"] + validation["documents"]
     ):
         raise ValueError("Pilot manifest quotas and split metadata do not reconcile.")
+    operator_gate_root = (
+        _operator_evidence_root(drive_dir, tokenizer_sha256) / "pilot/colab"
+    )
+    gate_root = (
+        operator_gate_root
+        if operator_gate_root.is_dir() and any(operator_gate_root.iterdir())
+        else evidence_root
+    )
+    evaluation_root = (
+        gate_root / "evaluation"
+        if gate_root == operator_gate_root
+        else runs_root / "evaluation"
+    )
+    if gate_root == operator_gate_root:
+        required_operator_gates = {
+            "preflight": gate_root / "preflight.json",
+            "smoke": gate_root / "smoke_resume_verified.json",
+            "pilot": gate_root / "pilot_complete.json",
+        }
+        missing = [
+            label for label, path in required_operator_gates.items()
+            if not path.is_file()
+        ]
+        if missing:
+            raise ValueError(
+                "Pilot Colab evidence is missing required gates: "
+                + ", ".join(missing)
+            )
     gates = _pilot_colab_evidence(
         drive_dir=drive_dir,
-        gate_root=evidence_root,
-        evaluation_root=runs_root / "evaluation",
+        gate_root=gate_root,
+        evaluation_root=evaluation_root,
         tokenizer_sha256=tokenizer_sha256,
         build_identity_sha256=build_identity_sha256,
     )
