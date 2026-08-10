@@ -104,11 +104,16 @@ class DrivePublisher:
             source, unit_id
         )
         destination_relative_path = _normalized_relative_posix_path(destination_relative_path)
+        destination = self._destination_path(destination_relative_path)
+        if self.journal is not None and unit_id is not None and destination.exists():
+            if self.journal.prepared_publication(unit_id, source_relative_path) is None:
+                raise ValueError(
+                    "existing unpublished destination has no prepared publication "
+                    "receipt; publication duration is unrecoverable"
+                )
         if self.journal is not None:
             if unit_id is None:
                 raise ValueError("unit_id is required when a journal is configured")
-            self.journal.record_destination(unit_id, source_relative_path, destination_relative_path)
-        destination = self._destination_path(destination_relative_path)
         self._ensure_destination_root()
         require_managed_path(self.destination_root, destination.parent, kind="directory")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -117,16 +122,21 @@ class DrivePublisher:
         require_managed_path(self.destination_root, destination, kind="file")
         require_managed_path(self.destination_root, partial, kind="file")
         with self._publication_lock():
+            receipt = (
+                self.journal.prepared_publication(unit_id, source_relative_path)
+                if self.journal is not None and unit_id is not None else None
+            )
             if destination.exists():
-                receipt = (
-                    self.journal.prepared_publication(unit_id, source_relative_path)
-                    if self.journal is not None and unit_id is not None else None
-                )
                 if self.journal is not None and receipt is None:
                     raise ValueError(
                         "existing unpublished destination has no prepared publication "
                         "receipt; publication duration is unrecoverable"
                     )
+            if self.journal is not None and unit_id is not None:
+                self.journal.record_destination(
+                    unit_id, source_relative_path, destination_relative_path
+                )
+            if destination.exists():
                 destination_sha256 = self._verified_destination(
                     destination, size, source_sha256
                 )
@@ -136,10 +146,6 @@ class DrivePublisher:
                     partial, size, source_sha256
                 ):
                     self._quarantine(partial)
-                receipt = (
-                    self.journal.prepared_publication(unit_id, source_relative_path)
-                    if self.journal is not None and unit_id is not None else None
-                )
                 if partial.exists() and receipt is None:
                     partial.unlink()
                 if not partial.exists():

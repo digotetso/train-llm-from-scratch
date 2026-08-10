@@ -11,6 +11,7 @@ from typing import Mapping
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from matgpt.eval.judge import summarize_judgments, validate_judgments
+from matgpt.training.checkpoint_provenance import checkpoint_binding
 from matgpt.training.run_summary import write_evaluation_result
 from matgpt.utils.hashing import sha256_file
 
@@ -116,26 +117,43 @@ def main() -> None:
         raise ValueError("invalid comparison summary JSON") from error
     comparison_checkpoints = comparison_payload.get("checkpoints") \
         if isinstance(comparison_payload, dict) else None
+    artifact_identity = comparison_payload.get("artifact_identity") \
+        if isinstance(comparison_payload, dict) else None
     if (
         not isinstance(comparison_checkpoints, dict)
         or set(comparison_checkpoints) != set(summary["checkpoints"])
+        or not isinstance(artifact_identity, dict)
+        or not artifact_identity
+        or any(
+            not isinstance(key, str) or not isinstance(value, str) or not value
+            for key, value in artifact_identity.items()
+        )
     ):
-        raise ValueError("comparison checkpoint labels do not match scored judgments")
+        raise ValueError("comparison identity or checkpoint labels do not match scored judgments")
     checkpoint_bindings = {}
     for label, record in comparison_checkpoints.items():
-        checkpoint_path = Path(record.get("path", "")) if isinstance(record, dict) else Path()
-        if not checkpoint_path.is_file():
-            raise ValueError(f"comparison checkpoint is missing: {label}")
-        checkpoint_bindings[label] = {
-            "path": str(checkpoint_path),
-            "size": checkpoint_path.stat().st_size,
-            "sha256": sha256_file(checkpoint_path),
-        }
+        stored_binding = record.get("binding") if isinstance(record, dict) else None
+        if (
+            not isinstance(stored_binding, dict)
+            or set(stored_binding) != {"path", "size", "sha256"}
+            or record.get("path") != stored_binding.get("path")
+        ):
+            raise ValueError(
+                f"comparison checkpoint {label!r} has no immutable binding"
+            )
+        try:
+            current_binding = checkpoint_binding(stored_binding.get("path", ""))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"comparison checkpoint is invalid: {label}") from error
+        if current_binding != stored_binding:
+            raise ValueError(f"comparison checkpoint changed after evaluation: {label}")
+        checkpoint_bindings[label] = dict(stored_binding)
     result = {
         "reviewer": args.reviewer,
         "review_count": len(judgments),
         "judgments": _join_judgments(judgments, review_key),
         "summary": summary,
+        "artifact_identity": dict(artifact_identity),
         "comparison": {
             "path": Path(os.path.relpath(comparison_path, output.parent)).as_posix(),
             "sha256": sha256_file(comparison_path),

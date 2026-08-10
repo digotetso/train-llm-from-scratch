@@ -10,16 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from matgpt.config import config_to_yaml, load_config
+from matgpt.config import load_config
 from matgpt.eval.lm import evaluate_loss, generate_samples, perplexity
 from matgpt.model.gpt import GPT, GPTConfig
-from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
+from matgpt.tokenizer.io import load_tokenizer
 from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint
+from matgpt.training.checkpoint_provenance import (
+    checkpoint_binding,
+    training_artifact_identity,
+)
 from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
 from matgpt.training.pretrain import get_device, validate_checkpoint_compatibility
 from matgpt.training.run_summary import write_evaluation_result
 from matgpt.data.prepare import effective_validation_split
-from matgpt.utils.hashing import sha256_file, sha256_text
 from matgpt.utils.seed import set_seed
 
 
@@ -41,6 +44,8 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    binding = checkpoint_binding(args.checkpoint)
+    artifact_identity = training_artifact_identity(cfg)
     evaluation_seed = int(cfg["run"]["seed"])
     validation_seed = (
         args.validation_seed
@@ -57,15 +62,12 @@ def main() -> None:
     output_path = Path(args.output) if args.output else default_output
     device = get_device()
     model = GPT(GPTConfig.from_dict(cfg["model"])).to(device)
-    payload = load_checkpoint(args.checkpoint, map_location=device)
+    payload = load_checkpoint(binding["path"], map_location=device)
     if not cfg["training"].get("allow_artifact_mismatch", False):
-        tokenizer_metadata = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])
         expected_fingerprints = {
-            "config_sha256": sha256_text(config_to_yaml(cfg)),
-            "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
-            "dataset_manifest_hash": sha256_file(
-                Path(cfg["dataset"]["normalized_dir"]) / "manifest.json"
-            ),
+            "config_sha256": artifact_identity["config_sha256"],
+            "tokenizer_sha256": artifact_identity["tokenizer_sha256"],
+            "dataset_manifest_hash": artifact_identity["dataset_manifest_sha256"],
         }
         validate_checkpoint_compatibility(payload, expected_fingerprints)
     apply_checkpoint_payload(payload, model=model)
@@ -96,7 +98,9 @@ def main() -> None:
         device=device,
     )
     result = {
-        "checkpoint": str(Path(args.checkpoint)),
+        "checkpoint": binding["path"],
+        "checkpoint_binding": binding,
+        "artifact_identity": artifact_identity,
         "evaluation_seed": evaluation_seed,
         "validation_seed": validation_seed,
         "generation_seed": generation_seed,

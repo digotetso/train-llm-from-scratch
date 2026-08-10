@@ -177,6 +177,17 @@ def test_training_cell_has_only_explicit_smoke_pilot_and_full_branches():
     assert 'RUN_STAGE = "full"' not in source
 
 
+def test_training_cell_writes_distinct_immutable_smoke_and_pilot_snapshots():
+    source = _code_after_heading("## 10. Run the selected stage")
+
+    assert "snapshot_checkpoint" in source
+    assert 'label="smoke"' in source
+    assert 'label="pilot-latest"' in source
+    assert '"checkpoint_binding": smoke_binding' in source
+    assert '"checkpoint_binding": pilot_binding' in source
+    assert "smoke_binding != pilot_binding" in source
+
+
 def test_training_gate_revalidates_artifacts_and_binds_evidence_to_config():
     source = _code_after_heading("## 9. Verify evidence gates")
 
@@ -197,6 +208,11 @@ def test_evaluation_uses_open_telco_and_fifty_blinded_llm_reviews():
     assert "llm_judge" in source
     assert "this Codex task" in source
     assert "Human review is optional" in source
+    assert "pilot_complete.json" in source
+    assert 'pilot_gate["checkpoint_binding"]["path"]' in source
+    assert 'glob("pilot-*.pt")' in source
+    assert 'glob("ckpt_*.pt")' not in source
+    assert 'checkpoint_dir / "latest.pt"' not in source
 
 
 def test_notebook_uses_dedicated_config_and_drive_directory():

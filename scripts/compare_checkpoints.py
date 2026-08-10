@@ -32,12 +32,16 @@ from matgpt.eval.lm import evaluate_loss, generate_samples, perplexity
 from matgpt.eval.repetition import measure_repetition
 from matgpt.eval.tasks import evaluate_multiple_choice_file
 from matgpt.model.gpt import GPT, GPTConfig
-from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
+from matgpt.tokenizer.io import load_tokenizer
 from matgpt.training.checkpoint import apply_checkpoint_payload, load_checkpoint
+from matgpt.training.checkpoint_provenance import (
+    checkpoint_binding,
+    training_artifact_identity,
+)
 from matgpt.training.dataset import PackedTokenDataset, metadata_path_for_split
 from matgpt.training.pretrain import get_device, validate_checkpoint_compatibility
 from matgpt.training.run_summary import write_evaluation_result
-from matgpt.utils.hashing import sha256_file, sha256_text
+from matgpt.utils.hashing import sha256_text
 from matgpt.utils.seed import set_seed
 
 
@@ -153,17 +157,6 @@ def _ensure_finite_numbers(value: object, context: str) -> None:
             _ensure_finite_numbers(nested, context)
 
 
-def _expected_fingerprints(cfg: dict[str, Any]) -> dict[str, str]:
-    tokenizer_metadata = load_tokenizer_metadata(cfg["tokenizer"]["output_dir"])
-    return {
-        "config_sha256": sha256_text(config_to_yaml(cfg)),
-        "tokenizer_sha256": tokenizer_metadata["tokenizer_sha256"],
-        "dataset_manifest_hash": sha256_file(
-            Path(cfg["dataset"]["normalized_dir"]) / "manifest.json"
-        ),
-    }
-
-
 def _task_summary(task_result: dict[str, Any]) -> dict[str, object]:
     return {
         "total": task_result["total"],
@@ -175,6 +168,8 @@ def _task_summary(task_result: dict[str, Any]) -> dict[str, object]:
 
 def _evaluate_checkpoint(
     spec: CheckpointSpec,
+    binding: dict[str, object],
+    artifact_identity: dict[str, str],
     request: EvaluationRequest,
     cfg: dict[str, Any],
     device: torch.device,
@@ -185,7 +180,7 @@ def _evaluate_checkpoint(
     set_seed(int(cfg["run"]["seed"]))
     model = GPT(GPTConfig.from_dict(cfg["model"])).to(device)
     try:
-        payload = load_checkpoint(spec.path, map_location=device)
+        payload = load_checkpoint(binding["path"], map_location=device)
         if expected_fingerprints is not None:
             validate_checkpoint_compatibility(payload, expected_fingerprints)
         apply_checkpoint_payload(payload, model=model)
@@ -267,7 +262,9 @@ def _evaluate_checkpoint(
         )
         return {
             "checkpoint_label": spec.label,
-            "checkpoint_path": str(spec.path),
+            "checkpoint_path": binding["path"],
+            "checkpoint_binding": binding,
+            "artifact_identity": artifact_identity,
             "validation": validation_rows,
             "consistency_task": consistency,
             "generations": generations,
@@ -281,6 +278,13 @@ def _evaluate_checkpoint(
 
 def run_comparison(request: EvaluationRequest) -> dict[str, object]:
     cfg = load_config(request.config_path)
+    bindings = {
+        spec.label: checkpoint_binding(spec.path) for spec in request.checkpoints
+    }
+    config_fingerprint = sha256_text(config_to_yaml(cfg))
+    artifact_identity = {"config_sha256": config_fingerprint}
+    if not cfg["training"].get("allow_artifact_mismatch", False):
+        artifact_identity = training_artifact_identity(cfg)
     device = get_device()
     tokenizer = load_tokenizer(cfg["tokenizer"]["output_dir"])
     validation_metadata_path = metadata_path_for_split(
@@ -288,13 +292,19 @@ def run_comparison(request: EvaluationRequest) -> dict[str, object]:
     )
     expected_fingerprints = None
     if not cfg["training"].get("allow_artifact_mismatch", False):
-        expected_fingerprints = _expected_fingerprints(cfg)
+        expected_fingerprints = {
+            "config_sha256": artifact_identity["config_sha256"],
+            "tokenizer_sha256": artifact_identity["tokenizer_sha256"],
+            "dataset_manifest_hash": artifact_identity["dataset_manifest_sha256"],
+        }
 
     request.output_dir.mkdir(parents=True, exist_ok=False)
     detailed: dict[str, dict[str, object]] = {}
     for spec in request.checkpoints:
         result = _evaluate_checkpoint(
             spec=spec,
+            binding=bindings[spec.label],
+            artifact_identity=artifact_identity,
             request=request,
             cfg=cfg,
             device=device,
@@ -302,6 +312,8 @@ def run_comparison(request: EvaluationRequest) -> dict[str, object]:
             validation_metadata_path=validation_metadata_path,
             expected_fingerprints=expected_fingerprints,
         )
+        if checkpoint_binding(spec.path) != bindings[spec.label]:
+            raise ValueError(f"checkpoint {spec.label!r} changed during comparison")
         detailed[spec.label] = result
         write_evaluation_result(
             request.output_dir / "checkpoints" / f"{spec.label}.json", result
@@ -329,7 +341,6 @@ def run_comparison(request: EvaluationRequest) -> dict[str, object]:
         request.output_dir, judge_bundle, prompt_text=request.judge_prompt_text
     )
 
-    config_fingerprint = sha256_text(config_to_yaml(cfg))
     summary = {
         "protocol": {
             "validation_seeds": request.validation_seeds,
@@ -351,9 +362,11 @@ def run_comparison(request: EvaluationRequest) -> dict[str, object]:
             "path": str(request.config_path),
             "sha256": config_fingerprint,
         },
+        "artifact_identity": artifact_identity,
         "checkpoints": {
             spec.label: {
-                "path": str(spec.path),
+                "path": bindings[spec.label]["path"],
+                "binding": bindings[spec.label],
                 "evidence": f"checkpoints/{spec.label}.json",
             }
             for spec in request.checkpoints

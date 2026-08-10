@@ -302,16 +302,23 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
 ):
     run_dir = tmp_path / "run"
     checkpoint = tmp_path / "checkpoints" / "best.pt"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"checkpoint")
     configured_output = run_dir / "evaluation" / "best.json"
     requested_output = tmp_path / "requested.json"
     normalized_dir = tmp_path / "normalized"
     normalized_dir.mkdir()
     manifest_path = normalized_dir / "manifest.json"
     manifest_path.write_text('{"dataset":"unit"}\n', encoding="utf-8")
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "special_tokens.json").write_text(
+        '{"tokenizer_sha256":"current-tokenizer"}\n', encoding="utf-8"
+    )
     cfg = {
         "run": {"output_dir": str(run_dir), "seed": 17},
         "model": {"context_length": 8},
-        "tokenizer": {"output_dir": str(tmp_path / "tokenizer")},
+        "tokenizer": {"output_dir": str(tokenizer_dir)},
         "sharding": {"output_dir": str(tmp_path / "shards")},
         "dataset": {"normalized_dir": str(normalized_dir)},
         "training": {"micro_batch_size": 1, "eval_batches": 1, "precision": "fp32"},
@@ -372,11 +379,6 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
     monkeypatch.setattr(evaluate_script, "load_checkpoint", lambda *args, **kwargs: payload)
     monkeypatch.setattr(evaluate_script, "apply_checkpoint_payload", lambda *args, **kwargs: None)
     monkeypatch.setattr(evaluate_script, "load_tokenizer", lambda path: FakeTokenizer())
-    monkeypatch.setattr(
-        evaluate_script,
-        "load_tokenizer_metadata",
-        lambda path: {"tokenizer_sha256": "current-tokenizer"},
-    )
     monkeypatch.setattr(evaluate_script, "PackedTokenDataset", FakeDataset)
     monkeypatch.setattr(evaluate_script, "metadata_path_for_split", lambda *args: tmp_path / "metadata.json")
     monkeypatch.setattr(evaluate_script, "effective_validation_split", lambda dataset: "validation")
@@ -397,7 +399,17 @@ def test_evaluate_cli_persists_default_and_explicit_outputs(
 
     output = requested_output if explicit_output else configured_output
     assert json.loads(output.read_text(encoding="utf-8")) == {
-        "checkpoint": str(checkpoint),
+        "artifact_identity": {
+            "config_sha256": sha256_text(config_to_yaml(cfg)),
+            "dataset_manifest_sha256": sha256_file(manifest_path),
+            "tokenizer_sha256": "current-tokenizer",
+        },
+        "checkpoint": str(checkpoint.resolve()),
+        "checkpoint_binding": {
+            "path": str(checkpoint.resolve()),
+            "sha256": sha256_file(checkpoint),
+            "size": len(b"checkpoint"),
+        },
         "evaluation_seed": 17,
         "generation_seed": expected_generation_seed,
         "perplexity": 109.9,
@@ -420,10 +432,17 @@ def test_evaluate_rejects_artifact_mismatch_before_applying_model_state(
     manifest_path = normalized_dir / "manifest.json"
     manifest_path.write_text('{"dataset":"unit"}\n', encoding="utf-8")
     checkpoint = tmp_path / "checkpoints" / "best.pt"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"checkpoint")
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "special_tokens.json").write_text(
+        '{"tokenizer_sha256":"current-tokenizer"}\n', encoding="utf-8"
+    )
     cfg = {
         "run": {"output_dir": str(run_dir), "seed": 17},
         "model": {"context_length": 8},
-        "tokenizer": {"output_dir": str(tmp_path / "tokenizer")},
+        "tokenizer": {"output_dir": str(tokenizer_dir)},
         "sharding": {"output_dir": str(tmp_path / "shards")},
         "dataset": {"normalized_dir": str(normalized_dir)},
         "training": {
@@ -479,12 +498,6 @@ def test_evaluate_rejects_artifact_mismatch_before_applying_model_state(
         evaluate_script,
         "apply_checkpoint_payload",
         apply_checkpoint_probe,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        evaluate_script,
-        "load_tokenizer_metadata",
-        lambda path: {"tokenizer_sha256": "current-tokenizer"},
         raising=False,
     )
     monkeypatch.setattr(

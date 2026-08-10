@@ -32,10 +32,20 @@ def _comparison_fixture(tmp_path: Path, labels: tuple[str, ...]) -> Path:
     for label in labels:
         checkpoint = tmp_path / f"{label}.pt"
         checkpoint.write_bytes(label.encode())
-        checkpoints[label] = {"path": str(checkpoint),
-                              "evidence": f"checkpoints/{label}.json"}
+        checkpoints[label] = {
+            "path": str(checkpoint.resolve()),
+            "binding": {
+                "path": str(checkpoint.resolve()),
+                "size": checkpoint.stat().st_size,
+                "sha256": sha256_file(checkpoint),
+            },
+            "evidence": f"checkpoints/{label}.json",
+        }
     path = tmp_path / "comparison_summary.json"
-    path.write_text(json.dumps({"checkpoints": checkpoints}), encoding="utf-8")
+    path.write_text(json.dumps({
+        "artifact_identity": {"config_sha256": "c" * 64},
+        "checkpoints": checkpoints,
+    }), encoding="utf-8")
     return path
 
 
@@ -96,8 +106,42 @@ def test_score_story_judgments_cli_joins_key_and_aggregates_two_files(
     assert result["judgments"][0]["checkpoint_label"] == "170m"
     assert set(result["summary"]["checkpoints"]) == {"170m", "200m"}
     assert result["comparison"]["sha256"] == sha256_file(comparison)
+    assert result["artifact_identity"] == {"config_sha256": "c" * 64}
     assert set(result["checkpoints"]) == {"170m", "200m"}
     assert all(row["size"] > 0 for row in result["checkpoints"].values())
+
+
+@pytest.mark.parametrize("mutation", ("replaced", "zero_byte", "path_only"))
+def test_score_story_judgments_rejects_stale_or_unbound_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    comparison = _comparison_fixture(tmp_path, ("170m",))
+    comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
+    checkpoint = tmp_path / "170m.pt"
+    if mutation == "replaced":
+        checkpoint.write_bytes(b"replacement checkpoint bytes")
+    elif mutation == "zero_byte":
+        checkpoint.write_bytes(b"")
+    else:
+        comparison_payload["checkpoints"]["170m"].pop("binding")
+        comparison.write_text(json.dumps(comparison_payload), encoding="utf-8")
+    key = tmp_path / "review_key.json"
+    key.write_text(json.dumps({
+        "review-0001": {"checkpoint_label": "170m", "generation_id": "g1"}
+    }), encoding="utf-8")
+    judgments = tmp_path / "judgments.jsonl"
+    _write_jsonl(judgments, [_judgment("review-0001", 2)])
+    output = tmp_path / "scored.json"
+    monkeypatch.setattr(sys, "argv", [
+        "score_story_judgments.py", "--key", str(key), "--judgments",
+        str(judgments), "--reviewer", "llm", "--comparison-summary",
+        str(comparison), "--output", str(output),
+    ])
+
+    with pytest.raises(ValueError, match="checkpoint"):
+        scoring_script.main()
+
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(

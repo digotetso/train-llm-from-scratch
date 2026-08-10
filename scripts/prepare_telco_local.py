@@ -1350,15 +1350,82 @@ def _validated_pilot_manifest(
         stages = manifest.get("stages")
         pilot = stages.get("pilot") if isinstance(stages, Mapping) else None
         validation = manifest.get("validation")
+        split_stats = manifest.get("split_stats")
         if (
             not isinstance(pilot, Mapping)
-            or pilot.get("requested_tokens") != 20_000_000
-            or not isinstance(pilot.get("quota_tokens"), int)
-            or pilot["quota_tokens"] < 20_000_000
+            or type(pilot.get("requested_tokens")) is not int
+            or pilot["requested_tokens"] != PILOT_TOKENS
+            or type(pilot.get("quota_tokens")) is not int
+            or not PILOT_TOKENS <= pilot["quota_tokens"] <= 2**63 - 1
+            or type(pilot.get("documents")) is not int
+            or not 0 < pilot["documents"] <= 2**63 - 1
+            or pilot.get("document_count") != pilot["documents"]
             or not isinstance(validation, Mapping)
-            or int(validation.get("documents", 0)) < 1
+            or type(validation.get("quota_tokens")) is not int
+            or not 0 < validation["quota_tokens"] <= 2**63 - 1
+            or type(validation.get("documents")) is not int
+            or not 0 < validation["documents"] <= 2**63 - 1
+            or validation.get("document_count") != validation["documents"]
+            or not isinstance(split_stats, Mapping)
+            or split_stats.get("pilot") != pilot
+            or split_stats.get("validation") != validation
+            or not isinstance(quota_counting, Mapping)
+            or quota_counting.get("method") != "tokenizer_exact"
         ):
             raise ValueError("Legacy pilot manifest does not prove the canonical 20M target and validation split.")
+        items = pilot.get("items")
+        if not isinstance(items, Mapping) or not items:
+            raise ValueError("Legacy pilot manifest item accounting is missing.")
+        item_requested = item_quota = item_documents = item_estimated = 0
+        for item_id, item in items.items():
+            if (
+                not isinstance(item_id, str)
+                or not item_id
+                or not isinstance(item, Mapping)
+                or type(item.get("requested_tokens")) is not int
+                or not 0 < item["requested_tokens"] <= 2**63 - 1
+                or type(item.get("quota_tokens")) is not int
+                or not item["requested_tokens"] <= item["quota_tokens"] <= 2**63 - 1
+                or type(item.get("documents")) is not int
+                or not 0 < item["documents"] <= 2**63 - 1
+                or type(item.get("estimated_tokens")) is not int
+                or not 0 <= item["estimated_tokens"] <= 2**63 - 1
+                or type(item.get("raw_bytes")) is not int
+                or not 0 <= item["raw_bytes"] <= 2**63 - 1
+            ):
+                raise ValueError("Legacy pilot manifest item accounting is invalid.")
+            values = (
+                item["requested_tokens"], item["quota_tokens"],
+                item["documents"], item["estimated_tokens"],
+            )
+            totals = (item_requested, item_quota, item_documents, item_estimated)
+            if any(total > (2**63 - 1) - value for total, value in zip(totals, values)):
+                raise ValueError("Legacy pilot manifest item accounting overflows.")
+            item_requested += item["requested_tokens"]
+            item_quota += item["quota_tokens"]
+            item_documents += item["documents"]
+            item_estimated += item["estimated_tokens"]
+        if (
+            item_requested != pilot["requested_tokens"]
+            or item_quota != pilot["quota_tokens"]
+            or item_documents != pilot["documents"]
+            or pilot.get("estimated_tokens") != item_estimated
+        ):
+            raise ValueError("Legacy pilot manifest item totals do not reconcile.")
+        validation_items = validation.get("items")
+        if (
+            not isinstance(validation_items, Mapping)
+            or not validation_items
+            or any(
+                not isinstance(item_id, str)
+                or not item_id
+                or type(document_count) is not int
+                or not 0 < document_count <= 2**63 - 1
+                for item_id, document_count in validation_items.items()
+            )
+            or sum(validation_items.values()) != validation["documents"]
+        ):
+            raise ValueError("Legacy validation item accounting does not reconcile.")
         build_identity = sha256_json(
             {"format": "legacy_telco_prepare_v1", "manifest_sha256": stored,
              "tokenizer_sha256": tokenizer_sha256}
@@ -1403,8 +1470,11 @@ def _validated_pilot_gate(
         checkpoint = payload.get("checkpoint")
         if not isinstance(checkpoint, str) or not checkpoint:
             raise ValueError(f"Pilot {gate} evidence has no checkpoint provenance.")
+        if gate == "smoke" and payload.get("resume_verified") is not True:
+            raise ValueError("Pilot smoke evidence does not prove resume verification.")
         if gate == "pilot" and (
-            not isinstance(payload.get("tokens_processed"), int)
+            payload.get("complete") is not True
+            or not isinstance(payload.get("tokens_processed"), int)
             or isinstance(payload.get("tokens_processed"), bool)
             or payload["tokens_processed"] < 20_000_000
         ):
@@ -1488,6 +1558,55 @@ def _checkpoint_from_canonical_reference(
     return candidate
 
 
+def _validated_checkpoint_binding(
+    payload: Mapping[str, Any],
+    *,
+    reference_key: str,
+    binding_key: str,
+    drive_dir: Path,
+    checkpoint_root: Path,
+    expected_stage: str,
+) -> tuple[Path, dict[str, object]]:
+    reference = payload.get(reference_key)
+    binding = payload.get(binding_key)
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding) != {"path", "size", "sha256"}
+        or binding.get("path") != reference
+        or type(binding.get("size")) is not int
+        or not 0 < binding["size"] <= 2**63 - 1
+        or not isinstance(binding.get("sha256"), str)
+        or SHA256_PATTERN.fullmatch(binding["sha256"]) is None
+    ):
+        raise ValueError(
+            "Pilot checkpoint evidence lacks an immutable path/size/SHA binding; "
+            "rerun the pilot gates."
+        )
+    checkpoint = _checkpoint_from_canonical_reference(
+        reference, drive_dir=drive_dir, checkpoint_root=checkpoint_root
+    )
+    actual_size = checkpoint.stat().st_size
+    actual_sha256 = sha256_file(checkpoint)
+    expected_prefix = f"{expected_stage}-"
+    if (
+        actual_size < 1
+        or binding["size"] != actual_size
+        or binding["sha256"] != actual_sha256
+        or not checkpoint.name.startswith(expected_prefix)
+        or not checkpoint.name.endswith(f"-{actual_sha256}.pt")
+    ):
+        raise ValueError("Pilot immutable checkpoint binding mismatch.")
+    return checkpoint, dict(binding)
+
+
+def _validate_artifact_identity(
+    payload: Mapping[str, Any], expected: Mapping[str, str]
+) -> None:
+    identity = payload.get("artifact_identity")
+    if not isinstance(identity, Mapping) or dict(identity) != dict(expected):
+        raise ValueError("Pilot evidence config/tokenizer/build identity mismatch.")
+
+
 def _validate_task_result(row: object) -> None:
     if not isinstance(row, Mapping):
         raise ValueError("Pilot task evaluation row must be an object.")
@@ -1568,13 +1687,15 @@ def _validated_comparison_evidence(
     drive_dir: Path,
     checkpoint_root: Path,
     expected_config_sha256: str,
-) -> dict[str, Path]:
+    expected_artifact_identity: Mapping[str, str],
+) -> dict[str, dict[str, object]]:
     checkpoints = payload.get("checkpoints")
     if not isinstance(checkpoints, Mapping) or len(checkpoints) < 2:
         raise ValueError("Pilot comparison requires at least two checkpoints.")
     config = payload.get("config")
     if not isinstance(config, Mapping) or config.get("sha256") != expected_config_sha256:
         raise ValueError("Pilot comparison config fingerprint mismatch.")
+    _validate_artifact_identity(payload, expected_artifact_identity)
     if not all(isinstance(payload.get(key), Mapping) for key in (
         "protocol", "validation", "consistency", "generations", "llm_judge"
     )):
@@ -1582,12 +1703,14 @@ def _validated_comparison_evidence(
     labels = set(checkpoints)
     if set(payload["consistency"]) != labels or set(payload["generations"]) != labels:
         raise ValueError("Pilot comparison checkpoint metrics are incomplete.")
-    result: dict[str, Path] = {}
+    result: dict[str, dict[str, object]] = {}
     for label, record in checkpoints.items():
         if not isinstance(label, str) or not isinstance(record, Mapping):
             raise ValueError("Pilot comparison checkpoint record is invalid.")
-        checkpoint = _checkpoint_from_canonical_reference(
-            record.get("path"), drive_dir=drive_dir, checkpoint_root=checkpoint_root
+        checkpoint, binding = _validated_checkpoint_binding(
+            record, reference_key="path", binding_key="binding",
+            drive_dir=drive_dir, checkpoint_root=checkpoint_root,
+            expected_stage="pilot",
         )
         evidence_value = record.get("evidence")
         if evidence_value != f"checkpoints/{label}.json":
@@ -1597,12 +1720,16 @@ def _validated_comparison_evidence(
             kind="file", allow_missing=False,
         )
         detailed = _load_json_object(detailed_path, "Pilot comparison checkpoint detail")
+        _validate_artifact_identity(detailed, expected_artifact_identity)
+        detailed_checkpoint, detailed_binding = _validated_checkpoint_binding(
+            detailed, reference_key="checkpoint_path",
+            binding_key="checkpoint_binding", drive_dir=drive_dir,
+            checkpoint_root=checkpoint_root, expected_stage="pilot",
+        )
         if (
             detailed.get("checkpoint_label") != label
-            or _checkpoint_from_canonical_reference(
-                detailed.get("checkpoint_path"), drive_dir=drive_dir,
-                checkpoint_root=checkpoint_root,
-            ) != checkpoint
+            or detailed_checkpoint != checkpoint
+            or detailed_binding != binding
             or not isinstance(detailed.get("validation"), list)
             or not detailed["validation"]
             or not isinstance(detailed.get("consistency_task"), Mapping)
@@ -1621,7 +1748,7 @@ def _validated_comparison_evidence(
                 raise ValueError("Pilot comparison validation metric is invalid.")
         _validate_task_result(detailed["consistency_task"])
         _validate_finite_tree(detailed)
-        result[label] = checkpoint
+        result[label] = binding
     for label, summary in payload["consistency"].items():
         if (
             not isinstance(summary, Mapping)
@@ -1645,10 +1772,12 @@ def _validated_scored_review(
     payload: Mapping[str, Any],
     *,
     comparison_path: Path,
-    checkpoints: Mapping[str, Path],
+    checkpoints: Mapping[str, Mapping[str, object]],
+    expected_artifact_identity: Mapping[str, str],
     drive_dir: Path,
     checkpoint_root: Path,
 ) -> None:
+    _validate_artifact_identity(payload, expected_artifact_identity)
     judgments = payload.get("judgments")
     summary = payload.get("summary")
     bindings = payload.get("checkpoints")
@@ -1669,17 +1798,16 @@ def _validated_scored_review(
         or set(bindings) != set(checkpoints)
     ):
         raise ValueError("Pilot scored review is incomplete or unbound.")
-    for label, checkpoint in checkpoints.items():
+    for label, expected_binding in checkpoints.items():
         binding = bindings[label]
-        if (
-            not isinstance(binding, Mapping)
-            or _checkpoint_from_canonical_reference(
-                binding.get("path"), drive_dir=drive_dir,
-                checkpoint_root=checkpoint_root,
-            ) != checkpoint
-            or binding.get("size") != checkpoint.stat().st_size
-            or binding.get("sha256") != sha256_file(checkpoint)
-        ):
+        if not isinstance(binding, Mapping):
+            raise ValueError("Pilot scored review checkpoint binding mismatch.")
+        _, validated_binding = _validated_checkpoint_binding(
+            {"path": binding.get("path"), "binding": binding},
+            reference_key="path", binding_key="binding", drive_dir=drive_dir,
+            checkpoint_root=checkpoint_root, expected_stage="pilot",
+        )
+        if validated_binding != dict(expected_binding):
             raise ValueError("Pilot scored review checkpoint binding mismatch.")
     seen_review_ids: set[str] = set()
     for judgment in judgments:
@@ -1723,6 +1851,9 @@ def _pilot_colab_evidence(
     }
     artifacts: dict[str, Any] = {}
     expected_config_sha256: str | None = None
+    expected_artifact_identity: dict[str, str] | None = None
+    stage_bindings: dict[str, dict[str, object]] = {}
+    declared_pilot_bindings: list[dict[str, object]] = []
     checkpoint_root = evaluation_root.parent / "checkpoints"
     for gate, path in required.items():
         path = require_managed_path(
@@ -1766,6 +1897,16 @@ def _pilot_colab_evidence(
                 != manifest_payload.get("manifest_sha256")
             ):
                 raise ValueError("Pilot preflight manifest fingerprint mismatch.")
+            manifest_identity = manifest_payload.get("manifest_sha256")
+            if not isinstance(manifest_identity, str):
+                raise ValueError("Pilot preflight manifest identity is missing.")
+            expected_artifact_identity = {
+                "config_sha256": expected_config_sha256,
+                "tokenizer_sha256": tokenizer_sha256,
+                "dataset_manifest_sha256": sha256_file(manifest_path),
+                "dataset_manifest_identity_sha256": manifest_identity,
+                "build_identity_sha256": build_identity_sha256,
+            }
             shard_details = checks["shards"].get("details")
             if not isinstance(shard_details, Mapping):
                 raise ValueError("Pilot preflight shard fingerprints are missing.")
@@ -1795,14 +1936,42 @@ def _pilot_colab_evidence(
             artifacts["config"] = _file_fingerprint(
                 config_path, managed_root=drive_dir
             )
-        if gate in {"smoke", "pilot"} and "gate" not in payload:
-            checkpoint = _checkpoint_from_canonical_reference(
-                payload["checkpoint"], drive_dir=drive_dir,
-                checkpoint_root=checkpoint_root,
+        if gate in {"smoke", "pilot"}:
+            if "gate" not in payload:
+                if expected_artifact_identity is None:
+                    raise ValueError("Pilot checkpoint evidence has no artifact identity.")
+                _validate_artifact_identity(payload, expected_artifact_identity)
+            checkpoint, binding = _validated_checkpoint_binding(
+                payload, reference_key="checkpoint",
+                binding_key="checkpoint_binding", drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root, expected_stage=gate,
             )
+            stage_bindings[gate] = binding
+            if gate == "pilot":
+                raw_bindings = payload.get("checkpoint_bindings")
+                if not isinstance(raw_bindings, list) or not raw_bindings:
+                    raise ValueError("Pilot checkpoint snapshot set is missing.")
+                for raw_binding in raw_bindings:
+                    if not isinstance(raw_binding, Mapping):
+                        raise ValueError("Pilot checkpoint snapshot set is invalid.")
+                    _, validated = _validated_checkpoint_binding(
+                        {"path": raw_binding.get("path"), "binding": raw_binding},
+                        reference_key="path", binding_key="binding",
+                        drive_dir=drive_dir, checkpoint_root=checkpoint_root,
+                        expected_stage="pilot",
+                    )
+                    declared_pilot_bindings.append(validated)
+                if (
+                    len({sha256_json(row) for row in declared_pilot_bindings})
+                    != len(declared_pilot_bindings)
+                    or binding not in declared_pilot_bindings
+                ):
+                    raise ValueError("Pilot checkpoint snapshot set does not reconcile.")
             artifacts[f"{gate}_checkpoint"] = _file_fingerprint(
                 checkpoint, managed_root=drive_dir
             )
+    if stage_bindings.get("smoke") == stage_bindings.get("pilot"):
+        raise ValueError("Smoke and pilot must use distinct immutable checkpoint snapshots.")
     evaluation_files = _bounded_json_files(
         evaluation_root, managed_root=drive_dir, label="Pilot evaluation evidence"
     )
@@ -1819,10 +1988,19 @@ def _pilot_colab_evidence(
             tokenizer_sha256=tokenizer_sha256,
             build_identity_sha256=build_identity_sha256,
         )
+        _, evaluation_binding = _validated_checkpoint_binding(
+            payloads[explicit_path], reference_key="checkpoint",
+            binding_key="checkpoint_binding", drive_dir=drive_dir,
+            checkpoint_root=checkpoint_root, expected_stage="pilot",
+        )
+        if evaluation_binding != stage_bindings.get("pilot"):
+            raise ValueError("Pilot evaluation is not bound to the pilot snapshot.")
         evaluations = [_file_fingerprint(explicit_path, managed_root=drive_dir)]
     else:
         if expected_config_sha256 is None:
             raise ValueError("Pilot producer evaluation has no bound config fingerprint.")
+        if expected_artifact_identity is None:
+            raise ValueError("Pilot producer evaluation has no artifact identity.")
         base_paths = sorted(
             path for path in payloads
             if path.parent.parent == evaluation_root and path.name.endswith("_base.json")
@@ -1830,16 +2008,18 @@ def _pilot_colab_evidence(
         if not base_paths:
             raise ValueError("Pilot loss evaluation evidence is missing.")
         allowed: set[Path] = set()
-        checkpoints_by_prefix: dict[str, Path] = {}
+        checkpoints_by_prefix: dict[str, dict[str, object]] = {}
         evaluations = []
         session_root = base_paths[0].parent
         if any(path.parent != session_root for path in base_paths):
             raise ValueError("Pilot evaluation evidence spans multiple sessions.")
         for path in base_paths:
             payload = payloads[path]
-            checkpoint = _checkpoint_from_canonical_reference(
-                payload.get("checkpoint"), drive_dir=drive_dir,
-                checkpoint_root=checkpoint_root,
+            _validate_artifact_identity(payload, expected_artifact_identity)
+            checkpoint, binding = _validated_checkpoint_binding(
+                payload, reference_key="checkpoint",
+                binding_key="checkpoint_binding", drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root, expected_stage="pilot",
             )
             if (
                 payload.get("status") in {"fail", "failed", "error"}
@@ -1864,10 +2044,18 @@ def _pilot_colab_evidence(
             tasks = tasks_payload.get("tasks") if isinstance(tasks_payload, Mapping) else None
             if not isinstance(tasks, list) or not tasks:
                 raise ValueError("Pilot task evaluation lacks its checkpoint companion.")
+            _validate_artifact_identity(tasks_payload, expected_artifact_identity)
+            task_checkpoint, task_binding = _validated_checkpoint_binding(
+                tasks_payload, reference_key="checkpoint",
+                binding_key="checkpoint_binding", drive_dir=drive_dir,
+                checkpoint_root=checkpoint_root, expected_stage="pilot",
+            )
+            if task_checkpoint != checkpoint or task_binding != binding:
+                raise ValueError("Pilot task and loss checkpoint bindings differ.")
             for task in tasks:
                 _validate_task_result(task)
             fingerprint = _file_fingerprint(checkpoint, managed_root=drive_dir)
-            checkpoints_by_prefix[prefix] = checkpoint
+            checkpoints_by_prefix[prefix] = binding
             for evidence_path in (path, task_path):
                 evidence_fingerprint = _file_fingerprint(
                     evidence_path, managed_root=drive_dir
@@ -1883,9 +2071,24 @@ def _pilot_colab_evidence(
             comparison_path, comparison_payload, drive_dir=drive_dir,
             checkpoint_root=checkpoint_root,
             expected_config_sha256=expected_config_sha256,
+            expected_artifact_identity=expected_artifact_identity,
         )
-        if set(comparison_checkpoints.values()) != set(checkpoints_by_prefix.values()):
+        if {
+            sha256_json(binding) for binding in comparison_checkpoints.values()
+        } != {
+            sha256_json(binding) for binding in checkpoints_by_prefix.values()
+        }:
             raise ValueError("Pilot comparison checkpoint set does not match evaluations.")
+        if sha256_json(stage_bindings["pilot"]) not in {
+            sha256_json(binding) for binding in checkpoints_by_prefix.values()
+        }:
+            raise ValueError("Pilot evaluation does not include the selected pilot snapshot.")
+        if {
+            sha256_json(binding) for binding in declared_pilot_bindings
+        } != {
+            sha256_json(binding) for binding in checkpoints_by_prefix.values()
+        }:
+            raise ValueError("Pilot evaluation checkpoint set differs from pilot completion evidence.")
         allowed.add(comparison_path)
         for label in comparison_checkpoints:
             allowed.add(comparison_path.parent / f"checkpoints/{label}.json")
@@ -1910,6 +2113,7 @@ def _pilot_colab_evidence(
                 scored_path, payloads[scored_path],
                 comparison_path=comparison_path,
                 checkpoints=comparison_checkpoints,
+                expected_artifact_identity=expected_artifact_identity,
                 drive_dir=drive_dir,
                 checkpoint_root=checkpoint_root,
             )
@@ -1985,6 +2189,7 @@ def _pilot_reuse_evidence(
         dtype = np.dtype(DTYPES[PILOT_SHARD_DTYPE])
         seen_names: set[str] = set()
         token_sum = 0
+        document_sum = 0
         for shard_index, shard in enumerate(shards):
             if not isinstance(shard, Mapping):
                 raise ValueError("Pilot shard metadata entry is invalid.")
@@ -2005,10 +2210,13 @@ def _pilot_reuse_evidence(
                 raise ValueError("Pilot shard metadata paths must be unique safe filenames.")
             seen_names.add(relative_value)
             num_tokens = shard.get("num_tokens")
+            num_documents = shard.get("num_documents")
             byte_size = shard.get("byte_size")
             if (
                 type(num_tokens) is not int
                 or not 0 < num_tokens <= 2**63 - 1
+                or type(num_documents) is not int
+                or not 0 < num_documents <= 2**63 - 1
                 or type(byte_size) is not int
                 or not 0 < byte_size <= 2**63 - 1
                 or shard.get("index") != shard_index
@@ -2019,6 +2227,9 @@ def _pilot_reuse_evidence(
             if token_sum > (2**63 - 1) - num_tokens:
                 raise ValueError("Pilot shard token total exceeds the supported range.")
             token_sum += num_tokens
+            if document_sum > (2**63 - 1) - num_documents:
+                raise ValueError("Pilot shard document total exceeds the supported range.")
+            document_sum += num_documents
             shard_path = metadata_path.parent / Path(*relative.parts)
             fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
             referenced_shards.add(shard_path.resolve())
@@ -2039,10 +2250,9 @@ def _pilot_reuse_evidence(
             or total_tokens != token_sum
             or type(total_documents) is not int
             or total_documents < 1
+            or total_documents != document_sum
         ):
             raise ValueError("Pilot shard metadata totals do not reconcile.")
-        if expected_split == "pilot" and total_tokens != PILOT_TOKENS:
-            raise ValueError("Pilot shard metadata does not prove the exact canonical 20M target.")
         if expected_split == "validation" and total_tokens < 1:
             raise ValueError("Pilot validation shard metadata is empty.")
         split_totals[expected_split] = total_tokens
@@ -2058,14 +2268,21 @@ def _pilot_reuse_evidence(
     validation = manifest.get("validation")
     if (
         not isinstance(pilot_stage, Mapping)
-        or pilot_stage.get("requested_tokens") != split_totals["pilot"]
+        or pilot_stage.get("requested_tokens") != PILOT_TOKENS
         or type(pilot_stage.get("quota_tokens")) is not int
-        or pilot_stage["quota_tokens"] < split_totals["pilot"]
+        or pilot_stage["quota_tokens"] < PILOT_TOKENS
         or type(pilot_stage.get("documents")) is not int
         or pilot_stage["documents"] != split_documents["pilot"]
+        or pilot_stage["quota_tokens"] > (2**63 - 1) - pilot_stage["documents"]
+        or split_totals["pilot"]
+        != pilot_stage["quota_tokens"] + pilot_stage["documents"]
         or not isinstance(validation, Mapping)
+        or type(validation.get("quota_tokens")) is not int
         or type(validation.get("documents")) is not int
         or validation["documents"] != split_documents["validation"]
+        or validation["quota_tokens"] > (2**63 - 1) - validation["documents"]
+        or split_totals["validation"]
+        != validation["quota_tokens"] + validation["documents"]
     ):
         raise ValueError("Pilot manifest quotas and split metadata do not reconcile.")
     gates = _pilot_colab_evidence(

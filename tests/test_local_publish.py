@@ -24,6 +24,27 @@ def _publisher(local: Path, destination: Path, **kwargs: object) -> DrivePublish
     )
 
 
+def _journal_publication_state(journal: BuildJournal) -> dict[str, object]:
+    return {
+        "artifacts": tuple(
+            tuple(row) for row in journal.connection.execute(
+                "SELECT * FROM artifacts ORDER BY unit_id, relative_path"
+            )
+        ),
+        "units": tuple(
+            tuple(row) for row in journal.connection.execute(
+                "SELECT * FROM units ORDER BY unit_id"
+            )
+        ),
+        "metrics": journal.publication_metrics(),
+    }
+
+
+def _file_state(path: Path) -> tuple[bytes, int, int]:
+    stat = path.stat()
+    return path.read_bytes(), stat.st_size, stat.st_mtime_ns
+
+
 def test_capacity_pauses_before_free_floor(tmp_path: Path):
     publisher = DrivePublisher(
         local_root=tmp_path / "local",
@@ -270,18 +291,24 @@ def test_publish_refuses_legacy_final_without_prepared_receipt_before_mutation(
     with BuildJournal.open(journal_path, _identity()) as journal:
         journal.commit_unit(_unit(artifacts=({"path": artifact.name, "size": 10,
             "sha256": hashlib.sha256(b"committed\n").hexdigest()},)))
-        journal.record_destination("fit-00000", artifact.name, "text/fit_00000.jsonl")
         final = destination / "text/fit_00000.jsonl"
         final.parent.mkdir(parents=True)
         final.write_bytes(b"committed\n")
+        before_journal = _journal_publication_state(journal)
+        before_source = _file_state(artifact)
+        before_final = _file_state(final)
 
         with pytest.raises(ValueError, match="prepared publication receipt"):
             _publisher(local, destination, journal=journal).publish(
                 artifact, "text/fit_00000.jsonl", unit_id="fit-00000"
             )
 
-        assert artifact.is_file()
-        assert final.read_bytes() == b"committed\n"
+        assert _file_state(artifact) == before_source
+        assert _file_state(final) == before_final
+        assert _journal_publication_state(journal) == before_journal
+        assert journal.artifact("fit-00000", artifact.name)[
+            "destination_relative_path"
+        ] is None
         assert len(journal.unpublished_artifacts()) == 1
         assert journal.publication_metrics() == {
             "method": "publisher_publish_wall_time",
@@ -308,10 +335,14 @@ def test_fresh_reconcile_refuses_legacy_final_without_prepared_receipt(
     final.write_bytes(b"committed\n")
 
     with BuildJournal.open(journal_path, _identity()) as journal:
+        before_journal = _journal_publication_state(journal)
+        before_source = _file_state(artifact)
+        before_final = _file_state(final)
         with pytest.raises(ValueError, match="prepared publication receipt"):
             _publisher(local, destination, journal=journal).reconcile()
-        assert artifact.is_file()
-        assert final.read_bytes() == b"committed\n"
+        assert _file_state(artifact) == before_source
+        assert _file_state(final) == before_final
+        assert _journal_publication_state(journal) == before_journal
         assert len(journal.unpublished_artifacts()) == 1
         assert journal.publication_metrics()["artifacts"] == 0
 
