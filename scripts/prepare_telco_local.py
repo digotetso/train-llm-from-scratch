@@ -1530,6 +1530,12 @@ def _checkpoint_from_canonical_reference(
     reference = PurePosixPath(value)
     if ".." in reference.parts:
         raise ValueError("Pilot checkpoint reference is unsafe.")
+    drive_dir = require_managed_path(
+        drive_dir, drive_dir, kind="directory", allow_missing=False
+    )
+    checkpoint_root = require_managed_path(
+        drive_dir, checkpoint_root, kind="directory", allow_missing=False
+    )
     local_candidate = Path(value)
     if local_candidate.is_absolute():
         try:
@@ -1539,19 +1545,29 @@ def _checkpoint_from_canonical_reference(
             else:
                 raise ValueError
         except (OSError, ValueError):
-            marker_indexes = [
+            selected_root_parts = PurePosixPath(
+                checkpoint_root.relative_to(drive_dir).as_posix()
+            ).parts
+            selected_root_indexes = [
+                index
+                for index in range(len(reference.parts) - len(selected_root_parts))
+                if reference.parts[index : index + len(selected_root_parts)]
+                == selected_root_parts
+                and len(reference.parts) == index + len(selected_root_parts) + 1
+            ]
+            recipe_indexes = [
                 index for index, part in enumerate(reference.parts) if part == "recipes"
             ]
-            if len(marker_indexes) != 1:
+            if len(selected_root_indexes) == 1:
+                candidate = checkpoint_root / reference.parts[-1]
+            elif len(recipe_indexes) == 1:
+                candidate = drive_dir / Path(*reference.parts[recipe_indexes[0] :])
+            else:
                 raise ValueError("Pilot checkpoint reference is outside the canonical namespace.")
-            candidate = drive_dir / Path(*reference.parts[marker_indexes[0]:])
     else:
         candidate = drive_dir / Path(*reference.parts)
     candidate = require_managed_path(
         drive_dir, candidate, kind="file", allow_missing=False
-    )
-    checkpoint_root = require_managed_path(
-        drive_dir, checkpoint_root, kind="directory", allow_missing=False
     )
     if candidate.parent != checkpoint_root:
         raise ValueError("Pilot checkpoint reference is outside the selected pilot namespace.")
@@ -1869,7 +1885,16 @@ def _pilot_colab_evidence(
         artifacts[gate] = _file_fingerprint(path, managed_root=drive_dir)
         if gate == "preflight" and "gate" not in payload:
             checks = {str(check["name"]): check for check in payload["checks"]}
-            config_path = gate_root.parents[1] / "prepared/pilot/config.yaml"
+            operator_gate_root = (
+                _operator_evidence_root(drive_dir, tokenizer_sha256)
+                / "pilot/colab"
+            )
+            prebuilt_producer = gate_root == operator_gate_root
+            config_path = (
+                gate_root / "config.yaml"
+                if prebuilt_producer
+                else gate_root.parents[1] / "prepared/pilot/config.yaml"
+            )
             expected_config_sha256 = sha256_text(
                 config_to_yaml(load_config(config_path))
             )
@@ -1886,7 +1911,15 @@ def _pilot_colab_evidence(
                 or tokenizer_details.get("vocab_size") != REQUIRED_VOCAB_SIZE
             ):
                 raise ValueError("Pilot preflight tokenizer fingerprint mismatch.")
-            manifest_path = gate_root.parents[1] / "corpora/pilot/manifest.json"
+            manifest_path = (
+                drive_dir
+                / "corpora"
+                / "pilot"
+                / tokenizer_sha256
+                / "manifest.json"
+                if prebuilt_producer
+                else gate_root.parents[1] / "corpora/pilot/manifest.json"
+            )
             manifest_payload = _load_json_object(
                 manifest_path, "Pilot preflight corpus manifest"
             )
@@ -1910,7 +1943,11 @@ def _pilot_colab_evidence(
             shard_details = checks["shards"].get("details")
             if not isinstance(shard_details, Mapping):
                 raise ValueError("Pilot preflight shard fingerprints are missing.")
-            shard_root = gate_root.parents[1] / "prepared/pilot/shards"
+            shard_root = (
+                manifest_path.parent
+                if prebuilt_producer
+                else gate_root.parents[1] / "prepared/pilot/shards"
+            )
             for split in ("pilot", "validation"):
                 metadata = _load_json_object(
                     shard_root / f"{split}_metadata.json",

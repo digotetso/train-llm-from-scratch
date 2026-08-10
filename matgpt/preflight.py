@@ -273,11 +273,23 @@ def _check_chunked_dataset_manifest(
         for chunk in chunks:
             if not isinstance(chunk, dict):
                 raise ValueError("raw chunk evidence must be an object")
-            # Validate containment without hashing multi-gigabyte normalized text.
+            expected_size = chunk.get("size")
+            expected_sha256 = chunk.get("sha256")
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size < 0
+                or not isinstance(expected_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+            ):
+                raise ValueError("raw chunk fingerprint evidence is invalid")
+            # A Colab prebuilt restore intentionally omits normalized text. The
+            # final manifest already binds each raw chunk's safe path, size, and
+            # SHA while training consumes only the separately verified shards.
             chunk_path = _safe_relative_artifact(
-                normalized, chunk.get("path"), allow_missing=False
+                normalized, chunk.get("path"), allow_missing=True
             )
-            if chunk_path.stat().st_size != int(chunk.get("size", -1)):
+            if chunk_path.exists() and chunk_path.stat().st_size != expected_size:
                 raise ValueError(f"raw chunk size mismatch: {chunk_path}")
         metadata_record = split_metadata.get(split)
         _metadata_path, metadata = _verified_json_artifact(

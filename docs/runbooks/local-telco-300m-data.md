@@ -5,6 +5,16 @@ Mac. The authoritative entry point is `scripts/prepare_telco_local.py`; the
 local notebook only assembles that command and streams its output. Neither
 surface imports or starts model pretraining.
 
+The responsibility boundary is fixed: the Mac creates and publishes immutable
+tokenizer/corpus artifacts, while Colab restores those artifacts and trains the
+model. Follow this order without skipping a review gate:
+
+```text
+tokenizer_sample -> tokenizer_candidate -> tokenizer_compare -> tokenizer_select
+-> pilot_refresh -> Colab smoke/pilot/evaluate -> full_calibration
+-> review/accept -> full_resume -> Colab prepare/preflight/full
+```
+
 ## Prerequisites and current machine evidence
 
 Before starting, install the repository environment, authenticate Hugging Face
@@ -419,6 +429,54 @@ The reason is written to the selected-tokenizer operator evidence namespace;
 it never changes build identity. A final `manifest.json` appears only after all
 12B quota, audit, checksum, and publication gates pass. This CLI never starts
 pretraining.
+
+## Stage 8: restore finalized shards in Colab
+
+After `pilot_refresh`, use the guarded Telco Colab notebook with:
+
+```python
+PREPARED_DATA_MODE = "prebuilt_shards"
+DATA_PLAN = "pilot"  # use "full" only after full_resume completes
+RUN_STAGE = "prepare"
+FULL_APPROVED = False
+```
+
+Prebuilt mode reads the immutable selection and comparison, resolves the exact
+selected tokenizer, and requires the selected-tokenizer `pilot_refresh.json`.
+It verifies that report's checksum and current selection/comparison file
+fingerprints. It then requires a final `complete: true`, `status: complete`
+`local_corpus` v2 manifest under
+`corpora/<pilot|full>/<selected-tokenizer-sha256>/`. A calibration-only full
+namespace has no final manifest and is therefore not training eligible.
+
+Before copying, the notebook verifies the manifest/build/content identities,
+current source-registry, plan, and contamination fingerprints, quota/license/
+quality/overlap audits, calibration evidence, selected-tokenizer checksum,
+split metadata, safe relative paths, `uint16`, EOS behavior, and every shard's
+size and SHA-256. It copies only the selected tokenizer, manifest/evidence,
+metadata, and token shards into the fingerprinted `/content/matgpt_work/...`
+runtime tree. Normalized JSONL remains on Drive. The prebuilt branch never runs
+tokenizer fitting, corpus audit re-tokenization, or
+`scripts/tokenize_and_shard.py`.
+
+Pilot checkpoints and gate evidence are written to
+`evidence/tokenizers/<selected-tokenizer-sha256>/pilot/colab/`; full-run output
+uses the corresponding `full/colab/` namespace. Mac-side status checks rebase
+Colab mount paths only within that exact selected checkpoint root and reverify
+the bound bytes.
+
+The existing supported-GPU preflight, batch-memory benchmark, smoke, pilot,
+evaluation, and full gates still run. On a new Colab runtime, rerunning all
+cells for the selected stage restores and re-verifies the immutable artifacts
+again. Keep `PREPARED_DATA_MODE = "legacy_jsonl"` only for the preserved older
+Colab preparation workflow.
+
+For full training, use `DATA_PLAN = "full"` only after `full_resume` has written
+the final manifest and `status` reports both full completion and the matching
+selected-tokenizer pilot-refresh gate. The notebook still stops unless the
+operator manually sets `FULL_APPROVED = True` after reviewing pilot and full
+preflight/benchmark evidence. Never use the approval flag to bypass a missing
+manifest, changed path, checksum, recipe fingerprint, or pending pilot gate.
 
 ## Progress, disk pressure, and recovery
 
