@@ -1379,6 +1379,20 @@ def _pilot_recipe_sha256() -> str:
     return digest.hexdigest()
 
 
+def _canonical_pilot_audit_plan() -> dict:
+    plan = {
+        "stage": "pilot",
+        "items": [{
+            "id": "canonical-source",
+            "source_id": "canonical-source",
+            "bucket_id": None,
+            "token_quota": 20_000_000,
+        }],
+    }
+    plan["plan_sha256"] = sha256_json(plan)
+    return plan
+
+
 def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     recipe_sha256 = _pilot_recipe_sha256()
     recipe_root = drive_dir / "recipes" / recipe_sha256[:12]
@@ -1390,7 +1404,7 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     corpus_manifest = recipe_root / "corpora" / "pilot" / "manifest.json"
     corpus_manifest.parent.mkdir(parents=True)
     pilot_stage = {
-        "plan_sha256": "9" * 64,
+        "plan_sha256": _canonical_pilot_audit_plan()["plan_sha256"],
         "requested_tokens": 20_000_000,
         "estimated_tokens": 20_000_003,
         "quota_tokens": 20_000_003,
@@ -1594,16 +1608,7 @@ def _write_valid_preserved_pilot_evidence(
         quota_audit = audit_token_quotas(
             [audit_input],
             recipe_root / "prepared/pilot/tokenizer",
-            [{
-                "stage": "pilot",
-                "plan_sha256": "9" * 64,
-                "items": [{
-                    "id": "canonical-source",
-                    "source_id": "canonical-source",
-                    "bucket_id": None,
-                    "token_quota": 20_000_000,
-                }],
-            }],
+            [_canonical_pilot_audit_plan()],
             tolerance=0.03,
             corpus_manifest_path=manifest_path,
         )

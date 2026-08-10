@@ -169,3 +169,33 @@ AST parsing), all three changed production Python modules compiled in memory,
 and `git diff --check` was clean. No real Drive, network, corpus, tokenizer,
 GPU, training, or evaluation operation ran. The accepted dirfd/openat residual
 is unchanged.
+
+## Canonical plan self-identity correction
+
+Commit parent: `dbdede18864eca5e3951c78f04bb3af959c703f1`
+
+Canonical quota audits now reject stale or malformed declared plan identities at
+the function boundary, before tokenizer loading, manifest comparison, quota
+counting, or CLI output creation. For every supplied canonical plan the declared
+`plan_sha256` must be strict lowercase 64-hex and equal
+`sha256_json(plan_without_plan_sha256)`, exactly matching
+`build_mixture_plan` production serialization. The legacy no-manifest API keeps
+its intended tolerance compatibility.
+
+Real function and CLI negatives independently mutate quota and policy fields
+while retaining the old declaration, and replace the declaration with a
+malformed value. Each fails before the CLI output exists. A plan emitted by the
+production mixture planner passes canonical audit generation.
+
+```text
+Identity RED: 4 failed in 3.71s
+Focused identity GREEN: 7 passed in 4.02s
+Complete producer/consumer/notebook group: 212 passed in 47.06s
+Adjacent producer/consumer/notebook/Task3 suite: 351 passed in 104.44s
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -o addopts='' -p no:cacheprovider
+731 passed, 14 skipped in 128.20s
+```
+
+All three notebook JSON documents and 31 Python code cells parsed, the three
+changed production modules compiled in memory, and `git diff --check` was clean.
+No real operational work ran; the accepted dirfd/openat residual is unchanged.

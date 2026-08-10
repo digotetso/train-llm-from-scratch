@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 import tempfile
 from collections import Counter
@@ -30,6 +31,7 @@ DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
 QuotaTokenCounter = Callable[[Mapping[str, Any]], int]
 QUOTA_AUDIT_VERSION = 2
 QUOTA_AUDIT_METHOD = "tokenizer_exact_whole_document_boundary_v1"
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class EmptySourceTextError(ValueError):
@@ -878,6 +880,8 @@ def audit_token_quotas(
 ) -> dict[str, Any]:
     """Audit tokenizer quotas while preserving whole-document boundaries."""
 
+    if corpus_manifest_path is not None:
+        _validate_canonical_plan_identities(plans)
     if not 0 <= tolerance < 1:
         raise ValueError("tolerance must be in [0, 1).")
     plan_by_stage = {str(plan["stage"]): plan for plan in plans}
@@ -1110,3 +1114,24 @@ def _canonical_quota_audit_identity(
         "plan_sha256": plan_sha256,
         "stage_plan_sha256s": dict(sorted(stage_plan_sha256s.items())),
     }
+
+
+def _validate_canonical_plan_identities(
+    plans: Sequence[Mapping[str, Any]],
+) -> None:
+    """Require the exact self-hash emitted by ``build_mixture_plan``."""
+
+    for index, plan in enumerate(plans):
+        if not isinstance(plan, Mapping):
+            raise ValueError(f"Canonical quota audit plan {index} must be a mapping.")
+        declared = plan.get("plan_sha256")
+        unsigned = dict(plan)
+        unsigned.pop("plan_sha256", None)
+        if (
+            not isinstance(declared, str)
+            or _SHA256_PATTERN.fullmatch(declared) is None
+            or declared != sha256_json(unsigned)
+        ):
+            raise ValueError(
+                f"Canonical quota audit plan {index} has an invalid SHA-256 identity."
+            )

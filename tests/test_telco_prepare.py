@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 
 from matgpt.data.quality import DataQualityPolicy, QualityFilter
 from matgpt.config import clone_config, load_config
+from matgpt.data.mixture import build_mixture_plan, load_mixture_config
 from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.data.sources import load_source_registry
 from matgpt.data.telco_prepare import (
@@ -378,6 +380,8 @@ def test_audit_producer_emits_canonical_manifest_plan_and_boundary_identity(
     tokenizer_dir = tmp_path / "tokenizer"
     tokenizer_sha256 = _write_word_tokenizer(tokenizer_dir)
     plan = _single_general_plan(token_quota=6)
+    plan.pop("plan_sha256")
+    plan["plan_sha256"] = sha256_json(plan)
     output = tmp_path / "corpus"
     prepare_telco_corpora(
         registry=registry,
@@ -425,6 +429,8 @@ def test_canonical_audit_rejects_tolerated_undershoot_without_document_boundary(
     tokenizer_dir = tmp_path / "tokenizer"
     _write_word_tokenizer(tokenizer_dir)
     plan = _single_general_plan(token_quota=8)
+    plan.pop("plan_sha256")
+    plan["plan_sha256"] = sha256_json(plan)
     output = tmp_path / "corpus"
     prepare_telco_corpora(
         registry=registry,
@@ -459,6 +465,135 @@ def test_canonical_audit_rejects_tolerated_undershoot_without_document_boundary(
             tolerance=0.5,
             corpus_manifest_path=output / "manifest.json",
         )
+
+
+def test_canonical_audit_accepts_plan_from_production_planner(tmp_path: Path):
+    registry = load_source_registry(REGISTRY_PATH)
+    plan = build_mixture_plan(
+        registry,
+        load_mixture_config("configs/data/telco_300m_mixture.yaml"),
+        "pilot",
+        total_tokens=20_000,
+    )
+    unsigned_plan = dict(plan)
+    declared_plan_sha256 = unsigned_plan.pop("plan_sha256")
+    assert declared_plan_sha256 == sha256_json(unsigned_plan)
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_sha256 = _write_word_tokenizer(tokenizer_dir)
+    input_path = tmp_path / "pilot.jsonl"
+    input_path.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "stage": "pilot",
+                    "source_id": item["source_id"],
+                    "bucket_id": item.get("bucket_id"),
+                    "text": " ".join(["a"] * int(item["token_quota"])),
+                }
+            )
+            + "\n"
+            for item in plan["items"]
+        ),
+        encoding="utf-8",
+    )
+    stage = {
+        "plan_sha256": plan["plan_sha256"],
+        "requested_tokens": 20_000,
+        "quota_tokens": 20_000,
+        "items": {
+            item["id"]: {
+                "requested_tokens": item["token_quota"],
+                "quota_tokens": item["token_quota"],
+            }
+            for item in plan["items"]
+        },
+    }
+    manifest = {
+        "version": 1,
+        "complete": True,
+        "quota_counting": {
+            "method": "tokenizer_exact",
+            "tokenizer_sha256": tokenizer_sha256,
+        },
+        "stages": {"pilot": stage},
+    }
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = audit_token_quotas(
+        [input_path],
+        tokenizer_dir,
+        [plan],
+        tolerance=0.0,
+        corpus_manifest_path=manifest_path,
+    )
+
+    assert report["passed"] is True
+    assert report["stage_plan_sha256s"] == {"pilot": plan["plan_sha256"]}
+
+
+@pytest.mark.parametrize("mutation", ("quota", "policy", "malformed_sha"))
+def test_canonical_audit_function_and_cli_reject_stale_or_malformed_plan_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    _write_word_tokenizer(tokenizer_dir)
+    plan = _single_general_plan(token_quota=8)
+    plan.pop("plan_sha256")
+    plan["plan_sha256"] = sha256_json(plan)
+    output = tmp_path / "corpus"
+    prepare_telco_corpora(
+        registry=registry,
+        plans=[plan],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+        buffer_size=1,
+        dataset_loader=lambda _name, **_kwargs: iter(
+            ({"text": "a b c one"}, {"text": "a b c two"})
+        ),
+        tokenizer_dir=tokenizer_dir,
+    )
+    changed_plan = json.loads(json.dumps(plan))
+    if mutation == "quota":
+        changed_plan["items"][0]["token_quota"] += 1
+    elif mutation == "policy":
+        changed_plan["quota_tolerance"] = 0.5
+    else:
+        changed_plan["plan_sha256"] = "NOT-A-LOWERCASE-SHA256"
+
+    with pytest.raises(ValueError, match="plan.*SHA-256|plan identity"):
+        audit_token_quotas(
+            [output / "pilot.jsonl"],
+            tokenizer_dir,
+            [changed_plan],
+            tolerance=0.5,
+            corpus_manifest_path=output / "manifest.json",
+        )
+
+    from scripts import audit_telco_corpus
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(changed_plan), encoding="utf-8")
+    audit_output = tmp_path / "quota_audit.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit_telco_corpus.py",
+            "--input", str(output / "pilot.jsonl"),
+            "--plan", str(plan_path),
+            "--tokenizer-dir", str(tokenizer_dir),
+            "--corpus-manifest", str(output / "manifest.json"),
+            "--tolerance", "0.5",
+            "--output", str(audit_output),
+        ],
+    )
+    with pytest.raises(ValueError, match="plan.*SHA-256|plan identity"):
+        audit_telco_corpus.main()
+    assert not audit_output.exists()
 
 
 def test_exact_quota_compatibility_rejects_changed_tokenizer_or_plan(tmp_path: Path):
