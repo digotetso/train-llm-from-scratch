@@ -3268,6 +3268,65 @@ def test_pilot_reuse_accepts_current_repo_legacy_producer_schemas(
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 
 
+def test_pilot_reuse_accepts_verified_legacy_shards_and_preflight_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    shard_root = recipe_root / "prepared/pilot/shards"
+    legacy_metrics = {
+        "pilot": {"eos_count": 2, "maximum_id": 2},
+        "validation": {"eos_count": 1, "maximum_id": 2},
+    }
+    for split in legacy_metrics:
+        metadata_path = shard_root / f"{split}_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        for shard in metadata["shards"]:
+            shard["path"] = (
+                "/content/matgpt_work/matgpt_telco_300m/legacy/shards/"
+                + Path(shard["path"]).name
+            )
+            shard.pop("byte_size")
+        metadata.update({
+            "input_path": f"/content/drive/MyDrive/{split}.jsonl",
+            "tokenizer_dir": "/content/matgpt_work/legacy/tokenizer",
+        })
+        metadata.pop("metadata_sha256")
+        metadata["metadata_sha256"] = sha256_json(metadata)
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    preflight_path = recipe_root / "evidence/pilot/preflight.json"
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    shard_check = next(
+        check for check in preflight["checks"] if check["name"] == "shards"
+    )
+    shard_check["details"] = {
+        split: {
+            "total_tokens": json.loads(
+                (shard_root / f"{split}_metadata.json").read_text(encoding="utf-8")
+            )["total_tokens"],
+            **metrics,
+        }
+        for split, metrics in legacy_metrics.items()
+    }
+    preflight_path.write_text(json.dumps(preflight), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 0
+    report = json.loads(
+        prepare_telco_local._pilot_refresh_path(
+            drive_dir, selected_sha256
+        ).read_text(encoding="utf-8")
+    )
+    assert report["action"] == "reuse"
+    assert report["refreshed_pilot_gates_passed"] is True
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -3401,7 +3460,7 @@ def test_pilot_reuse_requires_exact_whole_document_quota_audit(
     "mutation",
     ("claimed_twenty_million_one_token", "swapped_splits", "duplicate_shard",
      "missing_shard", "traversal", "bad_dtype", "bad_byte_size", "bad_sha",
-     "totals_mismatch", "token_outside_vocab"),
+     "totals_mismatch", "token_outside_vocab", "legacy_wrong_absolute"),
 )
 def test_pilot_reuse_rejects_false_exact_shard_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
@@ -3445,6 +3504,9 @@ def test_pilot_reuse_rejects_false_exact_shard_proof(
         pilot["shards"][0]["sha256"] = "0" * 64
     elif mutation == "totals_mismatch":
         pilot["total_tokens"] -= 1
+    elif mutation == "legacy_wrong_absolute":
+        pilot["shards"][0]["path"] = "/content/work/shards/not-pilot.bin"
+        pilot["shards"][0].pop("byte_size")
     else:
         shard_path = shard_root / pilot["shards"][0]["path"]
         with shard_path.open("r+b") as handle:
