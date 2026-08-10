@@ -207,6 +207,10 @@ now-absent canonical destination. Never overwrite files in place.
 Locate the preserved pilot tokenizer from the canonical existing recipe
 namespace, `recipes/<recipe-id>/prepared/pilot/tokenizer`. Comparison also
 requires `recipes/<recipe-id>/evidence/pilot/tokenizer_provenance.json`.
+For a preserved pilot created before this evidence file existed, add
+`--migrate-legacy-pilot-provenance` once. The migration is explicit, validates
+the canonical recipe, pilot manifest checksum, and tokenizer fingerprint, and
+creates the evidence file exclusively; it never overwrites existing evidence.
 Compare both tokenizers against the same verified sample manifest; the
 evaluation API selects every holdout chunk in manifest order, hashes the bytes
 it actually consumes, and verifies all digests and counts.
