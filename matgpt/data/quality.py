@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from matgpt.data.contamination import build_contamination_matcher, pattern_fingerprint
 from matgpt.data.normalize import normalize_text
 
 
@@ -62,8 +63,18 @@ class DataQualityPolicy:
 
 
 class QualityFilter:
-    def __init__(self, policy: DataQualityPolicy) -> None:
+    def __init__(
+        self,
+        policy: DataQualityPolicy,
+        contamination_matcher=None,
+        *,
+        track_seen_hashes: bool = True,
+    ) -> None:
         self.policy = policy
+        self.track_seen_hashes = track_seen_hashes
+        self.contamination_matcher = contamination_matcher or build_contamination_matcher(
+            policy.contamination_patterns
+        )
 
         # Start with an empty collection of seen document hashes.
         self.seen_hashes: set[str] = set()
@@ -89,15 +100,19 @@ class QualityFilter:
             return "too_long"
 
         # Is exact deduplication enabled, and have we seen this hash?
-        if self.policy.exact_dedup and record["text_sha256"] in self.seen_hashes:
-                # Reject this document as an exact duplicate.
+        if (
+            self.policy.exact_dedup
+            and self.track_seen_hashes
+            and record["text_sha256"] in self.seen_hashes
+        ):
+            # Reject this document as an exact duplicate.
             return "duplicate_exact"
 
         # Convert document text to a capitalization-independent form.
         folded = text.casefold()
 
         # Check whether any known benchmark text appears inside it.
-        if any(pattern in folded for pattern in self.policy.contamination_patterns):
+        if self.contamination_matcher.contains(folded):
             return "benchmark_contamination"
         return None
 
@@ -109,7 +124,7 @@ class QualityFilter:
             self.rejection_reasons[reason] += 1
             return False
         self.accepted_documents += 1
-        if self.policy.exact_dedup:
+        if self.policy.exact_dedup and self.track_seen_hashes:
             # Remember this document's fingerprint.
             self.seen_hashes.add(record["text_sha256"])
         return True
@@ -133,6 +148,10 @@ class QualityFilter:
             "max_chars": self.policy.max_chars,
             "exact_dedup": self.policy.exact_dedup,
             "contamination_patterns": len(self.policy.contamination_patterns),
+            "contamination_engine": self.contamination_matcher.engine,
+            "contamination_patterns_sha256": pattern_fingerprint(
+                self.policy.contamination_patterns
+            ),
             "total_documents": self.total_documents,
             "accepted_documents": self.accepted_documents,
             "rejected_documents": self.rejected_documents,

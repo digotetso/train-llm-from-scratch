@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Mapping
 
 import numpy as np
 import torch
+
+from matgpt.data.shard import resolve_shard_artifact_path
+from matgpt.utils.hashing import sha256_file, sha256_json
+from matgpt.utils.paths import require_managed_path
 
 
 NUMPY_DTYPES = {
@@ -39,24 +43,54 @@ class PackedTokenDataset:
         self.weights = weights / weights.sum()
 
     @classmethod
-    def from_metadata(cls, metadata_path: str | Path, context_length: int, seed: int = 42) -> "PackedTokenDataset":
+    def from_metadata(
+        cls,
+        metadata_path: str | Path,
+        context_length: int,
+        seed: int = 42,
+        *,
+        metadata_root: str | Path | None = None,
+        finalized_root: str | Path | None = None,
+        finalized_artifact: Mapping[str, object] | None = None,
+    ) -> "PackedTokenDataset":
         # Read the shard metadata file.
-        metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+        metadata_file, metadata = load_verified_shard_metadata(
+            metadata_path,
+            metadata_root=metadata_root,
+            finalized_root=finalized_root,
+            finalized_artifact=finalized_artifact,
+        )
 
         # Find out whether the token IDs use uint16 or uint32.
         dtype = NUMPY_DTYPES[metadata["dtype"]]
 
         # creates a memory map:
-        shards = [
-            PackedShard(
-                path=Path(shard["path"]),
-                num_tokens=int(shard["num_tokens"]),
-
-                # Make the binary file accessible like a NumPy array.
-                data=np.memmap(shard["path"], mode="r", dtype=dtype),
+        shards = []
+        for shard in metadata["shards"]:
+            path = resolve_shard_artifact_path(
+                metadata_file,
+                shard.get("path"),
+                shard_root=metadata_root,
             )
-            for shard in metadata["shards"]
-        ]
+            expected_tokens = int(shard["num_tokens"])
+            expected_size = expected_tokens * np.dtype(dtype).itemsize
+            if path.stat().st_size != expected_size:
+                raise ValueError(
+                    f"shard size mismatch: path={path} "
+                    f"observed={path.stat().st_size} expected={expected_size}"
+                )
+            expected_sha256 = shard.get("sha256")
+            if not isinstance(expected_sha256, str) or sha256_file(path) != expected_sha256:
+                raise ValueError(f"shard SHA-256 mismatch: {path}")
+            shards.append(
+                PackedShard(
+                    path=path,
+                    num_tokens=expected_tokens,
+
+                    # Make the binary file accessible like a NumPy array.
+                    data=np.memmap(path, mode="r", dtype=dtype),
+                )
+            )
         return cls(shards=shards, context_length=context_length, seed=seed)
 
 # batch_size means:
@@ -100,3 +134,127 @@ class PackedTokenDataset:
 
 def metadata_path_for_split(shard_dir: str | Path, split: str) -> Path:
     return Path(shard_dir) / f"{split}_metadata.json"
+
+
+def load_verified_shard_metadata(
+    metadata_path: str | Path,
+    *,
+    metadata_root: str | Path | None = None,
+    finalized_root: str | Path | None = None,
+    finalized_artifact: Mapping[str, object] | None = None,
+    require_internal_fingerprint: bool = False,
+) -> tuple[Path, dict[str, Any]]:
+    """Load shard metadata and optionally bind it to final manifest evidence."""
+
+    metadata_file = Path(metadata_path)
+    configured_root = (
+        Path(metadata_root) if metadata_root is not None else metadata_file.parent
+    )
+    configured_root = require_managed_path(
+        configured_root, configured_root, kind="directory", allow_missing=False
+    )
+    metadata_file = require_managed_path(
+        configured_root, metadata_file, kind="file", allow_missing=False
+    )
+
+    if finalized_artifact is not None:
+        if finalized_root is None:
+            raise ValueError("finalized_root is required for finalized manifest evidence")
+        artifact_path = finalized_artifact.get("path")
+        if not isinstance(artifact_path, str):
+            raise ValueError("finalized manifest metadata path must be a safe relative path")
+        relative = PurePosixPath(artifact_path)
+        if (
+            not artifact_path
+            or "\\" in artifact_path
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or str(relative) != artifact_path
+        ):
+            raise ValueError("finalized manifest metadata path must be a safe relative path")
+        evidence_root = Path(finalized_root)
+        evidence_root = require_managed_path(
+            evidence_root, evidence_root, kind="directory", allow_missing=False
+        )
+        finalized_file = require_managed_path(
+            evidence_root,
+            evidence_root / Path(*relative.parts),
+            kind="file",
+            allow_missing=False,
+        )
+        if metadata_file != finalized_file:
+            raise ValueError(
+                "configured shard metadata is not the file recorded by the finalized manifest"
+            )
+        expected_size = finalized_artifact.get("size")
+        if (
+            not isinstance(expected_size, int)
+            or isinstance(expected_size, bool)
+            or metadata_file.stat().st_size != expected_size
+        ):
+            raise ValueError(
+                "configured shard metadata size does not match the finalized manifest"
+            )
+        expected_sha256 = finalized_artifact.get("sha256")
+        if (
+            not isinstance(expected_sha256, str)
+            or sha256_file(metadata_file) != expected_sha256
+        ):
+            raise ValueError(
+                "configured shard metadata SHA-256 does not match the finalized manifest"
+            )
+
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    stored_hash = metadata.get("metadata_sha256")
+    if (
+        stored_hash is not None
+        or finalized_artifact is not None
+        or require_internal_fingerprint
+    ):
+        unsigned = dict(metadata)
+        unsigned.pop("metadata_sha256", None)
+        if not isinstance(stored_hash, str) or stored_hash != sha256_json(unsigned):
+            raise ValueError(
+                f"{metadata_file.name} metadata_sha256 does not match metadata content"
+            )
+    if (
+        finalized_artifact is not None
+        and finalized_artifact.get("metadata_sha256") != stored_hash
+    ):
+        raise ValueError(
+            "configured shard metadata internal fingerprint does not match the "
+            "finalized manifest"
+        )
+    return metadata_file, metadata
+
+
+def finalized_split_metadata_artifacts(
+    manifest_path: str | Path,
+    splits: tuple[str, ...],
+) -> tuple[Path, dict[str, Mapping[str, object]]] | None:
+    """Return manifest-bound metadata evidence for chunked training inputs."""
+
+    path = Path(manifest_path)
+    if not path.exists():
+        return None
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("storage_format") != "chunked_prebuilt_v1":
+        return None
+    unsigned = dict(manifest)
+    stored_hash = unsigned.pop("manifest_sha256", None)
+    if not isinstance(stored_hash, str) or stored_hash != sha256_json(unsigned):
+        raise ValueError("finalized dataset manifest checksum does not match its content")
+    if manifest.get("complete") is not True or manifest.get("status") != "complete":
+        raise ValueError("finalized dataset manifest is not complete")
+    records = manifest.get("split_metadata")
+    if not isinstance(records, dict):
+        raise ValueError("finalized dataset manifest has no split metadata")
+    selected: dict[str, Mapping[str, object]] = {}
+    for split in splits:
+        record = records.get(split)
+        if not isinstance(record, Mapping):
+            raise ValueError(
+                f"finalized dataset manifest has no metadata for split {split!r}"
+            )
+        selected[split] = record
+    return path.parent, selected

@@ -87,8 +87,40 @@ that tokenizer, and atomically rebuilds the 20M-token corpus using exact token
 counts. The same frozen tokenizer is reused for the exact 12B full-data build,
 avoiding a second vocabulary and an estimate-first 12B pass.
 
+Before preparing the 12B corpus, use the
+[local Telco tokenizer notebook](notebooks/prepare_matgpt_telco_300m_local.ipynb)
+with its [Mac/Drive runbook](docs/runbooks/local-telco-300m-data.md) to build the
+separate representative 200M-token candidate, compare it against the preserved
+20M pilot tokenizer, and record an explicit selection. The notebook delegates
+only to `scripts/prepare_telco_local.py`, streams live output, and cannot start
+model pretraining. Active sample files remain under the local work root;
+candidate and decision evidence use a distinct Google Drive Stream-files root.
+Neither tokenizer is overwritten during comparison or selection.
+
+The Mac is the data-preparation machine; Colab is the model-training machine.
+The approved end-to-end order is:
+
+```text
+tokenizer_sample -> tokenizer_candidate -> tokenizer_compare -> tokenizer_select
+-> pilot_refresh -> Colab smoke/pilot/evaluate -> full_calibration
+-> review/accept -> full_resume -> Colab prepare/preflight/full
+```
+
+Selecting `representative_200m` invalidates the old pilot for promotion. Refresh
+the pilot preparation, smoke, pilot, and evaluation gates under the selected
+tokenizer fingerprint before approving any full-data or full-training stage.
+
+In the Telco Colab notebook, keep `PREPARED_DATA_MODE = "prebuilt_shards"` to
+restore the selected tokenizer and finalized, fingerprinted shards from Drive
+into `/content`. This mode verifies the final manifest, audits, recipe
+fingerprints, metadata, and shard bytes, and does not train a tokenizer,
+re-tokenize normalized text, or run `tokenize_and_shard.py`. The explicit
+`legacy_jsonl` mode retains the earlier Colab preparation path for existing
+artifacts. Full training still requires a complete full manifest, matching
+selected-tokenizer pilot gates, and manual `FULL_APPROVED = True`.
+
 Start with the notebook defaults (`RUN_STAGE = "prepare_data"`,
-`DATA_PLAN = "pilot"`). The 20M-token pilot, resume check, evidence review, full
+`DATA_PLAN = "pilot"`, `PREPARED_DATA_MODE = "prebuilt_shards"`). The 20M-token pilot, resume check, evidence review, full
 data authorization, and full training authorization are separate manual gates.
 Evaluation creates 50 blinded LLM reviews per checkpoint for this Codex task;
 human review remains optional. The runbook includes data-rights cautions,
@@ -184,7 +216,8 @@ python scripts/score_story_judgments.py \
   --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-01.jsonl \
   --judgments /path/to/checkpoint-comparison/llm_judge/results/batch-02.jsonl \
   --reviewer llm \
-  --output /path/to/checkpoint-comparison/llm_judge/llm_scores.json
+  --comparison-summary /path/to/checkpoint-comparison/comparison_summary.json \
+  --output /path/to/checkpoint-comparison/llm_judge/results/scored_llm.json
 ```
 
 The scoring command rejects missing, duplicate, unknown, malformed, or

@@ -11,7 +11,7 @@ from matgpt.data.shard import tokenize_splits_from_config
 from matgpt.preflight import build_preflight_report, run_preflight
 from matgpt.data.sources import load_source_registry
 from matgpt.tokenizer.train import train_tokenizer_from_config
-from matgpt.utils.hashing import sha256_json, sha256_text
+from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 from scripts.preflight_t4 import main as preflight_main
 
 
@@ -210,6 +210,16 @@ def test_preflight_passes_complete_synthetic_artifacts(synthetic_preflight_cfg, 
     assert _check(report, "config")["details"]["config_sha256"] == sha256_text(
         config_to_yaml(synthetic_preflight_cfg)
     )
+    shard_details = _check(report, "shards")["details"]
+    for split, details in shard_details.items():
+        metadata_path = Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / f"{split}_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert details["metadata_sha256"] == metadata["metadata_sha256"]
+        assert details["shard_files_sha256"] == sha256_json([
+            {"path": shard["path"], "byte_size": shard["byte_size"],
+             "num_tokens": shard["num_tokens"], "sha256": sha256_file(metadata_path.parent / shard["path"])}
+            for shard in metadata["shards"]
+        ])
     assert (tmp_path / "preflight.json").exists()
 
 
@@ -556,6 +566,29 @@ def test_preflight_rejects_stale_shard_provenance(
     assert field in check["message"]
 
 
+@pytest.mark.parametrize("split", ("train", "validation"))
+def test_legacy_preflight_requires_each_shard_metadata_internal_fingerprint(
+    synthetic_preflight_cfg,
+    split,
+):
+    metadata_path = (
+        Path(synthetic_preflight_cfg["sharding"]["output_dir"])
+        / f"{split}_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("metadata_sha256")
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    report = build_preflight_report(synthetic_preflight_cfg, False, 0.0)
+
+    check = _check(report, "shards")
+    assert report["status"] == "fail"
+    assert check["status"] == "fail"
+    assert "metadata_sha256" in check["message"]
+
+
 def test_preflight_rejects_shard_path_outside_output_root(
     synthetic_preflight_cfg,
     tmp_path,
@@ -564,7 +597,7 @@ def test_preflight_rejects_shard_path_outside_output_root(
         Path(synthetic_preflight_cfg["sharding"]["output_dir"]) / "train_metadata.json"
     )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    source_path = Path(metadata["shards"][0]["path"])
+    source_path = metadata_path.parent / metadata["shards"][0]["path"]
     outside_path = tmp_path / "outside.bin"
     outside_path.write_bytes(source_path.read_bytes())
     metadata["shards"][0]["path"] = str(outside_path)

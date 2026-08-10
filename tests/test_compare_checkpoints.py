@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from matgpt.utils.hashing import sha256_file
 from scripts import compare_checkpoints as compare_script
 
 
@@ -237,5 +238,16 @@ def test_compare_checkpoints_runs_tiny_protocol_and_writes_blinded_bundle(
         (output / "checkpoints" / f"{label}.json").is_file()
         for label in ("170m", "200m")
     )
+    for label, source_name in (("170m", "first"), ("200m", "second")):
+        expected_binding = {
+            "path": str(files[source_name].resolve()),
+            "size": files[source_name].stat().st_size,
+            "sha256": sha256_file(files[source_name]),
+        }
+        assert summary["checkpoints"][label]["binding"] == expected_binding
+        detail = json.loads(
+            (output / "checkpoints" / f"{label}.json").read_text(encoding="utf-8")
+        )
+        assert detail["checkpoint_binding"] == expected_binding
     assert dataset_seed_calls == [1001, 1002, 1001, 1002]
     assert seed_calls == [17, 2001, 2002, 17, 2001, 2002]

@@ -1,0 +1,15 @@
+version: 1
+sample_tokens: 200000000
+mixture_stage: pilot
+baseline_label: pilot_20m
+candidate_label: representative_200m
+comparison:
+  max_general_regression: 0.01
+  max_telecom_regression: 0.0
+  max_probe_p95_regression: 0.01
+  min_overall_improvement: 0.01
+  min_telecom_improvement: 0.02
+local:
+  max_working_gib: 20
+  min_free_gib: 25
+  enforcement: advisory

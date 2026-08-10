@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from matgpt.data.normalize import normalize_text
@@ -22,10 +24,14 @@ from matgpt.data.sources import (
 )
 from matgpt.tokenizer.io import load_tokenizer, load_tokenizer_metadata
 from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
+from matgpt.utils.paths import require_managed_path
 
 
 DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
 QuotaTokenCounter = Callable[[Mapping[str, Any]], int]
+QUOTA_AUDIT_VERSION = 2
+QUOTA_AUDIT_METHOD = "tokenizer_exact_whole_document_boundary_v1"
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class EmptySourceTextError(ValueError):
@@ -280,6 +286,40 @@ def _bucket_lookup(source: SourceSpec) -> dict[str, str]:
     }
 
 
+def _normalize_stream_row(
+    source: SourceSpec,
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    stage: str,
+    quality_filter: QualityFilter,
+    collections: Mapping[str, str],
+) -> dict[str, Any] | None:
+    if not isinstance(row, Mapping):
+        raise ValueError(f"Source {source.id!r} row {index} must be a mapping.")
+    bucket_id: str | None = None
+    if source.buckets:
+        raw_collection = row.get(source.collection_field)  # type: ignore[arg-type]
+        collection = str(raw_collection).strip() if raw_collection is not None else ""
+        if collection not in collections:
+            raise ValueError(
+                f"Source {source.id!r} exposed unknown collection "
+                f"{collection!r}; update and review the registry before continuing."
+            )
+        bucket_id = collections[collection]
+    try:
+        return normalize_source_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            bucket_id=bucket_id,
+        )
+    except EmptySourceTextError:
+        quality_filter.record_rejection("empty_text")
+        return None
+
+
 def _iter_normalized_source(
     source: SourceSpec,
     dataset: Iterable[Mapping[str, Any]],
@@ -288,30 +328,86 @@ def _iter_normalized_source(
 ) -> Iterator[dict[str, Any]]:
     collections = _bucket_lookup(source)
     for index, row in enumerate(dataset):
-        if not isinstance(row, Mapping):
-            raise ValueError(
-                f"Source {source.id!r} row {index} must be a mapping."
+        record = _normalize_stream_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            quality_filter=quality_filter,
+            collections=collections,
+        )
+        if record is not None:
+            yield record
+
+
+iter_normalized_source = _iter_normalized_source
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    """One restart-safe deterministic buffer and its next raw row cursor."""
+
+    next_raw_cursor: int
+    records: tuple[dict[str, Any], ...]
+
+
+def iter_deterministic_source_windows(
+    source: SourceSpec,
+    dataset: Iterable[Mapping[str, Any]],
+    stage: str,
+    quality_filter: QualityFilter,
+    seed: int,
+    buffer_size: int,
+    start_raw_cursor: int = 0,
+) -> Iterator[SourceWindow]:
+    """Yield sorted normalized windows whose cursor counts every raw row."""
+
+    if buffer_size < 1:
+        raise ValueError("buffer_size must be positive.")
+    if start_raw_cursor < 0:
+        raise ValueError("start_raw_cursor must be non-negative.")
+
+    collections = _bucket_lookup(source)
+    records: list[dict[str, Any]] = []
+    next_raw_cursor = start_raw_cursor
+    window_start_cursor = start_raw_cursor
+    for index, row in enumerate(dataset, start=start_raw_cursor):
+        next_raw_cursor = index + 1
+        record = _normalize_stream_row(
+            source,
+            row,
+            index=index,
+            stage=stage,
+            quality_filter=quality_filter,
+            collections=collections,
+        )
+        if record is not None:
+            records.append(record)
+        if len(records) == buffer_size:
+            yield SourceWindow(
+                next_raw_cursor=next_raw_cursor,
+                records=tuple(
+                    iter_deterministic_buffered(
+                        records,
+                        seed=seed,
+                        buffer_size=buffer_size,
+                    )
+                ),
             )
-        bucket_id: str | None = None
-        if source.buckets:
-            raw_collection = row.get(source.collection_field)  # type: ignore[arg-type]
-            collection = str(raw_collection).strip() if raw_collection is not None else ""
-            if collection not in collections:
-                raise ValueError(
-                    f"Source {source.id!r} exposed unknown collection "
-                    f"{collection!r}; update and review the registry before continuing."
+            records = []
+            window_start_cursor = next_raw_cursor
+
+    if next_raw_cursor > window_start_cursor:
+        yield SourceWindow(
+            next_raw_cursor=next_raw_cursor,
+            records=tuple(
+                iter_deterministic_buffered(
+                    records,
+                    seed=seed,
+                    buffer_size=buffer_size,
                 )
-            bucket_id = collections[collection]
-        try:
-            yield normalize_source_row(
-                source,
-                row,
-                index=index,
-                stage=stage,
-                bucket_id=bucket_id,
-            )
-        except EmptySourceTextError:
-            quality_filter.record_rejection("empty_text")
+            ),
+        )
 
 
 def _item_id(record: Mapping[str, Any]) -> str:
@@ -328,6 +424,9 @@ def _is_validation_record(record: Mapping[str, Any], fraction: float) -> bool:
         return False
     value = int(str(record["content_sha256"])[:16], 16) / float(16**16)
     return value < fraction
+
+
+is_validation_record = _is_validation_record
 
 
 def _write_stage(
@@ -379,7 +478,7 @@ def _write_stage(
                 }
             )
             dataset = dataset_loader(source.hf_name, **kwargs)
-            normalized = _iter_normalized_source(
+            normalized = iter_normalized_source(
                 source,
                 dataset,
                 stage,
@@ -414,7 +513,7 @@ def _write_stage(
                         f"Source {source.id!r} produced a non-positive quota "
                         f"token count for document {record['document_id']!r}."
                     )
-                if _is_validation_record(
+                if is_validation_record(
                     record, float(plan.get("validation_fraction", 0.0))
                 ):
                     validation_record = dict(record)
@@ -679,7 +778,8 @@ def corpus_has_exact_token_quotas(
 
     return (
         manifest.get("complete") is True
-        and quota_counting.get("method") == "tokenizer_exact"
+        and quota_counting.get("method")
+        in {"tokenizer_exact", "tokenizer_exact_one_pass"}
         and quota_counting.get("tokenizer_sha256") == tokenizer_sha256
         and set(stage_manifests) == set(expected_plans)
         and all(
@@ -689,15 +789,99 @@ def corpus_has_exact_token_quotas(
     )
 
 
+def _resolve_corpus_relative_file(
+    corpus_root: Path, relative_path: object
+) -> Path:
+    if not isinstance(relative_path, str):
+        raise ValueError("corpus artifact path must be a safe relative POSIX path")
+    relative = PurePosixPath(relative_path)
+    if (
+        not relative_path
+        or "\\" in relative_path
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or str(relative) != relative_path
+    ):
+        raise ValueError("corpus artifact path must be a safe relative POSIX path")
+    return require_managed_path(
+        corpus_root,
+        corpus_root / Path(*relative.parts),
+        kind="file",
+        allow_missing=False,
+    )
+
+
+def iter_corpus_split_records(
+    corpus_dir: str | Path, split: str
+) -> Iterator[dict[str, Any]]:
+    """Read one finalized chunked split, with the legacy JSONL fallback."""
+
+    if not split or Path(split).name != split:
+        raise ValueError("split must be a safe path component")
+    root = require_managed_path(
+        Path(corpus_dir), Path(corpus_dir), kind="directory", allow_missing=False
+    )
+    manifest_path = require_managed_path(
+        root, root / "manifest.json", kind="file", allow_missing=False
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("corpus manifest must contain a JSON object")
+    stored = manifest.get("manifest_sha256")
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    if stored != sha256_json(unsigned):
+        raise ValueError("corpus manifest checksum does not match its content")
+    if manifest.get("storage_format") == "chunked_prebuilt_v1":
+        try:
+            chunks = manifest["split_stats"][split]["raw_chunks"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"chunked corpus has no split {split!r}") from error
+        if not isinstance(chunks, list) or not chunks:
+            raise ValueError(f"chunked corpus split {split!r} has no raw chunks")
+        for chunk in chunks:
+            if not isinstance(chunk, Mapping):
+                raise ValueError("raw chunk evidence must be a mapping")
+            path = _resolve_corpus_relative_file(root, chunk.get("path"))
+            if path.stat().st_size != int(chunk.get("size", -1)):
+                raise ValueError(f"raw chunk size mismatch: {path}")
+            if sha256_file(path) != chunk.get("sha256"):
+                raise ValueError(f"raw chunk checksum mismatch: {path}")
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError(f"{path}:{line_number} must contain an object")
+                    yield row
+        return
+
+    legacy = require_managed_path(
+        root, root / f"{split}.jsonl", kind="file", allow_missing=False
+    )
+    with legacy.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"{legacy}:{line_number} must contain an object")
+            yield row
+
+
 def audit_token_quotas(
     input_paths: Sequence[str | Path],
     tokenizer_dir: str | Path,
     plans: Sequence[Mapping[str, Any]],
     *,
     tolerance: float,
+    corpus_manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Audit tokenizer quotas while preserving whole-document boundaries."""
 
+    if corpus_manifest_path is not None:
+        _validate_canonical_plan_identities(plans)
     if not 0 <= tolerance < 1:
         raise ValueError("tolerance must be in [0, 1).")
     plan_by_stage = {str(plan["stage"]): plan for plan in plans}
@@ -719,6 +903,15 @@ def audit_token_quotas(
         for stage, items in expected.items()
     }
     tokenizer = load_tokenizer(tokenizer_dir)
+    canonical_identity = (
+        _canonical_quota_audit_identity(
+            corpus_manifest_path,
+            tokenizer_dir=tokenizer_dir,
+            plans=plans,
+        )
+        if corpus_manifest_path is not None
+        else None
+    )
 
     for input_path in input_paths:
         with Path(input_path).open("r", encoding="utf-8") as handle:
@@ -748,6 +941,14 @@ def audit_token_quotas(
         "passed": True,
         "stages": {},
     }
+    if canonical_identity is not None:
+        report.update(
+            {
+                "version": QUOTA_AUDIT_VERSION,
+                "method": QUOTA_AUDIT_METHOD,
+                **canonical_identity,
+            }
+        )
     failures: list[str] = []
     for stage in sorted(expected):
         stage_planned = sum(expected[stage].values())
@@ -766,7 +967,18 @@ def audit_token_quotas(
                 and counted - final_document < planned
             )
             passed = within_tolerance or boundary_limited
-            stage_items[item_id] = {
+            canonical_boundary_passed = (
+                counted >= planned
+                and final_document > 0
+                and counted - final_document < planned
+            )
+            if canonical_identity is not None and not canonical_boundary_passed:
+                passed = False
+                failures.append(
+                    f"{stage}/{item_id} does not prove a minimal "
+                    "whole-document boundary"
+                )
+            item_evidence = {
                 "planned_tokens": planned,
                 "actual_tokens": counted,
                 "relative_variance": variance,
@@ -774,7 +986,17 @@ def audit_token_quotas(
                 "document_boundary_limited": boundary_limited,
                 "passed": passed,
             }
-            if not passed:
+            if canonical_identity is not None:
+                item_evidence.update(
+                    {
+                        "requested_tokens": planned,
+                        "overshoot_tokens": max(0, counted - planned),
+                    }
+                )
+            stage_items[item_id] = item_evidence
+            if not passed and (
+                canonical_identity is None or canonical_boundary_passed
+            ):
                 failures.append(
                     f"{stage}/{item_id}={counted}/{planned} ({variance:.2%})"
                 )
@@ -783,7 +1005,7 @@ def audit_token_quotas(
                 f"{stage} stage total={stage_counted}/{stage_planned} "
                 f"({stage_variance:.2%})"
             )
-        report["stages"][stage] = {
+        stage_evidence = {
             "planned_tokens": stage_planned,
             "actual_tokens": stage_counted,
             "relative_variance": stage_variance,
@@ -792,10 +1014,124 @@ def audit_token_quotas(
             ),
             "items": stage_items,
         }
+        if canonical_identity is not None:
+            stage_evidence.update(
+                {
+                    "requested_tokens": stage_planned,
+                    "overshoot_tokens": max(0, stage_counted - stage_planned),
+                    "document_boundary_limited": all(
+                        item["actual_tokens"] >= item["requested_tokens"]
+                        and (
+                            item["overshoot_tokens"] == 0
+                            or item["document_boundary_limited"] is True
+                        )
+                        for item in stage_items.values()
+                    ),
+                }
+            )
+        report["stages"][stage] = stage_evidence
     if failures:
         report["passed"] = False
         raise ValueError(
             "Actual tokenizer quotas are outside tolerance or whole-document "
             "policy: " + "; ".join(failures)
         )
+    if canonical_identity is not None:
+        report["audit_sha256"] = sha256_json(report)
     return report
+
+
+def _canonical_quota_audit_identity(
+    manifest_path: str | Path,
+    *,
+    tokenizer_dir: str | Path,
+    plans: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    path = Path(manifest_path)
+    path = require_managed_path(
+        path.parent, path, kind="file", allow_missing=False
+    )
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("Quota audit corpus manifest must contain an object.")
+    manifest_sha256 = manifest.get("manifest_sha256")
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    if (
+        not isinstance(manifest_sha256, str)
+        or manifest_sha256 != sha256_json(unsigned)
+        or manifest.get("complete") is not True
+    ):
+        raise ValueError("Quota audit corpus manifest identity is invalid.")
+    tokenizer_sha256 = _validated_tokenizer_sha256(tokenizer_dir)
+    quota_counting = manifest.get("quota_counting")
+    if (
+        not isinstance(quota_counting, Mapping)
+        or quota_counting.get("tokenizer_sha256") != tokenizer_sha256
+    ):
+        raise ValueError("Quota audit tokenizer does not match the corpus manifest.")
+    stage_plan_sha256s = {
+        str(plan["stage"]): str(plan["plan_sha256"])
+        for plan in plans
+    }
+    if len(stage_plan_sha256s) != len(plans) or any(
+        len(value) != 64 for value in stage_plan_sha256s.values()
+    ):
+        raise ValueError("Quota audit plans have invalid stage identities.")
+    manifest_stages = manifest.get("stages")
+    if not isinstance(manifest_stages, Mapping) or set(manifest_stages) != set(
+        stage_plan_sha256s
+    ):
+        raise ValueError("Quota audit plans do not cover the corpus stages.")
+    complete_plan_sha256 = sha256_json(list(plans))
+    fingerprints = manifest.get("fingerprints")
+    if isinstance(fingerprints, Mapping):
+        if fingerprints.get("plan_sha256") != complete_plan_sha256:
+            raise ValueError("Quota audit plan does not match the corpus manifest.")
+        plan_sha256 = complete_plan_sha256
+    elif any(
+        not isinstance(manifest_stages[stage], Mapping)
+        or manifest_stages[stage].get("plan_sha256") != plan_sha256_value
+        for stage, plan_sha256_value in stage_plan_sha256s.items()
+    ):
+        raise ValueError("Quota audit stage plan does not match the corpus manifest.")
+    else:
+        plan_sha256 = sha256_json(dict(sorted(stage_plan_sha256s.items())))
+    build_identity = manifest.get("build_identity_sha256")
+    if not isinstance(build_identity, str):
+        build_identity = sha256_json(
+            {
+                "format": "legacy_telco_prepare_v1",
+                "manifest_sha256": manifest_sha256,
+                "tokenizer_sha256": tokenizer_sha256,
+            }
+        )
+    return {
+        "tokenizer_sha256": tokenizer_sha256,
+        "corpus_manifest_sha256": manifest_sha256,
+        "corpus_manifest_file_sha256": sha256_file(path),
+        "corpus_build_identity_sha256": build_identity,
+        "plan_sha256": plan_sha256,
+        "stage_plan_sha256s": dict(sorted(stage_plan_sha256s.items())),
+    }
+
+
+def _validate_canonical_plan_identities(
+    plans: Sequence[Mapping[str, Any]],
+) -> None:
+    """Require the exact self-hash emitted by ``build_mixture_plan``."""
+
+    for index, plan in enumerate(plans):
+        if not isinstance(plan, Mapping):
+            raise ValueError(f"Canonical quota audit plan {index} must be a mapping.")
+        declared = plan.get("plan_sha256")
+        unsigned = dict(plan)
+        unsigned.pop("plan_sha256", None)
+        if (
+            not isinstance(declared, str)
+            or _SHA256_PATTERN.fullmatch(declared) is None
+            or declared != sha256_json(unsigned)
+        ):
+            raise ValueError(
+                f"Canonical quota audit plan {index} has an invalid SHA-256 identity."
+            )
