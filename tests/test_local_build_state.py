@@ -70,6 +70,50 @@ def test_journal_streams_committed_units_lazily(tmp_path: Path):
             next(units)
 
 
+def test_journal_lightweight_state_and_aggregate_queries_never_load_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    with BuildJournal.open(tmp_path / "state.sqlite3", _identity()) as journal:
+        for index in range(128):
+            journal.commit_unit(
+                UnitCommit(
+                    unit_id=f"pilot-{index:05d}",
+                    stage="pilot",
+                    source_id=f"source-{index % 3}",
+                    row_cursor=index + 1,
+                    quota_tokens=index + 10,
+                    accepted_hashes=(),
+                    artifacts=(),
+                    state={"cumulative": {"committed_units": index + 1}},
+                )
+            )
+
+        def hashes_must_not_be_loaded(_unit_id: str):
+            raise AssertionError("lightweight journal APIs loaded document hashes")
+
+        monkeypatch.setattr(journal, "_hashes_for_unit", hashes_must_not_be_loaded)
+        selects: list[str] = []
+        journal.connection.set_trace_callback(
+            lambda sql: selects.append(sql)
+            if sql.lstrip().upper().startswith("SELECT")
+            else None
+        )
+
+        assert journal.has_units() is True
+        latest = journal.latest_unit_state()
+        assert latest is not None
+        assert latest.unit_id == "pilot-00127"
+        assert latest.state["cumulative"]["committed_units"] == 128
+        assert journal.all_units_published() is True
+        assert journal.artifact_aggregates() == {
+            "published_artifacts": 0,
+            "published_bytes": 0,
+            "unpublished_artifacts": 0,
+            "unpublished_bytes": 0,
+        }
+        assert len(selects) == 4
+
+
 def test_journal_refuses_changed_build_identity(tmp_path: Path):
     path = tmp_path / "state.sqlite3"
     BuildJournal.open(path, _identity()).close()

@@ -1,6 +1,7 @@
 import hashlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -72,6 +73,30 @@ def test_capacity_pauses_before_working_set_cap(tmp_path: Path):
         publisher.check_capacity(next_unit_bytes=2)
 
 
+def test_default_capacity_probe_uses_nearest_existing_ancestor_of_missing_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    local_root = tmp_path / "not-created" / "nested"
+    observed: list[Path] = []
+
+    def disk_usage(path: Path):
+        observed.append(Path(path))
+        return SimpleNamespace(free=10_000)
+
+    monkeypatch.setattr(local_publish.shutil, "disk_usage", disk_usage)
+    publisher = DrivePublisher(
+        local_root=local_root,
+        destination_root=tmp_path / "drive",
+        policy=StoragePolicy(max_working_bytes=1_000, min_free_bytes=1),
+    )
+
+    snapshot = publisher.check_capacity(next_unit_bytes=1)
+
+    assert observed == [tmp_path]
+    assert snapshot.free_bytes == 10_000
+    assert not local_root.exists()
+
+
 def test_publish_rechecks_destination_bytes_and_sha(tmp_path: Path):
     local = tmp_path / "local"
     local.mkdir()
@@ -102,6 +127,21 @@ def test_publish_accepts_existing_matching_destination(tmp_path: Path):
     assert Path(published.destination) == existing
     assert existing.read_text(encoding="utf-8") == "valid\n"
     assert artifact.exists()
+
+
+def test_publisher_retains_only_latest_in_process_publication(tmp_path: Path):
+    local = tmp_path / "local"
+    local.mkdir()
+    publisher = _publisher(local, tmp_path / "drive")
+    for index in range(3):
+        artifact = local / f"chunk-{index}.jsonl"
+        artifact.write_text(f"{index}\n", encoding="utf-8")
+        publisher.publish(artifact, f"text/{artifact.name}")
+
+    publications = publisher.status()["publications"]
+
+    assert len(publications) == 1
+    assert Path(publications[0].source).name == "chunk-2.jsonl"
 
 
 def test_publish_quarantines_mismatched_destination_without_deleting_source(

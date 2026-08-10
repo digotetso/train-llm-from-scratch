@@ -39,6 +39,7 @@ from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 
 _STOP_REQUESTED = False
 _EVIDENCE_SCHEMA_VERSION = 2
+_RAW_RECORD_SCHEMA = "normalized_jsonl_without_token_ids_v1"
 
 
 @dataclass(frozen=True)
@@ -141,7 +142,7 @@ def _build_local_corpus(
         )
         publisher.reconcile()
         _sync_publication_metrics(cumulative, journal)
-        if journal.units():
+        if journal.has_units():
             _snapshot_progress_state(cumulative, progress_runtime, sum(counters.values()))
             journal.update_latest_cumulative(cumulative)
         quality = QualityFilter(request.quality_policy, track_seen_hashes=False)
@@ -701,6 +702,7 @@ def _identity(
                 "raw_unit_bytes": request.raw_unit_bytes,
                 "shard_size_tokens": request.shard_size_tokens,
                 "evidence_schema_version": _EVIDENCE_SCHEMA_VERSION,
+                "raw_record_schema": _RAW_RECORD_SCHEMA,
                 "selection_sha256": selection_sha,
                 "comparison_sha256": comparison_sha,
             }
@@ -801,15 +803,21 @@ def _state(journal: BuildJournal):
     counters: dict[tuple[str, str], int] = {}
     cursors: dict[tuple[str, str], int] = {}
     cumulative: dict[str, Any] = _empty_cumulative()
-    for unit in journal.iter_units():
-        cursors[(unit.stage, unit.source_id)] = max(cursors.get((unit.stage, unit.source_id), 0), unit.row_cursor)
-        values = unit.state.get("item_counters", {})
-        if isinstance(values, Mapping):
-            for item, value in values.items():
-                if isinstance(value, int): counters[(unit.stage, str(item))] = value
-        saved = unit.state.get("cumulative")
-        if isinstance(saved, Mapping) and int(saved.get("committed_units", 0)) >= int(cumulative["committed_units"]):
-            cumulative = json.loads(json.dumps(saved))
+    latest = journal.latest_unit_state()
+    if latest is None:
+        return counters, cursors, cumulative
+    saved = latest.state.get("cumulative")
+    if not isinstance(saved, Mapping):
+        raise ValueError(f"unit {latest.unit_id} is missing cumulative evidence")
+    cumulative = json.loads(json.dumps(saved))
+    for key, value in cumulative.get("item_quotas", {}).items():
+        if isinstance(key, str) and ":" in key and isinstance(value, int):
+            stage, item = key.split(":", 1)
+            counters[(stage, item)] = value
+    for key, value in cumulative.get("source_cursors", {}).items():
+        if isinstance(key, str) and ":" in key and isinstance(value, int):
+            stage, source_id = key.split(":", 1)
+            cursors[(stage, source_id)] = value
     return counters, cursors, cumulative
 
 
@@ -1055,7 +1063,20 @@ def _chain_digest(previous: str, value: str) -> str:
 
 
 def _json_line_size(row: Mapping[str, Any]) -> int:
-    return len(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1
+    return (
+        len(
+            json.dumps(
+                _raw_record(row), ensure_ascii=False, sort_keys=True
+            ).encode("utf-8")
+        )
+        + 1
+    )
+
+
+def _raw_record(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the normalized on-disk record; token IDs stay unit-local."""
+
+    return {str(key): value for key, value in row.items() if key != "token_ids"}
 
 
 def _refresh_cumulative(cumulative, quality, counters, cursors, stage, source_id, cursor, unit_tokens, artifacts) -> None:
@@ -1093,7 +1114,12 @@ def _seal_unit(root, stage, source_id, cursor, fit, holdout, tokenizer, request)
             raw = unit_dir / f"{split}.jsonl"
             with open_exclusive_nofollow(raw, "w", encoding="utf-8") as handle:
                 for row in rows:
-                    handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+                    handle.write(
+                        json.dumps(
+                            _raw_record(row), ensure_ascii=False, sort_keys=True
+                        )
+                        + "\n"
+                    )
                 handle.flush(); os.fsync(handle.fileno())
             artifacts.append({"path": raw.relative_to(root).as_posix(), "size": raw.stat().st_size, "sha256": sha256_file(raw)})
             writer = PackedShardWriter(output_dir=unit_dir, split=split, dtype="uint16", shard_size_tokens=request.shard_size_tokens, eos_id=tokenizer.token_to_id("<|eos|>"))
@@ -1113,7 +1139,12 @@ def _unit_storage_bytes(
         raise ValueError("tokenizer must define <|eos|>")
     records = [*fit, *holdout]
     raw_bytes = sum(
-        len(json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")) + 1
+        len(
+            json.dumps(
+                _raw_record(record), ensure_ascii=False, sort_keys=True
+            ).encode("utf-8")
+        )
+        + 1
         for record in records
     )
     token_bytes = sum((len(record["token_ids"]) + 1) * 2 for record in records)
@@ -1130,9 +1161,8 @@ def _journal_overhead_bytes(hashes: list[str]) -> int:
 def _verify_published_units(journal: BuildJournal) -> None:
     """Task 3 may report a provisional result only after every unit is verified."""
 
-    pending = [unit.unit_id for unit in journal.iter_units() if not unit.published]
-    if pending:
-        raise RuntimeError(f"provisional corpus has unpublished unit artifacts: {pending}")
+    if not journal.all_units_published():
+        raise RuntimeError("provisional corpus has unpublished unit artifacts")
 
 
 def _reverified_unit_artifacts(
@@ -1142,7 +1172,7 @@ def _reverified_unit_artifacts(
 
     _verify_published_units(journal)
     verified: list[dict[str, object]] = []
-    for artifact in journal.published_artifacts():
+    for artifact in journal.iter_published_artifacts():
         relative = artifact.get("destination_relative_path")
         if not isinstance(relative, str) or relative != artifact.get("path"):
             raise ValueError("published corpus artifact has an invalid destination mapping")
@@ -1161,6 +1191,7 @@ def _reverified_unit_artifacts(
         verified.append(
             {
                 "unit_id": str(artifact["unit_id"]),
+                "stage": str(artifact["stage"]),
                 "path": relative,
                 "size": size,
                 "sha256": digest,
@@ -1351,7 +1382,7 @@ def _unit_cumulative_deltas(journal: BuildJournal) -> dict[str, dict[str, int]]:
 
     totals: dict[str, dict[str, int]] = {}
     previous = _empty_cumulative()
-    for unit in journal.iter_units_in_commit_order():
+    for unit in journal.iter_unit_states_in_commit_order():
         saved = unit.state.get("cumulative")
         if not isinstance(saved, Mapping):
             raise ValueError(f"unit {unit.unit_id} is missing cumulative evidence")
@@ -1477,14 +1508,12 @@ def _split_evidence(
     artifacts: tuple[dict[str, object], ...],
     journal: BuildJournal,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    units = {unit.unit_id: unit for unit in journal.iter_units()}
     raw_by_split: dict[str, list[dict[str, object]]] = {}
     shards_by_split: dict[str, list[dict[str, object]]] = {}
     for artifact in artifacts:
-        unit = units[str(artifact["unit_id"])]
         name = Path(str(artifact["path"])).name
         if name == "fit.jsonl" or name.startswith("fit_"):
-            split = unit.stage
+            split = str(artifact["stage"])
         elif name == "holdout.jsonl" or name.startswith("holdout_"):
             split = "validation"
         else:
@@ -1737,6 +1766,7 @@ def _finalize_corpus(
         "version": 2,
         "builder": "local_corpus",
         "storage_format": "chunked_prebuilt_v1",
+        "raw_record_schema": _RAW_RECORD_SCHEMA,
         "build_identity_sha256": identity.content_sha256,
         "fingerprints": identity.content_payload,
         "stages": stages,
@@ -1905,17 +1935,16 @@ def _write_progress(
     eta_rate = rolling_rate if rolling_rate > 0 else overall_rate
     status = publisher.status() if publisher is not None else {}
     storage = status.get("storage")
-    unpublished = tuple(status.get("unpublished_artifacts", ()))
-    published = (
-        publisher.journal.published_artifacts()
-        if publisher is not None and publisher.journal is not None else ()
-    )
+    artifact_aggregates = status.get("artifact_aggregates", {})
+    if not isinstance(artifact_aggregates, Mapping):
+        artifact_aggregates = {}
+    unpublished_count = int(artifact_aggregates.get("unpublished_artifacts", 0))
     units_verified = bool(
         publisher is not None
         and publisher.journal is not None
-        and published
-        and not unpublished
-        and all(unit.published for unit in publisher.journal.iter_units())
+        and publisher.journal.has_units()
+        and unpublished_count == 0
+        and publisher.journal.all_units_published()
     )
     payload = {
         **asdict(progress),
@@ -1953,8 +1982,10 @@ def _write_progress(
         "storage": {
             "active_bytes": getattr(storage, "active_bytes", 0),
             "free_bytes": getattr(storage, "free_bytes", 0),
-            "unpublished_bytes": sum(int(item["size"]) for item in unpublished),
-            "published_bytes": sum(int(item["size"]) for item in published),
+            "unpublished_bytes": int(
+                artifact_aggregates.get("unpublished_bytes", 0)
+            ),
+            "published_bytes": int(artifact_aggregates.get("published_bytes", 0)),
         },
         "throughput": {
             "overall_tokens_per_second": overall_rate,
@@ -1966,7 +1997,7 @@ def _write_progress(
                 else (0.0 if not remaining else None)
             ),
         },
-        "rss_bytes": _rss_bytes(),
+        "rss_bytes": int(runtime.rss_reader()),
         "drive": {
             "verified": units_verified,
             "status": "journal_consistent" if units_verified else "pending_or_unavailable",

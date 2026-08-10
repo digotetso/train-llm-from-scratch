@@ -7,6 +7,7 @@ import os
 import shutil
 import uuid
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,10 +76,10 @@ class DrivePublisher:
         if policy.max_working_bytes < 0 or policy.min_free_bytes < 0:
             raise ValueError("storage policy values must be non-negative")
         self.policy = policy
-        self.free_bytes = free_bytes or (lambda path: shutil.disk_usage(path).free)
+        self.free_bytes = free_bytes or _free_bytes_nearest_ancestor
         self.journal = journal
         self.monotonic_clock = monotonic_clock
-        self._publications: list[Publication] = []
+        self._publications: deque[Publication] = deque(maxlen=1)
         require_managed_path(self.local_root, self.local_root, kind="directory")
         require_managed_path(self.destination_root, self.destination_root, kind="directory")
 
@@ -192,7 +193,7 @@ class DrivePublisher:
         if self.journal is None:
             raise ValueError("fresh reconciliation requires a journal")
         recovered: list[Publication] = []
-        for artifact in self.journal.unpublished_artifacts():
+        for artifact in self.journal.iter_unpublished_artifacts():
             destination_relative_path = artifact["destination_relative_path"]
             if not isinstance(destination_relative_path, str):
                 raise ValueError("pending artifact has no destination mapping")
@@ -203,7 +204,7 @@ class DrivePublisher:
                     unit_id=str(artifact["unit_id"]),
                 )
             )
-        for artifact in self.journal.published_artifacts():
+        for artifact in self.journal.iter_published_artifacts():
             source = self.local_root / str(artifact["path"])
             if not source.exists():
                 continue
@@ -239,8 +240,15 @@ class DrivePublisher:
         return {
             "storage": snapshot,
             "pressure": self._pressure_reason(snapshot, 0),
-            "unpublished_artifacts": (
-                self.journal.unpublished_artifacts() if self.journal is not None else ()
+            "artifact_aggregates": (
+                self.journal.artifact_aggregates()
+                if self.journal is not None
+                else {
+                    "published_artifacts": 0,
+                    "published_bytes": 0,
+                    "unpublished_artifacts": 0,
+                    "unpublished_bytes": 0,
+                }
             ),
             "publications": tuple(self._publications),
         }
@@ -412,6 +420,19 @@ def _absolute_root(value: str | Path, name: str) -> Path:
     if absolute.resolve(strict=False) != absolute:
         raise ValueError(f"{name} contains a symbolic link")
     return absolute
+
+
+def _free_bytes_nearest_ancestor(path: Path) -> int:
+    """Probe capacity before a configured local root has been created."""
+
+    candidate = path
+    while not candidate.exists():
+        if candidate.parent == candidate:
+            raise ValueError(f"no existing ancestor for storage root: {path}")
+        candidate = candidate.parent
+    if not candidate.is_dir():
+        candidate = candidate.parent
+    return int(shutil.disk_usage(candidate).free)
 
 
 def _normalized_relative_posix_path(value: str) -> str:

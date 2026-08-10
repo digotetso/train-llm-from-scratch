@@ -1435,6 +1435,126 @@ def _validated_pilot_manifest(
     return manifest, build_identity
 
 
+def _validated_pilot_quota_audit(
+    path: Path,
+    *,
+    managed_root: Path,
+    manifest: Mapping[str, Any],
+    tokenizer_sha256: str,
+) -> dict[str, Any]:
+    path = require_managed_path(
+        managed_root, path, kind="file", allow_missing=False
+    )
+    audit = _load_json_object(path, "Pilot quota audit")
+    stored = audit.get("audit_sha256")
+    unsigned = dict(audit)
+    unsigned.pop("audit_sha256", None)
+    version = manifest.get("version")
+    fingerprints = manifest.get("fingerprints")
+    expected_method = (
+        "whole_document_tokenizer_exact"
+        if version == 1
+        else "tokenizer_exact_one_pass"
+    )
+    if (
+        audit.get("version") != 1
+        or audit.get("passed") is not True
+        or audit.get("method") != expected_method
+        or audit.get("tokenizer_sha256") != tokenizer_sha256
+        or (
+            version == 1
+            and audit.get("manifest_sha256") != manifest.get("manifest_sha256")
+        )
+        or (
+            version == 2
+            and audit.get("plan_sha256")
+            != (
+                fingerprints.get("plan_sha256")
+                if isinstance(fingerprints, Mapping)
+                else None
+            )
+        )
+        or not isinstance(stored, str)
+        or stored != sha256_json(unsigned)
+    ):
+        raise ValueError("Pilot quota audit schema or identity is invalid.")
+    if version == 2:
+        audits = manifest.get("audits")
+        reference = audits.get("quota_audit") if isinstance(audits, Mapping) else None
+        if (
+            not isinstance(reference, Mapping)
+            or reference.get("path") != path.name
+            or reference.get("size") != path.stat().st_size
+            or reference.get("sha256") != sha256_file(path)
+        ):
+            raise ValueError("Pilot manifest quota-audit fingerprint is invalid.")
+    manifest_stages = manifest.get("stages")
+    audit_stages = audit.get("stages")
+    if (
+        not isinstance(manifest_stages, Mapping)
+        or not isinstance(audit_stages, Mapping)
+        or set(audit_stages) != set(manifest_stages)
+    ):
+        raise ValueError("Pilot quota audit stage coverage is incomplete.")
+    for stage_id, manifest_stage in manifest_stages.items():
+        audited_stage = audit_stages.get(stage_id)
+        if not isinstance(manifest_stage, Mapping) or not isinstance(
+            audited_stage, Mapping
+        ):
+            raise ValueError("Pilot quota audit stage accounting is invalid.")
+        requested = manifest_stage.get("requested_tokens")
+        actual = manifest_stage.get(
+            "quota_tokens", manifest_stage.get("actual_tokens")
+        )
+        manifest_items = manifest_stage.get("items")
+        audited_items = audited_stage.get("items")
+        if (
+            type(requested) is not int
+            or type(actual) is not int
+            or audited_stage.get("requested_tokens") != requested
+            or audited_stage.get("actual_tokens") != actual
+            or not isinstance(manifest_items, Mapping)
+            or not isinstance(audited_items, Mapping)
+            or set(audited_items) != set(manifest_items)
+        ):
+            raise ValueError("Pilot quota audit stage totals do not reconcile.")
+        requested_sum = actual_sum = 0
+        for item_id, manifest_item in manifest_items.items():
+            audited_item = audited_items.get(item_id)
+            if not isinstance(manifest_item, Mapping) or not isinstance(
+                audited_item, Mapping
+            ):
+                raise ValueError("Pilot quota audit item accounting is invalid.")
+            item_requested = manifest_item.get("requested_tokens")
+            item_actual = manifest_item.get(
+                "quota_tokens", manifest_item.get("actual_tokens")
+            )
+            last_document = audited_item.get("last_document_tokens")
+            overshoot = audited_item.get("overshoot_tokens")
+            if (
+                type(item_requested) is not int
+                or type(item_actual) is not int
+                or type(last_document) is not int
+                or type(overshoot) is not int
+                or item_requested <= 0
+                or item_actual < item_requested
+                or last_document <= 0
+                or audited_item.get("requested_tokens") != item_requested
+                or audited_item.get("actual_tokens") != item_actual
+                or overshoot != item_actual - item_requested
+                or overshoot > last_document
+                or item_actual - last_document >= item_requested
+            ):
+                raise ValueError(
+                    "Pilot quota audit does not prove a minimal whole-document boundary."
+                )
+            requested_sum += item_requested
+            actual_sum += item_actual
+        if requested_sum != requested or actual_sum != actual:
+            raise ValueError("Pilot quota audit item totals do not reconcile.")
+    return audit
+
+
 def _validated_pilot_gate(
     payload: Mapping[str, Any],
     *,
@@ -2007,7 +2127,10 @@ def _pilot_colab_evidence(
             artifacts[f"{gate}_checkpoint"] = _file_fingerprint(
                 checkpoint, managed_root=drive_dir
             )
-    if stage_bindings.get("smoke") == stage_bindings.get("pilot"):
+    if (
+        stage_bindings.get("smoke", {}).get("sha256")
+        == stage_bindings.get("pilot", {}).get("sha256")
+    ):
         raise ValueError("Smoke and pilot must use distinct immutable checkpoint snapshots.")
     evaluation_files = _bounded_json_files(
         evaluation_root, managed_root=drive_dir, label="Pilot evaluation evidence"
@@ -2186,8 +2309,27 @@ def _pilot_reuse_evidence(
         managed_root=drive_dir,
         tokenizer_sha256=tokenizer_sha256,
     )
+    quota_audit_path = corpus_path.parent / "quota_audit.json"
+    _validated_pilot_quota_audit(
+        quota_audit_path,
+        managed_root=drive_dir,
+        manifest=manifest,
+        tokenizer_sha256=tokenizer_sha256,
+    )
     if provenance.get("tokenizer_sha256") != tokenizer_sha256:
         raise ValueError("Preserved pilot tokenizer fingerprint mismatch.")
+    tokenizer_metadata = load_tokenizer_metadata(tokenizer_dir)
+    special_token_ids = tokenizer_metadata.get("special_token_ids")
+    eos_id = (
+        special_token_ids.get("<|eos|>")
+        if isinstance(special_token_ids, Mapping)
+        else None
+    )
+    if (
+        type(eos_id) is not int
+        or not 0 <= eos_id < REQUIRED_VOCAB_SIZE
+    ):
+        raise ValueError("Preserved pilot tokenizer has no valid frozen EOS ID.")
     shard_fingerprint = _fingerprint_tree(
         shards_root, managed_root=drive_dir, label="Pilot shards"
     )
@@ -2226,7 +2368,7 @@ def _pilot_reuse_evidence(
         dtype = np.dtype(DTYPES[PILOT_SHARD_DTYPE])
         seen_names: set[str] = set()
         token_sum = 0
-        document_sum = 0
+        eos_sum = 0
         for shard_index, shard in enumerate(shards):
             if not isinstance(shard, Mapping):
                 raise ValueError("Pilot shard metadata entry is invalid.")
@@ -2247,13 +2389,10 @@ def _pilot_reuse_evidence(
                 raise ValueError("Pilot shard metadata paths must be unique safe filenames.")
             seen_names.add(relative_value)
             num_tokens = shard.get("num_tokens")
-            num_documents = shard.get("num_documents")
             byte_size = shard.get("byte_size")
             if (
                 type(num_tokens) is not int
                 or not 0 < num_tokens <= 2**63 - 1
-                or type(num_documents) is not int
-                or not 0 < num_documents <= 2**63 - 1
                 or type(byte_size) is not int
                 or not 0 < byte_size <= 2**63 - 1
                 or shard.get("index") != shard_index
@@ -2264,9 +2403,6 @@ def _pilot_reuse_evidence(
             if token_sum > (2**63 - 1) - num_tokens:
                 raise ValueError("Pilot shard token total exceeds the supported range.")
             token_sum += num_tokens
-            if document_sum > (2**63 - 1) - num_documents:
-                raise ValueError("Pilot shard document total exceeds the supported range.")
-            document_sum += num_documents
             shard_path = metadata_path.parent / Path(*relative.parts)
             fingerprint = _file_fingerprint(shard_path, managed_root=drive_dir)
             referenced_shards.add(shard_path.resolve())
@@ -2276,10 +2412,15 @@ def _pilot_reuse_evidence(
             ):
                 raise ValueError("Pilot shard metadata file fingerprint mismatch.")
             values = np.memmap(shard_path, mode="r", dtype=dtype)
-            if values.size != num_tokens or (
-                values.size and int(values.max()) >= REQUIRED_VOCAB_SIZE
-            ):
-                raise ValueError("Pilot shard token IDs exceed the expected vocabulary.")
+            if values.size != num_tokens:
+                raise ValueError("Pilot shard token count differs from its bytes.")
+            for offset in range(0, int(values.size), 1_048_576):
+                block = values[offset : offset + 1_048_576]
+                if block.size and int(block.max()) >= REQUIRED_VOCAB_SIZE:
+                    raise ValueError(
+                        "Pilot shard token IDs exceed the expected vocabulary."
+                    )
+                eos_sum += int(np.count_nonzero(block == eos_id))
         total_tokens = metadata.get("total_tokens")
         total_documents = metadata.get("total_documents")
         if (
@@ -2287,7 +2428,7 @@ def _pilot_reuse_evidence(
             or total_tokens != token_sum
             or type(total_documents) is not int
             or total_documents < 1
-            or total_documents != document_sum
+            or total_documents != eos_sum
         ):
             raise ValueError("Pilot shard metadata totals do not reconcile.")
         if expected_split == "validation" and total_tokens < 1:
@@ -2339,6 +2480,7 @@ def _pilot_reuse_evidence(
             "tokenizer": tokenizer_dir / "tokenizer.json",
             "tokenizer_provenance": provenance_path,
             "corpus": corpus_path,
+            "quota_audit": quota_audit_path,
         }.items()
     }
     artifacts["shards"] = shard_fingerprint

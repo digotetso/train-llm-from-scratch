@@ -14,6 +14,7 @@ import torch
 from matgpt.config import clone_config, config_to_yaml, load_config
 from matgpt.data.local_corpus import LocalCorpusRequest, build_local_corpus
 from matgpt.data.local_publish import StoragePressure
+from matgpt.data.local_state import BuildJournal
 from matgpt.data.quality import DataQualityPolicy
 from matgpt.data.sources import load_source_registry
 from matgpt.data.telco_prepare import (
@@ -669,7 +670,7 @@ def test_chunked_preflight_rejects_recomputed_shards_not_bound_to_manifest(
     assert "finalized manifest" in shard_check["message"]
 
 
-@pytest.mark.parametrize("failure", ("changed", "traversal"))
+@pytest.mark.parametrize("failure", ("changed", "traversal", "missing"))
 def test_finalized_local_corpus_preflight_fails_closed_on_audit_drift(
     tmp_path: Path, failure: str
 ):
@@ -684,6 +685,8 @@ def test_finalized_local_corpus_preflight_fails_closed_on_audit_drift(
     if failure == "changed":
         audit = request.destination_root / "quota_audit.json"
         audit.write_bytes(audit.read_bytes() + b" ")
+    elif failure == "missing":
+        (request.destination_root / "quota_audit.json").unlink()
     else:
         manifest["audits"]["quota_audit"]["path"] = "../quota_audit.json"
         manifest.pop("manifest_sha256")
@@ -699,6 +702,42 @@ def test_finalized_local_corpus_preflight_fails_closed_on_audit_drift(
         check for check in report["checks"] if check["name"] == "dataset_manifest"
     )
     assert manifest_check["status"] == "fail"
+
+
+def test_finalized_local_corpus_preflight_rejects_foreign_builder_even_if_rehashed(
+    tmp_path: Path,
+):
+    request = make_corpus_request(
+        tmp_path,
+        plans=[_single_source_plan("main", token_quota=40, validation_fraction=0.4)],
+    )
+    build_local_corpus(request, dataset_loader=_loader)
+    cfg = _local_preflight_config(tmp_path, request)
+    manifest_path = request.destination_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["builder"] = "fabricated_builder"
+    content_keys = (
+        "version", "builder", "storage_format", "raw_record_schema",
+        "build_identity_sha256", "fingerprints", "stages", "sources",
+        "split_stats", "breakdowns", "unit_artifacts", "audits",
+    )
+    manifest["content_sha256"] = sha256_json(
+        {key: manifest.get(key) for key in content_keys}
+    )
+    manifest.pop("manifest_sha256")
+    manifest["manifest_sha256"] = sha256_json(manifest)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    report = build_preflight_report(cfg, require_t4=False, min_free_disk_gb=0)
+
+    assert report["status"] == "fail"
+    manifest_check = next(
+        check for check in report["checks"] if check["name"] == "dataset_manifest"
+    )
+    assert manifest_check["status"] == "fail"
+    assert "builder" in manifest_check["message"].lower()
 
 
 def test_forced_interruption_resumes_byte_identically(tmp_path: Path):
@@ -739,6 +778,31 @@ def test_calibration_stop_resumes_same_identity(tmp_path: Path):
 
     assert completed.status == "complete"
     assert completed.build_identity_sha256 == calibrated.build_identity_sha256
+
+
+def test_resume_progress_calibration_and_finalization_never_hydrate_unit_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    calibrated = build_local_corpus(
+        request, dataset_loader=_loader, stop_after_quota_tokens=24
+    )
+    assert calibrated.status == "calibration_complete"
+
+    def hashes_must_not_be_loaded(_self, _unit_id: str):
+        raise AssertionError("12B control path hydrated committed document hashes")
+
+    monkeypatch.setattr(BuildJournal, "_hashes_for_unit", hashes_must_not_be_loaded)
+
+    completed = build_local_corpus(request, dataset_loader=_loader)
+    assert completed.status == "complete"
+
+    def source_must_not_reopen(*_args, **_kwargs):
+        raise AssertionError("completed resume must not reopen a source")
+
+    repeated = build_local_corpus(request, dataset_loader=source_must_not_reopen)
+    assert repeated.status == "complete"
+    assert repeated.manifest["content_sha256"] == completed.manifest["content_sha256"]
 
 
 def test_two_stage_calibration_resume_matches_uninterrupted_content_and_bytes(tmp_path: Path):
@@ -1168,6 +1232,9 @@ _SYMLINK_PATH_CASES = (
     "destination_root_ancestor",
     "local_root_ancestor",
     "journal_file",
+    "journal_wal",
+    "journal_shm",
+    "journal_rollback",
 )
 
 
@@ -1187,8 +1254,14 @@ def _symlink_one_corpus_path(
         target = request.tokenizer_dir / "tokenizer.json"
     elif case == "special_tokens_file":
         target = request.tokenizer_dir / "special_tokens.json"
-    elif case == "journal_file":
-        target = request.local_root / "corpus.sqlite3"
+    elif case.startswith("journal_"):
+        suffix = {
+            "journal_file": "",
+            "journal_wal": "-wal",
+            "journal_shm": "-shm",
+            "journal_rollback": "-journal",
+        }[case]
+        target = request.local_root / f"corpus.sqlite3{suffix}"
     else:
         alias = root / f"{case}-alias"
         alias.symlink_to(".", target_is_directory=True)
@@ -1253,18 +1326,24 @@ def test_each_symlinked_corpus_path_fails_before_evidence_state_or_publisher_hoo
         )
         before = (journal.read_bytes(), journal.stat().st_mtime_ns)
     aliased = _symlink_one_corpus_path(request, path_case)
+    sidecar_suffix = {
+        "journal_file": "",
+        "journal_wal": "-wal",
+        "journal_shm": "-shm",
+        "journal_rollback": "-journal",
+    }.get(path_case)
     physical_journal = (
-        journal.with_name("real-corpus.sqlite3")
-        if path_case == "journal_file" else journal
+        journal.with_name(f"real-corpus.sqlite3{sidecar_suffix}")
+        if sidecar_suffix is not None else journal
     )
-    if path_case == "journal_file":
+    if sidecar_suffix is not None:
         before = (physical_journal.read_bytes(), physical_journal.stat().st_mtime_ns)
     _install_preflight_failure_hooks(monkeypatch)
 
     with pytest.raises(ValueError, match="canonical non-symlink"):
         build_local_corpus(aliased, dataset_loader=_loader)
 
-    if resumed or path_case == "journal_file":
+    if resumed or sidecar_suffix is not None:
         assert (physical_journal.read_bytes(), physical_journal.stat().st_mtime_ns) == before
     else:
         assert not journal.exists()
@@ -1536,6 +1615,46 @@ def test_raw_records_preserve_upstream_source_split(tmp_path: Path):
     record = json.loads(raw.read_text(encoding="utf-8").splitlines()[0])
     assert record["source_split"] == "train"
     assert record["split"] == "fit"
+
+
+def test_raw_jsonl_omits_token_ids_but_packed_bytes_keep_exact_ids_and_eos(
+    tmp_path: Path,
+):
+    request = make_corpus_request(tmp_path, plans=[_tiny_plan("main")])
+    result = build_local_corpus(request, dataset_loader=_loader)
+    tokenizer = load_tokenizer(request.tokenizer_dir)
+    eos_id = tokenizer.token_to_id("<|eos|>")
+    assert eos_id is not None
+
+    observed_raw_bytes = 0
+    for raw_path in sorted(request.destination_root.rglob("*.jsonl")):
+        if raw_path.name not in {"fit.jsonl", "holdout.jsonl"}:
+            continue
+        records = [
+            json.loads(line)
+            for line in raw_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        assert records
+        assert all("token_ids" not in record for record in records)
+        expected_tokens = [
+            token_id
+            for record in records
+            for token_id in (*tokenizer.encode(record["text"]).ids, eos_id)
+        ]
+        shard_prefix = raw_path.stem
+        observed_tokens = [
+            int(token_id)
+            for shard in sorted(raw_path.parent.glob(f"{shard_prefix}_*.bin"))
+            for token_id in np.fromfile(shard, dtype=np.uint16)
+        ]
+        assert observed_tokens == expected_tokens
+        observed_raw_bytes += raw_path.stat().st_size
+
+    assert result.manifest["raw_record_schema"] == (
+        "normalized_jsonl_without_token_ids_v1"
+    )
+    assert _last_cumulative(request)["packed"]["raw_bytes"] == observed_raw_bytes
 
 
 def test_builder_checks_storage_before_sealing_a_unit(tmp_path: Path):

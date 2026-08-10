@@ -1545,7 +1545,6 @@ def _write_valid_preserved_pilot_evidence(
             "relative_path": "pilot_00000.bin",
             "index": 0,
             "num_tokens": 20_000_005,
-            "num_documents": 2,
             "byte_size": 40_000_010,
             "sha256": sha256_file(pilot_shard),
         }],
@@ -1558,11 +1557,39 @@ def _write_valid_preserved_pilot_evidence(
         append_eos=True, shard_size_tokens=1024, total_documents=1,
         shards=[{"relative_path": "validation_00000.bin", "num_tokens": 4,
                  "index": 0,
-                 "num_documents": 1, "byte_size": 8,
+                 "byte_size": 8,
                  "sha256": sha256_file(validation_shard)}],
     )
     (shard_root / "validation_metadata.json").write_text(
         json.dumps(validation_metadata), encoding="utf-8"
+    )
+    manifest_path = recipe_root / "corpora/pilot/manifest.json"
+    quota_audit = {
+        "version": 1,
+        "passed": True,
+        "method": "whole_document_tokenizer_exact",
+        "tokenizer_sha256": selected_sha256,
+        "manifest_sha256": json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )["manifest_sha256"],
+        "stages": {
+            "pilot": {
+                "requested_tokens": 20_000_000,
+                "actual_tokens": 20_000_003,
+                "items": {
+                    "canonical-source": {
+                        "requested_tokens": 20_000_000,
+                        "actual_tokens": 20_000_003,
+                        "last_document_tokens": 10_000_003,
+                        "overshoot_tokens": 3,
+                    }
+                },
+            }
+        },
+    }
+    quota_audit["audit_sha256"] = sha256_json(quota_audit)
+    (recipe_root / "corpora/pilot/quota_audit.json").write_text(
+        json.dumps(quota_audit), encoding="utf-8"
     )
     config_path = recipe_root / "prepared/pilot/config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2404,7 +2431,13 @@ def _selected_local_cli_fixture(
     selected = baseline if winner == "pilot_20m" else candidate
     selected_sha256 = sha256_file(selected / "tokenizer.json")
     (selected / "special_tokens.json").write_text(
-        json.dumps({"tokenizer_sha256": selected_sha256}), encoding="utf-8"
+        json.dumps(
+            {
+                "tokenizer_sha256": selected_sha256,
+                "special_token_ids": SPECIAL_TOKEN_IDS,
+            }
+        ),
+        encoding="utf-8",
     )
     return common, Path(common[-3]), Path(common[-1]), selected, selected_sha256
 
@@ -3250,6 +3283,53 @@ def test_pilot_reuse_rejects_inconsistent_producer_quota_and_eos_accounting(
 
 @pytest.mark.parametrize(
     "mutation",
+    (
+        "missing",
+        "item_missing",
+        "actual",
+        "last_document",
+        "overshoot",
+        "nonminimal_boundary",
+    ),
+)
+def test_pilot_reuse_requires_exact_whole_document_quota_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+):
+    from scripts import prepare_telco_local
+
+    common, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, _ = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    audit_path = recipe_root / "corpora/pilot/quota_audit.json"
+    if mutation == "missing":
+        audit_path.unlink()
+    else:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        item = audit["stages"]["pilot"]["items"]["canonical-source"]
+        if mutation == "item_missing":
+            audit["stages"]["pilot"]["items"] = {}
+        elif mutation == "actual":
+            item["actual_tokens"] += 1
+        elif mutation == "last_document":
+            item["last_document_tokens"] = 2
+        elif mutation == "overshoot":
+            item["overshoot_tokens"] = 2
+        else:
+            item["last_document_tokens"] = 3
+        audit.pop("audit_sha256")
+        audit["audit_sha256"] = sha256_json(audit)
+        audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
     ("claimed_twenty_million_one_token", "swapped_splits", "duplicate_shard",
      "missing_shard", "traversal", "bad_dtype", "bad_byte_size", "bad_sha",
      "totals_mismatch", "token_outside_vocab"),
@@ -3473,7 +3553,10 @@ def test_pilot_reuse_rejects_replaced_pilot_snapshot_even_if_only_scorer_is_refr
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 
 
-@pytest.mark.parametrize("mutation", ("zero_smoke", "same_smoke_and_pilot"))
+@pytest.mark.parametrize(
+    "mutation",
+    ("zero_smoke", "same_smoke_and_pilot", "same_sha_different_paths"),
+)
 def test_pilot_reuse_rejects_zero_or_aliased_stage_snapshots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
 ):
@@ -3498,10 +3581,22 @@ def test_pilot_reuse_rejects_zero_or_aliased_stage_snapshots(
             "sha256": sha256_file(checkpoint),
         }
         smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
-    else:
+    elif mutation == "same_smoke_and_pilot":
         pilot["checkpoint"] = smoke["checkpoint"]
         pilot["checkpoint_binding"] = smoke["checkpoint_binding"]
         pilot_path.write_text(json.dumps(pilot), encoding="utf-8")
+    else:
+        pilot_checkpoint = Path(pilot["checkpoint_binding"]["path"])
+        digest = pilot["checkpoint_binding"]["sha256"]
+        smoke_checkpoint = pilot_checkpoint.with_name(f"smoke-copy-{digest}.pt")
+        smoke_checkpoint.write_bytes(pilot_checkpoint.read_bytes())
+        smoke["checkpoint"] = str(smoke_checkpoint.resolve())
+        smoke["checkpoint_binding"] = {
+            "path": str(smoke_checkpoint.resolve()),
+            "size": smoke_checkpoint.stat().st_size,
+            "sha256": digest,
+        }
+        smoke_path.write_text(json.dumps(smoke), encoding="utf-8")
 
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 

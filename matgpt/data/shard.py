@@ -205,12 +205,6 @@ def tokenize_jsonl_to_shards(
         total_documents=total_documents,
         shards=shards,
     )
-    metadata.update({
-        "input_path": str(Path(input_path)),
-        "tokenizer_dir": str(Path(tokenizer_dir)),
-    })
-    metadata.pop("metadata_sha256")
-    metadata["metadata_sha256"] = sha256_json(metadata)
     (out / f"{split}_metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

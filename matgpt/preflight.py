@@ -198,12 +198,14 @@ def _check_chunked_dataset_manifest(
         raise ValueError("Chunked corpus manifest is not complete")
     if manifest.get("version") != 2 or manifest.get("evidence_schema_version") != 2:
         raise ValueError("Unsupported chunked corpus builder/schema version")
+    if manifest.get("builder") != "local_corpus":
+        raise ValueError("Chunked corpus builder must be local_corpus")
     fingerprints = manifest.get("fingerprints")
     if not isinstance(fingerprints, dict):
         raise ValueError("Chunked corpus manifest has no fingerprints")
     if manifest.get("build_identity_sha256") != sha256_json(fingerprints):
         raise ValueError("Chunked corpus build identity does not match fingerprints")
-    content_keys = (
+    content_keys = [
         "version",
         "builder",
         "storage_format",
@@ -215,7 +217,9 @@ def _check_chunked_dataset_manifest(
         "breakdowns",
         "unit_artifacts",
         "audits",
-    )
+    ]
+    if "raw_record_schema" in manifest:
+        content_keys.insert(3, "raw_record_schema")
     content_payload = {key: manifest.get(key) for key in content_keys}
     if manifest.get("content_sha256") != sha256_json(content_payload):
         raise ValueError("Chunked corpus content_sha256 does not match logical content")

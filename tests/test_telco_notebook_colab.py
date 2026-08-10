@@ -441,10 +441,11 @@ def test_prebuilt_restore_fails_closed_on_incomplete_or_foreign_evidence(
         manifest["fingerprints"]["tokenizer_sha256"] = "0" * 64
         manifest["build_identity_sha256"] = sha256_json(manifest["fingerprints"])
         logical_keys = (
-            "version",
-            "builder",
-            "storage_format",
-            "build_identity_sha256",
+                "version",
+                "builder",
+                "storage_format",
+                "raw_record_schema",
+                "build_identity_sha256",
             "fingerprints",
             "stages",
             "sources",
@@ -482,10 +483,11 @@ def test_prebuilt_restore_fails_closed_on_incomplete_or_foreign_evidence(
             "../outside.jsonl"
         )
         logical_keys = (
-            "version",
-            "builder",
-            "storage_format",
-            "build_identity_sha256",
+                "version",
+                "builder",
+                "storage_format",
+                "raw_record_schema",
+                "build_identity_sha256",
             "fingerprints",
             "stages",
             "sources",
@@ -794,7 +796,7 @@ def test_training_cell_writes_distinct_immutable_smoke_and_pilot_snapshots():
     assert 'label="pilot-latest"' in source
     assert '"checkpoint_binding": smoke_binding' in source
     assert '"checkpoint_binding": pilot_binding' in source
-    assert "smoke_binding != pilot_binding" in source
+    assert 'smoke_binding["sha256"] != pilot_binding["sha256"]' in source
 
 
 def test_training_gate_revalidates_artifacts_and_binds_evidence_to_config():
@@ -818,8 +820,9 @@ def test_evaluation_uses_open_telco_and_fifty_blinded_llm_reviews():
     assert "this Codex task" in source
     assert "Human review is optional" in source
     assert "pilot_complete.json" in source
-    assert 'pilot_gate["checkpoint_binding"]["path"]' in source
-    assert 'glob("pilot-*.pt")' in source
+    assert 'pilot_gate["checkpoint_bindings"]' in source
+    assert "checkpoint_binding(checkpoint) == declared_binding" in source
+    assert 'glob("pilot-*.pt")' not in source
     assert 'glob("ckpt_*.pt")' not in source
     assert 'checkpoint_dir / "latest.pt"' not in source
 

@@ -126,3 +126,18 @@ def test_local_notebook_shows_current_progress_and_process_lifecycle():
     assert 'LOCAL_WORK_ROOT / "corpus/full"' in checks_source
     assert 'progress.json' in checks_source
     assert "json.loads" in checks_source
+    assert 'selection["selected_tokenizer_sha256"]' in checks_source
+    assert ".glob(" not in checks_source
+
+
+def test_local_notebook_probes_configured_filesystem_and_guards_file_links():
+    environment_source = _code_after_heading("### Environment and storage evidence")
+    checks_source = _code_after_heading("## Checks")
+
+    assert "storage_probe = LOCAL_WORK_ROOT" in environment_source
+    assert "while not storage_probe.exists()" in environment_source
+    assert "shutil.disk_usage(storage_probe)" in environment_source
+    assert "shutil.disk_usage(Path.home())" not in environment_source
+    assert "from IPython.display import FileLink, display" in checks_source
+    assert "except ImportError" in checks_source
+    assert "display(FileLink(str(result_path)))" in checks_source

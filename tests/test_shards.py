@@ -9,6 +9,7 @@ from matgpt.data.shard import tokenize_jsonl_to_shards, tokenize_splits_from_con
 from matgpt.tokenizer.io import load_tokenizer
 from matgpt.tokenizer.train import train_tokenizer_from_jsonl
 from matgpt.training.dataset import PackedTokenDataset
+from matgpt.utils.hashing import sha256_file
 
 
 SPECIAL_TOKENS = ["<|pad|>", "<|bos|>", "<|eos|>", "<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
@@ -54,6 +55,8 @@ def test_tokenize_jsonl_to_uint16_shards_with_eos(tmp_path: Path):
     assert len(tokens) <= 8
     assert len(metadata["shards"][0]["sha256"]) == 64
     assert not Path(metadata["shards"][0]["path"]).is_absolute()
+    assert "input_path" not in metadata
+    assert "tokenizer_dir" not in metadata
 
 
 def test_packed_dataset_reads_legacy_absolute_shard_metadata(tmp_path: Path):
@@ -65,10 +68,10 @@ def test_packed_dataset_reads_legacy_absolute_shard_metadata(tmp_path: Path):
             {
                 "dtype": "uint16",
                 "shards": [
-                    {
-                        "path": str(shard_path),
-                        "num_tokens": 16,
-                        "sha256": "ignored-by-reader",
+                        {
+                            "path": str(shard_path),
+                            "num_tokens": 16,
+                            "sha256": sha256_file(shard_path),
                     }
                 ],
             }
@@ -79,6 +82,32 @@ def test_packed_dataset_reads_legacy_absolute_shard_metadata(tmp_path: Path):
     dataset = PackedTokenDataset.from_metadata(metadata_path, context_length=8)
 
     assert dataset.shards[0].path == shard_path
+
+
+def test_packed_dataset_rejects_legacy_absolute_shard_with_wrong_sha(
+    tmp_path: Path,
+):
+    shard_path = tmp_path / "legacy.bin"
+    np.arange(16, dtype=np.uint16).tofile(shard_path)
+    metadata_path = tmp_path / "legacy_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "dtype": "uint16",
+                "shards": [
+                    {
+                        "path": str(shard_path),
+                        "num_tokens": 16,
+                        "sha256": "0" * 64,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="shard SHA-256 mismatch"):
+        PackedTokenDataset.from_metadata(metadata_path, context_length=8)
 
 
 class _Encoding:

@@ -68,6 +68,19 @@ class UnitCommit:
     state: Mapping[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class UnitState:
+    """Hash-free unit control state for resume and finalization paths."""
+
+    unit_id: str
+    stage: str
+    source_id: str
+    row_cursor: int
+    quota_tokens: int
+    published: bool
+    state: Mapping[str, object] = field(default_factory=dict)
+
+
 _IDENTITY_JSON_KEY = "identity_json"
 _IDENTITY_SHA256_KEY = "identity_sha256"
 _HASH_BATCH_SIZE = 900
@@ -330,6 +343,66 @@ class BuildJournal:
         )
         return {str(row["content_sha256"]) for row in rows}
 
+    def has_units(self) -> bool:
+        """Return whether any unit is committed without loading unit payloads."""
+
+        return self.connection.execute("SELECT 1 FROM units LIMIT 1").fetchone() is not None
+
+    def latest_unit_state(self) -> UnitState | None:
+        """Return the latest committed control snapshot without accepted hashes."""
+
+        row = self.connection.execute(
+            """
+            SELECT unit_id, stage, source_id, row_cursor, quota_tokens,
+                   state_json, published
+            FROM units
+            ORDER BY rowid DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return None if row is None else _unit_state_from_row(row)
+
+    def iter_unit_states_in_commit_order(self) -> Iterator[UnitState]:
+        """Stream hash-free unit snapshots in commit order."""
+
+        rows = self.connection.execute(
+            """
+            SELECT unit_id, stage, source_id, row_cursor, quota_tokens,
+                   state_json, published
+            FROM units
+            ORDER BY rowid
+            """
+        )
+        for row in rows:
+            yield _unit_state_from_row(row)
+
+    def all_units_published(self) -> bool:
+        """Return whether every committed unit is durably publication-complete."""
+
+        return self.connection.execute(
+            "SELECT 1 FROM units WHERE published = 0 LIMIT 1"
+        ).fetchone() is None
+
+    def artifact_aggregates(self) -> dict[str, int]:
+        """Return constant-size publication counts and bytes from SQLite."""
+
+        row = self.connection.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN published = 1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN published = 1 THEN size ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN published = 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN published = 0 THEN size ELSE 0 END), 0)
+            FROM artifacts
+            """
+        ).fetchone()
+        return {
+            "published_artifacts": int(row[0]),
+            "published_bytes": int(row[1]),
+            "unpublished_artifacts": int(row[2]),
+            "unpublished_bytes": int(row[3]),
+        }
+
     def iter_units(self) -> Iterator[UnitCommit]:
         """Stream committed units in deterministic order, one bounded unit at a time."""
 
@@ -472,6 +545,11 @@ class BuildJournal:
     def unpublished_artifacts(self) -> tuple[dict[str, object], ...]:
         """Return all unrecorded artifact publications in deterministic order."""
 
+        return tuple(self.iter_unpublished_artifacts())
+
+    def iter_unpublished_artifacts(self) -> Iterator[dict[str, object]]:
+        """Stream pending publications without materializing the full journal."""
+
         rows = self.connection.execute(
             """
             SELECT unit_id, relative_path, size, sha256, destination_relative_path
@@ -480,40 +558,45 @@ class BuildJournal:
             ORDER BY unit_id, relative_path
             """
         )
-        return tuple(
-            {
+        for row in rows:
+            yield {
                 "unit_id": str(row["unit_id"]),
                 "path": str(row["relative_path"]),
                 "size": int(row["size"]),
                 "sha256": str(row["sha256"]),
                 "destination_relative_path": row["destination_relative_path"],
             }
-            for row in rows
-        )
 
     def published_artifacts(self) -> tuple[dict[str, object], ...]:
         """Return recorded artifact publications for post-commit release recovery."""
 
+        return tuple(self.iter_published_artifacts())
+
+    def iter_published_artifacts(self) -> Iterator[dict[str, object]]:
+        """Stream published artifacts with their unit stage for finalization."""
+
         rows = self.connection.execute(
             """
-            SELECT unit_id, relative_path, size, sha256, destination_relative_path,
-                   destination_sha256
+            SELECT artifacts.unit_id, units.stage, artifacts.relative_path,
+                   artifacts.size, artifacts.sha256,
+                   artifacts.destination_relative_path,
+                   artifacts.destination_sha256
             FROM artifacts
-            WHERE published = 1
-            ORDER BY unit_id, relative_path
+            JOIN units ON units.unit_id = artifacts.unit_id
+            WHERE artifacts.published = 1
+            ORDER BY artifacts.unit_id, artifacts.relative_path
             """
         )
-        return tuple(
-            {
+        for row in rows:
+            yield {
                 "unit_id": str(row["unit_id"]),
+                "stage": str(row["stage"]),
                 "path": str(row["relative_path"]),
                 "size": int(row["size"]),
                 "sha256": str(row["sha256"]),
                 "destination_relative_path": row["destination_relative_path"],
                 "destination_sha256": row["destination_sha256"],
             }
-            for row in rows
-        )
 
     def _hashes_for_unit(self, unit_id: str) -> tuple[str, ...]:
         rows = self.connection.execute(
@@ -664,6 +747,18 @@ def _normalized_artifacts(
         for artifact in artifacts
     )
     return tuple(sorted(normalized, key=lambda artifact: str(artifact["path"])))
+
+
+def _unit_state_from_row(row: sqlite3.Row) -> UnitState:
+    return UnitState(
+        unit_id=str(row["unit_id"]),
+        stage=str(row["stage"]),
+        source_id=str(row["source_id"]),
+        row_cursor=int(row["row_cursor"]),
+        quota_tokens=int(row["quota_tokens"]),
+        published=bool(row["published"]),
+        state=json.loads(str(row["state_json"])),
+    )
 
 
 def _normalized_relative_posix_path(value: object) -> str:
