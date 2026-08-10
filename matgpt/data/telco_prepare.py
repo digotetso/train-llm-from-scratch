@@ -28,6 +28,8 @@ from matgpt.utils.paths import require_managed_path
 
 DatasetLoader = Callable[..., Iterable[Mapping[str, Any]]]
 QuotaTokenCounter = Callable[[Mapping[str, Any]], int]
+QUOTA_AUDIT_VERSION = 2
+QUOTA_AUDIT_METHOD = "tokenizer_exact_whole_document_boundary_v1"
 
 
 class EmptySourceTextError(ValueError):
@@ -872,6 +874,7 @@ def audit_token_quotas(
     plans: Sequence[Mapping[str, Any]],
     *,
     tolerance: float,
+    corpus_manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Audit tokenizer quotas while preserving whole-document boundaries."""
 
@@ -896,6 +899,15 @@ def audit_token_quotas(
         for stage, items in expected.items()
     }
     tokenizer = load_tokenizer(tokenizer_dir)
+    canonical_identity = (
+        _canonical_quota_audit_identity(
+            corpus_manifest_path,
+            tokenizer_dir=tokenizer_dir,
+            plans=plans,
+        )
+        if corpus_manifest_path is not None
+        else None
+    )
 
     for input_path in input_paths:
         with Path(input_path).open("r", encoding="utf-8") as handle:
@@ -925,6 +937,14 @@ def audit_token_quotas(
         "passed": True,
         "stages": {},
     }
+    if canonical_identity is not None:
+        report.update(
+            {
+                "version": QUOTA_AUDIT_VERSION,
+                "method": QUOTA_AUDIT_METHOD,
+                **canonical_identity,
+            }
+        )
     failures: list[str] = []
     for stage in sorted(expected):
         stage_planned = sum(expected[stage].values())
@@ -943,7 +963,18 @@ def audit_token_quotas(
                 and counted - final_document < planned
             )
             passed = within_tolerance or boundary_limited
-            stage_items[item_id] = {
+            canonical_boundary_passed = (
+                counted >= planned
+                and final_document > 0
+                and counted - final_document < planned
+            )
+            if canonical_identity is not None and not canonical_boundary_passed:
+                passed = False
+                failures.append(
+                    f"{stage}/{item_id} does not prove a minimal "
+                    "whole-document boundary"
+                )
+            item_evidence = {
                 "planned_tokens": planned,
                 "actual_tokens": counted,
                 "relative_variance": variance,
@@ -951,7 +982,17 @@ def audit_token_quotas(
                 "document_boundary_limited": boundary_limited,
                 "passed": passed,
             }
-            if not passed:
+            if canonical_identity is not None:
+                item_evidence.update(
+                    {
+                        "requested_tokens": planned,
+                        "overshoot_tokens": max(0, counted - planned),
+                    }
+                )
+            stage_items[item_id] = item_evidence
+            if not passed and (
+                canonical_identity is None or canonical_boundary_passed
+            ):
                 failures.append(
                     f"{stage}/{item_id}={counted}/{planned} ({variance:.2%})"
                 )
@@ -960,7 +1001,7 @@ def audit_token_quotas(
                 f"{stage} stage total={stage_counted}/{stage_planned} "
                 f"({stage_variance:.2%})"
             )
-        report["stages"][stage] = {
+        stage_evidence = {
             "planned_tokens": stage_planned,
             "actual_tokens": stage_counted,
             "relative_variance": stage_variance,
@@ -969,10 +1010,103 @@ def audit_token_quotas(
             ),
             "items": stage_items,
         }
+        if canonical_identity is not None:
+            stage_evidence.update(
+                {
+                    "requested_tokens": stage_planned,
+                    "overshoot_tokens": max(0, stage_counted - stage_planned),
+                    "document_boundary_limited": all(
+                        item["actual_tokens"] >= item["requested_tokens"]
+                        and (
+                            item["overshoot_tokens"] == 0
+                            or item["document_boundary_limited"] is True
+                        )
+                        for item in stage_items.values()
+                    ),
+                }
+            )
+        report["stages"][stage] = stage_evidence
     if failures:
         report["passed"] = False
         raise ValueError(
             "Actual tokenizer quotas are outside tolerance or whole-document "
             "policy: " + "; ".join(failures)
         )
+    if canonical_identity is not None:
+        report["audit_sha256"] = sha256_json(report)
     return report
+
+
+def _canonical_quota_audit_identity(
+    manifest_path: str | Path,
+    *,
+    tokenizer_dir: str | Path,
+    plans: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    path = Path(manifest_path)
+    path = require_managed_path(
+        path.parent, path, kind="file", allow_missing=False
+    )
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("Quota audit corpus manifest must contain an object.")
+    manifest_sha256 = manifest.get("manifest_sha256")
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256", None)
+    if (
+        not isinstance(manifest_sha256, str)
+        or manifest_sha256 != sha256_json(unsigned)
+        or manifest.get("complete") is not True
+    ):
+        raise ValueError("Quota audit corpus manifest identity is invalid.")
+    tokenizer_sha256 = _validated_tokenizer_sha256(tokenizer_dir)
+    quota_counting = manifest.get("quota_counting")
+    if (
+        not isinstance(quota_counting, Mapping)
+        or quota_counting.get("tokenizer_sha256") != tokenizer_sha256
+    ):
+        raise ValueError("Quota audit tokenizer does not match the corpus manifest.")
+    stage_plan_sha256s = {
+        str(plan["stage"]): str(plan["plan_sha256"])
+        for plan in plans
+    }
+    if len(stage_plan_sha256s) != len(plans) or any(
+        len(value) != 64 for value in stage_plan_sha256s.values()
+    ):
+        raise ValueError("Quota audit plans have invalid stage identities.")
+    manifest_stages = manifest.get("stages")
+    if not isinstance(manifest_stages, Mapping) or set(manifest_stages) != set(
+        stage_plan_sha256s
+    ):
+        raise ValueError("Quota audit plans do not cover the corpus stages.")
+    complete_plan_sha256 = sha256_json(list(plans))
+    fingerprints = manifest.get("fingerprints")
+    if isinstance(fingerprints, Mapping):
+        if fingerprints.get("plan_sha256") != complete_plan_sha256:
+            raise ValueError("Quota audit plan does not match the corpus manifest.")
+        plan_sha256 = complete_plan_sha256
+    elif any(
+        not isinstance(manifest_stages[stage], Mapping)
+        or manifest_stages[stage].get("plan_sha256") != plan_sha256_value
+        for stage, plan_sha256_value in stage_plan_sha256s.items()
+    ):
+        raise ValueError("Quota audit stage plan does not match the corpus manifest.")
+    else:
+        plan_sha256 = sha256_json(dict(sorted(stage_plan_sha256s.items())))
+    build_identity = manifest.get("build_identity_sha256")
+    if not isinstance(build_identity, str):
+        build_identity = sha256_json(
+            {
+                "format": "legacy_telco_prepare_v1",
+                "manifest_sha256": manifest_sha256,
+                "tokenizer_sha256": tokenizer_sha256,
+            }
+        )
+    return {
+        "tokenizer_sha256": tokenizer_sha256,
+        "corpus_manifest_sha256": manifest_sha256,
+        "corpus_manifest_file_sha256": sha256_file(path),
+        "corpus_build_identity_sha256": build_identity,
+        "plan_sha256": plan_sha256,
+        "stage_plan_sha256s": dict(sorted(stage_plan_sha256s.items())),
+    }

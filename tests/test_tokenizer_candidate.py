@@ -1390,6 +1390,7 @@ def _canonical_pilot_fixture(drive_dir: Path) -> tuple[Path, Path, str]:
     corpus_manifest = recipe_root / "corpora" / "pilot" / "manifest.json"
     corpus_manifest.parent.mkdir(parents=True)
     pilot_stage = {
+        "plan_sha256": "9" * 64,
         "requested_tokens": 20_000_000,
         "estimated_tokens": 20_000_003,
         "quota_tokens": 20_000_003,
@@ -1564,31 +1565,49 @@ def _write_valid_preserved_pilot_evidence(
         json.dumps(validation_metadata), encoding="utf-8"
     )
     manifest_path = recipe_root / "corpora/pilot/manifest.json"
-    quota_audit = {
-        "version": 1,
-        "passed": True,
-        "method": "whole_document_tokenizer_exact",
-        "tokenizer_sha256": selected_sha256,
-        "manifest_sha256": json.loads(
-            manifest_path.read_text(encoding="utf-8")
-        )["manifest_sha256"],
-        "stages": {
-            "pilot": {
-                "requested_tokens": 20_000_000,
-                "actual_tokens": 20_000_003,
-                "items": {
-                    "canonical-source": {
-                        "requested_tokens": 20_000_000,
-                        "actual_tokens": 20_000_003,
-                        "last_document_tokens": 10_000_003,
-                        "overshoot_tokens": 3,
-                    }
-                },
-            }
-        },
-    }
-    quota_audit["audit_sha256"] = sha256_json(quota_audit)
-    (recipe_root / "corpora/pilot/quota_audit.json").write_text(
+    audit_input = recipe_root / "evidence/pilot/quota_input.jsonl"
+    audit_input.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "stage": "pilot",
+                    "source_id": "canonical-source",
+                    "bucket_id": None,
+                    "text": str(tokens),
+                }
+            )
+            + "\n"
+            for tokens in (10_000_000, 10_000_003)
+        ),
+        encoding="utf-8",
+    )
+    from matgpt.data.telco_prepare import audit_token_quotas
+    with pytest.MonkeyPatch.context() as audit_patch:
+        audit_patch.setattr(
+            "matgpt.data.telco_prepare.load_tokenizer",
+            lambda _path: type(
+                "CountTokenizer",
+                (),
+                {"encode": lambda _self, text: type("Encoded", (), {"ids": range(int(text))})()},
+            )(),
+        )
+        quota_audit = audit_token_quotas(
+            [audit_input],
+            recipe_root / "prepared/pilot/tokenizer",
+            [{
+                "stage": "pilot",
+                "plan_sha256": "9" * 64,
+                "items": [{
+                    "id": "canonical-source",
+                    "source_id": "canonical-source",
+                    "bucket_id": None,
+                    "token_quota": 20_000_000,
+                }],
+            }],
+            tolerance=0.03,
+            corpus_manifest_path=manifest_path,
+        )
+    (recipe_root / "evidence/pilot/quota_audit.json").write_text(
         json.dumps(quota_audit), encoding="utf-8"
     )
     config_path = recipe_root / "prepared/pilot/config.yaml"
@@ -3290,6 +3309,12 @@ def test_pilot_reuse_rejects_inconsistent_producer_quota_and_eos_accounting(
         "last_document",
         "overshoot",
         "nonminimal_boundary",
+        "stale_tokenizer",
+        "stale_manifest",
+        "stale_plan",
+        "tampered_hash",
+        "false_boundary",
+        "excess_overshoot",
     ),
 )
 def test_pilot_reuse_requires_exact_whole_document_quota_audit(
@@ -3305,7 +3330,7 @@ def test_pilot_reuse_requires_exact_whole_document_quota_audit(
     recipe_root, _ = _write_valid_preserved_pilot_evidence(
         drive_dir, selected_sha256
     )
-    audit_path = recipe_root / "corpora/pilot/quota_audit.json"
+    audit_path = recipe_root / "evidence/pilot/quota_audit.json"
     if mutation == "missing":
         audit_path.unlink()
     else:
@@ -3319,10 +3344,23 @@ def test_pilot_reuse_requires_exact_whole_document_quota_audit(
             item["last_document_tokens"] = 2
         elif mutation == "overshoot":
             item["overshoot_tokens"] = 2
-        else:
+        elif mutation == "nonminimal_boundary":
             item["last_document_tokens"] = 3
-        audit.pop("audit_sha256")
-        audit["audit_sha256"] = sha256_json(audit)
+        elif mutation == "stale_tokenizer":
+            audit["tokenizer_sha256"] = "0" * 64
+        elif mutation == "stale_manifest":
+            audit["corpus_manifest_sha256"] = "0" * 64
+        elif mutation == "stale_plan":
+            audit["plan_sha256"] = "0" * 64
+        elif mutation == "false_boundary":
+            item["document_boundary_limited"] = False
+        elif mutation == "excess_overshoot":
+            item["overshoot_tokens"] = item["last_document_tokens"] + 1
+        if mutation != "tampered_hash":
+            audit.pop("audit_sha256")
+            audit["audit_sha256"] = sha256_json(audit)
+        else:
+            audit["tolerance"] = 0.02
         audit_path.write_text(json.dumps(audit), encoding="utf-8")
 
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2

@@ -20,7 +20,7 @@ from matgpt.data.telco_prepare import (
 )
 from matgpt.preflight import build_preflight_report
 from matgpt.tokenizer.train import train_tokenizer_from_config
-from matgpt.utils.hashing import sha256_file
+from matgpt.utils.hashing import sha256_file, sha256_json
 
 
 REGISTRY_PATH = Path("configs/data/telco_300m_sources.yaml")
@@ -369,6 +369,96 @@ def test_builder_uses_frozen_tokenizer_counts_to_reach_exact_quota(
     assert manifest["stages"]["pilot"]["quota_tokens"] == 8
     assert manifest["stages"]["pilot"]["estimated_tokens"] == 6
     assert corpus_has_exact_token_quotas(output, tokenizer_dir, [plan]) is True
+
+
+def test_audit_producer_emits_canonical_manifest_plan_and_boundary_identity(
+    tmp_path: Path,
+):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_sha256 = _write_word_tokenizer(tokenizer_dir)
+    plan = _single_general_plan(token_quota=6)
+    output = tmp_path / "corpus"
+    prepare_telco_corpora(
+        registry=registry,
+        plans=[plan],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+        buffer_size=1,
+        dataset_loader=lambda _name, **_kwargs: iter(
+            ({"text": "a b c one"}, {"text": "a b c two"})
+        ),
+        tokenizer_dir=tokenizer_dir,
+    )
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    report = audit_token_quotas(
+        [output / "pilot.jsonl"],
+        tokenizer_dir,
+        [plan],
+        tolerance=0.5,
+        corpus_manifest_path=manifest_path,
+    )
+
+    item = report["stages"]["pilot"]["items"]["common_pile_wikimedia"]
+    assert report["version"] == 2
+    assert report["method"] == "tokenizer_exact_whole_document_boundary_v1"
+    assert report["tokenizer_sha256"] == tokenizer_sha256
+    assert report["corpus_manifest_sha256"] == manifest["manifest_sha256"]
+    assert report["corpus_manifest_file_sha256"] == sha256_file(manifest_path)
+    assert report["plan_sha256"] == sha256_json({"pilot": plan["plan_sha256"]})
+    assert report["stage_plan_sha256s"] == {"pilot": plan["plan_sha256"]}
+    assert item["requested_tokens"] == 6
+    assert item["actual_tokens"] == 8
+    assert item["overshoot_tokens"] == 2
+    assert item["last_document_tokens"] == 4
+    assert item["document_boundary_limited"] is True
+    unsigned = dict(report)
+    assert unsigned.pop("audit_sha256") == sha256_json(unsigned)
+
+
+def test_canonical_audit_rejects_tolerated_undershoot_without_document_boundary(
+    tmp_path: Path,
+):
+    registry = load_source_registry(REGISTRY_PATH)
+    tokenizer_dir = tmp_path / "tokenizer"
+    _write_word_tokenizer(tokenizer_dir)
+    plan = _single_general_plan(token_quota=8)
+    output = tmp_path / "corpus"
+    prepare_telco_corpora(
+        registry=registry,
+        plans=[plan],
+        output_dir=output,
+        quality_policy=DataQualityPolicy(enabled=True, min_chars=2),
+        buffer_size=1,
+        dataset_loader=lambda _name, **_kwargs: iter(
+            ({"text": "a b c one"}, {"text": "a b c two"})
+        ),
+        tokenizer_dir=tokenizer_dir,
+    )
+    short_input = tmp_path / "short.jsonl"
+    short_input.write_text(
+        json.dumps(
+            {
+                "stage": "pilot",
+                "source_id": "common_pile_wikimedia",
+                "bucket_id": None,
+                "text": "a b c one",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="whole-document boundary"):
+        audit_token_quotas(
+            [short_input],
+            tokenizer_dir,
+            [plan],
+            tolerance=0.5,
+            corpus_manifest_path=output / "manifest.json",
+        )
 
 
 def test_exact_quota_compatibility_rejects_changed_tokenizer_or_plan(tmp_path: Path):

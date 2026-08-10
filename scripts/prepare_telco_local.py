@@ -36,6 +36,7 @@ from matgpt.data.mixture import build_mixture_plan, load_mixture_config
 from matgpt.data.quality import DataQualityPolicy, load_contamination_patterns
 from matgpt.data.sources import load_source_registry
 from matgpt.data.token_dtype import DTYPES
+from matgpt.data.telco_prepare import QUOTA_AUDIT_METHOD, QUOTA_AUDIT_VERSION
 from matgpt.preflight_schema import CHECK_IDS
 from matgpt.tokenizer.candidate import (
     TokenizerCandidateConfig,
@@ -1441,6 +1442,8 @@ def _validated_pilot_quota_audit(
     managed_root: Path,
     manifest: Mapping[str, Any],
     tokenizer_sha256: str,
+    build_identity_sha256: str,
+    manifest_file_sha256: str,
 ) -> dict[str, Any]:
     path = require_managed_path(
         managed_root, path, kind="file", allow_missing=False
@@ -1451,51 +1454,47 @@ def _validated_pilot_quota_audit(
     unsigned.pop("audit_sha256", None)
     version = manifest.get("version")
     fingerprints = manifest.get("fingerprints")
-    expected_method = (
-        "whole_document_tokenizer_exact"
-        if version == 1
-        else "tokenizer_exact_one_pass"
-    )
     if (
-        audit.get("version") != 1
+        audit.get("version") != QUOTA_AUDIT_VERSION
         or audit.get("passed") is not True
-        or audit.get("method") != expected_method
+        or audit.get("method") != QUOTA_AUDIT_METHOD
         or audit.get("tokenizer_sha256") != tokenizer_sha256
-        or (
-            version == 1
-            and audit.get("manifest_sha256") != manifest.get("manifest_sha256")
-        )
-        or (
-            version == 2
-            and audit.get("plan_sha256")
-            != (
-                fingerprints.get("plan_sha256")
-                if isinstance(fingerprints, Mapping)
-                else None
-            )
-        )
+        or audit.get("corpus_manifest_sha256") != manifest.get("manifest_sha256")
+        or audit.get("corpus_build_identity_sha256") != build_identity_sha256
+        or audit.get("corpus_manifest_file_sha256")
+        != manifest_file_sha256
         or not isinstance(stored, str)
         or stored != sha256_json(unsigned)
     ):
         raise ValueError("Pilot quota audit schema or identity is invalid.")
-    if version == 2:
-        audits = manifest.get("audits")
-        reference = audits.get("quota_audit") if isinstance(audits, Mapping) else None
-        if (
-            not isinstance(reference, Mapping)
-            or reference.get("path") != path.name
-            or reference.get("size") != path.stat().st_size
-            or reference.get("sha256") != sha256_file(path)
-        ):
-            raise ValueError("Pilot manifest quota-audit fingerprint is invalid.")
     manifest_stages = manifest.get("stages")
     audit_stages = audit.get("stages")
+    stage_plan_sha256s = audit.get("stage_plan_sha256s")
     if (
         not isinstance(manifest_stages, Mapping)
         or not isinstance(audit_stages, Mapping)
         or set(audit_stages) != set(manifest_stages)
+        or not isinstance(stage_plan_sha256s, Mapping)
+        or set(stage_plan_sha256s) != set(manifest_stages)
     ):
         raise ValueError("Pilot quota audit stage coverage is incomplete.")
+    if version == 1:
+        expected_stage_plans = {
+            stage: details.get("plan_sha256")
+            for stage, details in manifest_stages.items()
+            if isinstance(details, Mapping)
+        }
+        expected_plan_sha256 = sha256_json(dict(sorted(expected_stage_plans.items())))
+        if (
+            dict(stage_plan_sha256s) != expected_stage_plans
+            or audit.get("plan_sha256") != expected_plan_sha256
+        ):
+            raise ValueError("Pilot quota audit plan identity is invalid.")
+    elif (
+        not isinstance(fingerprints, Mapping)
+        or audit.get("plan_sha256") != fingerprints.get("plan_sha256")
+    ):
+        raise ValueError("Pilot quota audit plan identity is invalid.")
     for stage_id, manifest_stage in manifest_stages.items():
         audited_stage = audit_stages.get(stage_id)
         if not isinstance(manifest_stage, Mapping) or not isinstance(
@@ -1512,7 +1511,10 @@ def _validated_pilot_quota_audit(
             type(requested) is not int
             or type(actual) is not int
             or audited_stage.get("requested_tokens") != requested
+            or audited_stage.get("planned_tokens") != requested
             or audited_stage.get("actual_tokens") != actual
+            or audited_stage.get("overshoot_tokens") != actual - requested
+            or audited_stage.get("document_boundary_limited") is not True
             or not isinstance(manifest_items, Mapping)
             or not isinstance(audited_items, Mapping)
             or set(audited_items) != set(manifest_items)
@@ -1540,10 +1542,14 @@ def _validated_pilot_quota_audit(
                 or item_actual < item_requested
                 or last_document <= 0
                 or audited_item.get("requested_tokens") != item_requested
+                or audited_item.get("planned_tokens") != item_requested
                 or audited_item.get("actual_tokens") != item_actual
                 or overshoot != item_actual - item_requested
                 or overshoot > last_document
                 or item_actual - last_document >= item_requested
+                or audited_item.get("document_boundary_limited")
+                is not (overshoot > 0)
+                or audited_item.get("passed") is not True
             ):
                 raise ValueError(
                     "Pilot quota audit does not prove a minimal whole-document boundary."
@@ -2309,12 +2315,14 @@ def _pilot_reuse_evidence(
         managed_root=drive_dir,
         tokenizer_sha256=tokenizer_sha256,
     )
-    quota_audit_path = corpus_path.parent / "quota_audit.json"
+    quota_audit_path = evidence_root / "quota_audit.json"
     _validated_pilot_quota_audit(
         quota_audit_path,
         managed_root=drive_dir,
         manifest=manifest,
         tokenizer_sha256=tokenizer_sha256,
+        build_identity_sha256=build_identity_sha256,
+        manifest_file_sha256=sha256_file(corpus_path),
     )
     if provenance.get("tokenizer_sha256") != tokenizer_sha256:
         raise ValueError("Preserved pilot tokenizer fingerprint mismatch.")

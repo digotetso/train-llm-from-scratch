@@ -322,6 +322,8 @@ def test_prepare_stage_audits_before_sharding_and_never_pretrains():
     assert "memory_fraction" in source
     assert "scripts/pretrain.py" not in source
     assert source.count('"--min-free-disk-gb", "0"') == 2
+    assert '"--corpus-manifest", CORPUS_DIR / "manifest.json"' in source
+    assert '"--output", EVIDENCE_DIR / "quota_audit.json"' in source
 
 
 def test_colab_supports_prebuilt_shards_without_retokenizing():

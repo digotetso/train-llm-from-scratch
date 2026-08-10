@@ -117,3 +117,55 @@ The only accepted residual is syscall-granularity replacement of a validated
 ancestor after the check and before a later path operation. Eliminating that
 race requires a broader dirfd/openat redesign. It is documented, unchanged,
 and outside this bounded remediation.
+
+## Producer/consumer quota-audit correction
+
+Commit parent: `9468a8b0bc88104cbacfa6df3255bb114ad3a4a0`
+
+The first final-remediation commit exposed one exact producer/consumer mismatch:
+the real `audit_token_quotas` producer emitted tolerance evidence to
+`evidence/pilot/quota_audit.json`, while preserved reuse expected a fabricated
+schema under `corpora/pilot`. The correction defines one production schema and
+one canonical notebook evidence path.
+
+- Canonical quota audits are version 2 with method
+  `tokenizer_exact_whole_document_boundary_v1`. They retain tolerance,
+  item/stage policy, planned-token, variance, and pass fields, and additionally
+  bind the exact tokenizer, corpus manifest internal/file/build identity,
+  overall and per-stage plan identities, requested/actual/overshoot counts,
+  last-document tokens, boundary status, and an internal `audit_sha256`.
+- Canonical mode refuses tolerated undershoot: every item must reach its request
+  and the last document must prove the minimal whole-document crossing. The
+  legacy direct API without a corpus manifest retains its prior tolerance
+  response for backward compatibility.
+- `scripts/audit_telco_corpus.py` now requires `--corpus-manifest` and atomically
+  fsyncs/replaces its requested output. The notebook passes the current corpus
+  manifest and writes only `EVIDENCE_DIR/quota_audit.json`.
+- Preserved reuse safely resolves and fingerprints exactly
+  `evidence/pilot/quota_audit.json`, validates every identity and boundary field,
+  and no longer accepts the corpus-root fabricated audit.
+- Integration coverage invokes the real producer on a tiny WordLevel tokenizer,
+  manifest, plan, and JSONL with legal one-document overshoot. The preserved
+  pilot fixture serializes untouched real-producer output into the canonical
+  path and feeds it through `_pilot_reuse_evidence`. Independent negatives cover
+  missing evidence; stale tokenizer, manifest, and plan; internal-hash tamper;
+  missing item; false boundary; mismatched/excess overshoot; and a nonminimal
+  last-document claim.
+
+Correction TDD and verification:
+
+```text
+Initial producer/consumer/notebook RED: 15 failed in 8.19s
+Canonical tolerated-undershoot RED: 1 failed
+Focused GREEN: 16 passed in 12.46s
+Adjacent producer/consumer/notebook/Task3 suite: 347 passed in 194.45s
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -o addopts='' -p no:cacheprovider
+727 passed, 14 skipped in 236.07s
+```
+
+All three notebook JSON documents and 31 Python code cells parsed successfully
+(the two explicit unchanged IPython magic lines were excluded from plain-Python
+AST parsing), all three changed production Python modules compiled in memory,
+and `git diff --check` was clean. No real Drive, network, corpus, tokenizer,
+GPU, training, or evaluation operation ran. The accepted dirfd/openat residual
+is unchanged.
