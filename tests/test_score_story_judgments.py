@@ -111,6 +111,51 @@ def test_score_story_judgments_cli_joins_key_and_aggregates_two_files(
     assert all(row["size"] > 0 for row in result["checkpoints"].values())
 
 
+def test_score_story_judgments_cli_validates_relocated_checkpoint_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    checkpoint_root = tmp_path / "mounted-checkpoints"
+    checkpoint_root.mkdir()
+    checkpoint = checkpoint_root / "pilot-best.pt"
+    checkpoint.write_bytes(b"immutable checkpoint")
+    stored_path = "/content/drive/MyDrive/run/checkpoints/pilot-best.pt"
+    comparison = tmp_path / "comparison_summary.json"
+    comparison.write_text(json.dumps({
+        "artifact_identity": {"config_sha256": "c" * 64},
+        "checkpoints": {
+            "pilot-best": {
+                "path": stored_path,
+                "binding": {
+                    "path": stored_path,
+                    "size": checkpoint.stat().st_size,
+                    "sha256": sha256_file(checkpoint),
+                },
+            }
+        },
+    }), encoding="utf-8")
+    key = tmp_path / "review_key.json"
+    key.write_text(json.dumps({
+        "review-0001": {
+            "checkpoint_label": "pilot-best",
+            "generation_id": "g1",
+        }
+    }), encoding="utf-8")
+    judgments = tmp_path / "judgments.jsonl"
+    _write_jsonl(judgments, [_judgment("review-0001", 0)])
+    output = tmp_path / "scored.json"
+    monkeypatch.setattr(sys, "argv", [
+        "score_story_judgments.py", "--key", str(key), "--judgments",
+        str(judgments), "--reviewer", "llm", "--comparison-summary",
+        str(comparison), "--checkpoint-root", str(checkpoint_root),
+        "--output", str(output),
+    ])
+
+    scoring_script.main()
+
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["checkpoints"]["pilot-best"]["path"] == stored_path
+
+
 @pytest.mark.parametrize("mutation", ("replaced", "zero_byte", "path_only"))
 def test_score_story_judgments_rejects_stale_or_unbound_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
