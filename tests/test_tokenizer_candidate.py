@@ -989,7 +989,7 @@ def test_local_cli_reports_storage_limits_as_advisory(
         "enforced": False,
         "event": "storage_advisory",
         "max_working_gib": 20,
-        "min_free_gib": 25,
+        "min_free_gib": 5,
         "mode": "advisory",
     }
 

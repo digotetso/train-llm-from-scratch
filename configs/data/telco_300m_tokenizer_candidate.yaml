@@ -11,5 +11,5 @@ comparison:
   min_telecom_improvement: 0.02
 local:
   max_working_gib: 20
-  min_free_gib: 25
+  min_free_gib: 5
   enforcement: advisory
