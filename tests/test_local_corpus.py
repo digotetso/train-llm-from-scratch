@@ -12,7 +12,11 @@ import pytest
 import torch
 
 from matgpt.config import clone_config, config_to_yaml, load_config
-from matgpt.data.local_corpus import LocalCorpusRequest, build_local_corpus
+from matgpt.data.local_corpus import (
+    LocalCorpusRequest,
+    _retrying_dataset,
+    build_local_corpus,
+)
 from matgpt.data.local_publish import StoragePressure
 from matgpt.data.local_state import BuildJournal
 from matgpt.data.quality import DataQualityPolicy
@@ -1476,6 +1480,41 @@ def test_iteration_timeout_restarts_from_last_committed_cursor(tmp_path: Path):
 
     assert result.status == "complete"
     assert calls > 2
+
+
+def test_closed_hugging_face_client_reopens_stream_at_consumed_cursor():
+    """A closed HTTP client is recoverable and must not restart accepted work."""
+
+    calls = 0
+    rows = [{"text": f"row {index}"} for index in range(6)]
+
+    def closed_client_stream(hf_name: str, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls != 1:
+            return iter(rows)
+
+        def iterator():
+            for index, row in enumerate(rows):
+                if index == 3:
+                    raise RuntimeError(
+                        "Cannot send a request, as the client has been closed."
+                    )
+                yield row
+
+        return iterator()
+
+    result = list(
+        _retrying_dataset(
+            closed_client_stream,
+            load_source_registry(REGISTRY_PATH).by_id["common_pile_wikimedia"],
+            (0.0,),
+            start_raw_cursor=0,
+        )
+    )
+
+    assert result == rows
+    assert calls == 2
 
 
 def test_completed_windows_accumulate_before_bounded_unit_seal(tmp_path: Path):
