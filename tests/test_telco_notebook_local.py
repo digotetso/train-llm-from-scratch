@@ -135,6 +135,8 @@ def test_local_notebook_command_uses_project_virtual_environment(monkeypatch):
     assert Path(namespace["command"][0]) == (
         namespace["REPO_ROOT"] / ".venv/bin/python"
     )
+    option_index = namespace["command"].index("--min-free-gib")
+    assert namespace["command"][option_index + 1] == "5"
 
 
 def test_local_notebook_streams_live_output_without_capture():

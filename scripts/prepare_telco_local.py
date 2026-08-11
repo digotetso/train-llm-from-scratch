@@ -109,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--drive-dir", required=True, help="Existing streamed Drive publish directory."
     )
+    parser.add_argument(
+        "--min-free-gib",
+        type=int,
+        help=(
+            "Operational free-space floor for local corpus stages. This does not "
+            "change the canonical tokenizer recipe or artifact provenance."
+        ),
+    )
 
     parser.add_argument(
         "--contamination-patterns",
@@ -1246,6 +1254,7 @@ def _corpus_request(
     model_config: Mapping[str, Any],
     tokenizer_dir: Path,
     tokenizer_sha256: str,
+    min_free_gib: int | None = None,
 ) -> LocalCorpusRequest:
     if kind not in {"pilot", "full"}:
         raise ValueError(f"Unsupported corpus request kind: {kind}")
@@ -1270,7 +1279,10 @@ def _corpus_request(
         shard_size_tokens=int(model_config["sharding"]["shard_size_tokens"]),
         raw_unit_bytes=268_435_456,
         max_working_bytes=candidate_config.max_working_gib * 1024**3,
-        min_free_bytes=candidate_config.min_free_gib * 1024**3,
+        min_free_bytes=(
+            candidate_config.min_free_gib if min_free_gib is None else min_free_gib
+        )
+        * 1024**3,
         progress_interval_seconds=30.0,
     )
 
@@ -2752,6 +2764,7 @@ def _pilot_refresh_stage(
     mixture: Mapping[str, Any],
     candidate_config: TokenizerCandidateConfig,
     model_config: Mapping[str, Any],
+    min_free_gib: int | None = None,
 ) -> dict[str, Any]:
     winner, tokenizer_dir, tokenizer_sha256, selection, comparison = (
         _selected_tokenizer_evidence(
@@ -2811,6 +2824,7 @@ def _pilot_refresh_stage(
             model_config=model_config,
             tokenizer_dir=tokenizer_dir,
             tokenizer_sha256=tokenizer_sha256,
+            min_free_gib=min_free_gib,
         )
         provider = _provider_preflight(request)
         expected_identity = _expected_build_identity(request)
@@ -2894,6 +2908,7 @@ def _full_calibration_stage(
         model_config=model_config,
         tokenizer_dir=tokenizer_dir,
         tokenizer_sha256=tokenizer_sha256,
+        min_free_gib=args.min_free_gib,
     )
     expected_identity = _expected_build_identity(request)
     provider = _provider_preflight(request)
@@ -3334,6 +3349,7 @@ def _full_resume_stage(
         model_config=model_config,
         tokenizer_dir=tokenizer_dir,
         tokenizer_sha256=tokenizer_sha256,
+        min_free_gib=args.min_free_gib,
     )
     identity = _expected_build_identity(request)
     report = _read_hashed_evidence(
@@ -3417,6 +3433,7 @@ def _status_stage(
     mixture: Mapping[str, Any],
     candidate_config: TokenizerCandidateConfig,
     model_config: Mapping[str, Any],
+    min_free_gib: int | None = None,
 ) -> dict[str, Any]:
     winner, tokenizer_dir, tokenizer_sha256, selection, comparison = (
         _selected_tokenizer_evidence(
@@ -3438,6 +3455,7 @@ def _status_stage(
         model_config=model_config,
         tokenizer_dir=tokenizer_dir,
         tokenizer_sha256=tokenizer_sha256,
+        min_free_gib=min_free_gib,
     )
     identity = _expected_build_identity(request)
     requested = {
@@ -3617,13 +3635,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     mixture = load_mixture_config(mixture_path)
     candidate_config = load_tokenizer_candidate_config(candidate_path)
     model_config = load_config(model_path)
+    if args.min_free_gib is not None and args.min_free_gib <= 0:
+        raise ValueError("--min-free-gib must be a positive integer.")
+    runtime_min_free_gib = (
+        candidate_config.min_free_gib
+        if args.min_free_gib is None
+        else args.min_free_gib
+    )
     print(
         json.dumps(
             {
                 "event": "storage_advisory",
                 "enforced": False,
                 "max_working_gib": candidate_config.max_working_gib,
-                "min_free_gib": candidate_config.min_free_gib,
+                "min_free_gib": runtime_min_free_gib,
                 "mode": candidate_config.storage_enforcement,
             },
             sort_keys=True,
@@ -3678,6 +3703,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             mixture=mixture,
             candidate_config=candidate_config,
             model_config=model_config,
+            min_free_gib=args.min_free_gib,
         )
     if args.stage == "full_calibration":
         return _full_calibration_stage(
@@ -3707,6 +3733,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             mixture=mixture,
             candidate_config=candidate_config,
             model_config=model_config,
+            min_free_gib=args.min_free_gib,
         )
     raise ValueError(f"Unsupported stage: {args.stage}")
 
