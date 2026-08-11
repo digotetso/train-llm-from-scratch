@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
+import errno
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -16,6 +17,57 @@ from matgpt.utils.hashing import sha256_file, sha256_json, sha256_text
 
 
 _LABEL_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_HARD_LINK_UNSUPPORTED = {
+    errno.EPERM,
+    errno.EXDEV,
+    errno.ENOSYS,
+    errno.EOPNOTSUPP,
+}
+_DIRECTORY_FSYNC_UNSUPPORTED = {
+    errno.EPERM,
+    errno.EINVAL,
+    errno.ENOSYS,
+    errno.EOPNOTSUPP,
+}
+
+
+def _replace_checkpoint_exclusive(source: Path, destination: Path) -> bool:
+    """Reserve a new destination and atomically move the verified staging file."""
+
+    try:
+        reservation = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        return False
+    os.close(reservation)
+    try:
+        os.replace(source, destination)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    return True
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Persist a directory entry when the backing filesystem supports it."""
+
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY)
+    except OSError as error:
+        if error.errno in _DIRECTORY_FSYNC_UNSUPPORTED:
+            return
+        raise
+    try:
+        try:
+            os.fsync(directory_fd)
+        except OSError as error:
+            if error.errno not in _DIRECTORY_FSYNC_UNSUPPORTED:
+                raise
+    finally:
+        os.close(directory_fd)
 
 
 def training_artifact_identity(cfg: Mapping[str, Any]) -> dict[str, str]:
@@ -122,9 +174,17 @@ def snapshot_checkpoint(
             or copied["sha256"] != source_binding["sha256"]
         ):
             raise ValueError("Checkpoint changed while creating immutable snapshot.")
+        published = False
         try:
             os.link(temporary, destination)
+            published = True
         except FileExistsError:
+            pass
+        except OSError as error:
+            if error.errno not in _HARD_LINK_UNSUPPORTED:
+                raise
+            published = _replace_checkpoint_exclusive(temporary, destination)
+        if not published:
             existing = checkpoint_binding(destination)
             if (
                 existing["size"] != source_binding["size"]
@@ -133,11 +193,7 @@ def snapshot_checkpoint(
                 raise ValueError(
                     f"Existing immutable checkpoint snapshot does not match: {destination}"
                 )
-        directory_fd = os.open(destination_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_directory(destination_dir)
     finally:
         temporary.unlink(missing_ok=True)
     return checkpoint_binding(destination)
