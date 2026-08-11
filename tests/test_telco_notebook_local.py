@@ -62,6 +62,20 @@ def test_local_notebook_requires_distinct_local_and_drive_roots():
     assert "Available offline" in source
 
 
+def test_local_notebook_setup_resolves_repo_when_started_from_notebooks(monkeypatch):
+    setup_source = _code_after_heading("## Setup")
+    expected_repo_root = Path.cwd().resolve()
+    monkeypatch.chdir(NOTEBOOK.parent)
+
+    namespace: dict = {}
+    exec(compile(setup_source, str(NOTEBOOK), "exec"), namespace)
+
+    assert namespace["REPO_ROOT"] == expected_repo_root
+    assert namespace["MODEL_CONFIG"] == (
+        expected_repo_root / "configs/matgpt_telco_300m.yaml"
+    )
+
+
 def test_local_notebook_has_tutorial_handoff_flow():
     headings = [
         _source(cell).splitlines()[0]
