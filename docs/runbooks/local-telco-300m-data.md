@@ -36,11 +36,13 @@ Filesystem   1024-blocks      Used Available Capacity ... Mounted on
 That is 24GiB RAM and 89.8GiB free local disk at the time of the check. The
 planning prerequisite was at least 100GiB free before the first real 200M run,
 so reclaim and re-check local space before starting. The checked candidate
-recipe has a 20GiB working-set budget and an operator-approved 5GiB absolute
-free-space floor. This floor uses the immediately writable value reported by
-`shutil.disk_usage`/`df`, which can be lower than Finder's value because Finder
-also counts purgeable APFS space. Keep additional headroom for Drive cache and
-unexpected source expansion whenever possible.
+recipe retains its original 20GiB working-set budget and 25GiB canonical
+free-space default. The local notebook applies an operator-approved 5GiB
+runtime override without changing artifact provenance. This floor uses the
+immediately writable value reported by `shutil.disk_usage`/`df`, which can be
+lower than Finder's value because Finder also counts purgeable APFS space.
+Keep additional headroom for Drive cache and unexpected source expansion
+whenever possible.
 
 ```bash
 uv sync --extra test

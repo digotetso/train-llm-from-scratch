@@ -989,9 +989,30 @@ def test_local_cli_reports_storage_limits_as_advisory(
         "enforced": False,
         "event": "storage_advisory",
         "max_working_gib": 20,
-        "min_free_gib": 5,
+        "min_free_gib": 25,
         "mode": "advisory",
     }
+
+
+def test_local_cli_applies_runtime_free_space_override_without_changing_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    common, _, _ = _local_cli_common_args(tmp_path)
+
+    def status_stage(**kwargs):
+        return {"runtime_min_free_gib": kwargs["min_free_gib"]}
+
+    monkeypatch.setattr(prepare_telco_local, "_status_stage", status_stage)
+    args = prepare_telco_local.build_parser().parse_args(
+        ["--stage", "status", *common, "--min-free-gib", "5"]
+    )
+
+    assert prepare_telco_local.run(args) == {"runtime_min_free_gib": 5}
+    assert load_tokenizer_candidate_config(
+        "configs/data/telco_300m_tokenizer_candidate.yaml"
+    ).min_free_gib == 25
 
 
 def test_local_cli_refuses_to_overwrite_candidate_directory(tmp_path: Path):
