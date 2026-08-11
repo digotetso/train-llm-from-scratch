@@ -121,6 +121,20 @@ def test_local_notebook_builds_one_deterministic_cli_command():
     assert "shlex.join(command)" in source
 
 
+def test_local_notebook_command_uses_project_virtual_environment(monkeypatch):
+    setup_source = _code_after_heading("## Setup")
+    command_source = _code_after_heading("### 2. Build and preview the command")
+    monkeypatch.chdir(NOTEBOOK.parent)
+    namespace: dict = {}
+    exec(compile(setup_source, str(NOTEBOOK), "exec"), namespace)
+
+    exec(compile(command_source, str(NOTEBOOK), "exec"), namespace)
+
+    assert Path(namespace["command"][0]) == (
+        namespace["REPO_ROOT"] / ".venv/bin/python"
+    )
+
+
 def test_local_notebook_streams_live_output_without_capture():
     source = _code_after_heading("### 3. Run the selected stage")
 
