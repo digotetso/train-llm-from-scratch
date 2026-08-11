@@ -82,6 +82,25 @@ def _join_judgments(
     return joined
 
 
+def _checkpoint_path_for_validation(
+    stored_path: object, checkpoint_root: Path | None
+) -> Path:
+    if not isinstance(stored_path, str) or not stored_path:
+        raise ValueError("checkpoint binding path is invalid")
+    if checkpoint_root is None:
+        return Path(stored_path)
+    reference = Path(stored_path)
+    if not reference.is_absolute() or reference.parent.name != "checkpoints":
+        raise ValueError("relocated checkpoint path is outside a checkpoints directory")
+    resolved_root = checkpoint_root.expanduser().resolve(strict=True)
+    if not resolved_root.is_dir():
+        raise ValueError("checkpoint root is not a directory")
+    candidate = (resolved_root / reference.name).resolve(strict=True)
+    if candidate.parent != resolved_root:
+        raise ValueError("relocated checkpoint path is outside checkpoint root")
+    return candidate
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Validate and score blinded story-consistency judgments."
@@ -99,6 +118,13 @@ def main() -> None:
     parser.add_argument(
         "--comparison-summary", required=True,
         help="comparison_summary.json whose checkpoints were judged.",
+    )
+    parser.add_argument(
+        "--checkpoint-root",
+        help=(
+            "Optional local checkpoints directory used to validate bindings "
+            "recorded on another machine."
+        ),
     )
     parser.add_argument("--output", required=True, help="New scored JSON path.")
     args = parser.parse_args()
@@ -131,6 +157,7 @@ def main() -> None:
     ):
         raise ValueError("comparison identity or checkpoint labels do not match scored judgments")
     checkpoint_bindings = {}
+    checkpoint_root = Path(args.checkpoint_root) if args.checkpoint_root else None
     for label, record in comparison_checkpoints.items():
         stored_binding = record.get("binding") if isinstance(record, dict) else None
         if (
@@ -142,10 +169,16 @@ def main() -> None:
                 f"comparison checkpoint {label!r} has no immutable binding"
             )
         try:
-            current_binding = checkpoint_binding(stored_binding.get("path", ""))
+            validation_path = _checkpoint_path_for_validation(
+                stored_binding.get("path"), checkpoint_root
+            )
+            current_binding = checkpoint_binding(validation_path)
         except (OSError, ValueError) as error:
             raise ValueError(f"comparison checkpoint is invalid: {label}") from error
-        if current_binding != stored_binding:
+        if (
+            current_binding["size"] != stored_binding["size"]
+            or current_binding["sha256"] != stored_binding["sha256"]
+        ):
             raise ValueError(f"comparison checkpoint changed after evaluation: {label}")
         checkpoint_bindings[label] = dict(stored_binding)
     result = {
