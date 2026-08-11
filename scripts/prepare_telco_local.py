@@ -84,6 +84,7 @@ PILOT_SHARD_DTYPE = "uint16"
 FULL_TARGET_TOKENS = 12_000_000_000
 CALIBRATION_MAX_WALL_SECONDS = 48 * 60 * 60
 MAX_EVIDENCE_JSON_BYTES = 4 * 1024 * 1024
+MAX_EVALUATION_JSON_BYTES = 8 * 1024 * 1024
 MAX_EVALUATION_JSON_FILES = 256
 MAX_JSON_DEPTH = 64
 
@@ -231,17 +232,22 @@ def _approved_config(value: str, option: str) -> Path:
     return supplied
 
 
-def _load_json_object(path: Path, label: str) -> dict[str, Any]:
+def _load_json_object(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int = MAX_EVIDENCE_JSON_BYTES,
+) -> dict[str, Any]:
     def reject_constant(value: str) -> None:
         raise ValueError(f"{label} contains invalid JSON constant {value}.")
 
     try:
         size = path.stat().st_size
-        if size > MAX_EVIDENCE_JSON_BYTES:
+        if size > max_bytes:
             raise ValueError(f"{label} exceeds the bounded JSON size limit.")
         with path.open("rb") as handle:
-            raw = handle.read(MAX_EVIDENCE_JSON_BYTES + 1)
-        if len(raw) > MAX_EVIDENCE_JSON_BYTES:
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
             raise ValueError(f"{label} exceeds the bounded JSON size limit.")
         payload = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
     except (json.JSONDecodeError, UnicodeError, RecursionError) as error:
@@ -2188,6 +2194,7 @@ def _pilot_colab_evidence(
                     f"Pilot preflight {split} shard metadata",
                 )
                 rows = []
+                producer_rows = []
                 paths = []
                 legacy_rows = []
                 for shard_index, shard in enumerate(metadata["shards"]):
@@ -2201,6 +2208,10 @@ def _pilot_colab_evidence(
                     paths.append(path)
                     rows.append(row)
                     legacy_rows.append(legacy)
+                    producer_row = dict(row)
+                    if legacy:
+                        producer_row["path"] = shard["path"]
+                    producer_rows.append(producer_row)
                 observed = shard_details.get(split)
                 if not isinstance(observed, Mapping):
                     raise ValueError("Pilot preflight shard fingerprint mismatch.")
@@ -2242,11 +2253,15 @@ def _pilot_colab_evidence(
                     }
                 else:
                     valid = (
-                        not any(legacy_rows)
+                        (
+                            not any(legacy_rows)
+                            or (legacy_recertification and all(legacy_rows))
+                        )
                         and observed.get("total_tokens") == metadata["total_tokens"]
                         and observed.get("metadata_sha256")
                         == metadata["metadata_sha256"]
-                        and observed.get("shard_files_sha256") == sha256_json(rows)
+                        and observed.get("shard_files_sha256")
+                        == sha256_json(producer_rows)
                     )
                 if not valid:
                     raise ValueError("Pilot preflight shard fingerprint mismatch.")
@@ -2298,7 +2313,11 @@ def _pilot_colab_evidence(
     if not evaluation_files:
         raise ValueError("Pilot evaluation evidence is missing.")
     payloads = {
-        path: _load_json_object(path, "Pilot evaluation evidence")
+        path: _load_json_object(
+            path,
+            "Pilot evaluation evidence",
+            max_bytes=MAX_EVALUATION_JSON_BYTES,
+        )
         for path in evaluation_files
     }
     explicit_path = evaluation_root / "review.json"

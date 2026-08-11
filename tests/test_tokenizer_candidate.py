@@ -3269,6 +3269,57 @@ def test_pilot_reuse_accepts_current_repo_legacy_producer_schemas(
     assert prepare_telco_local.main(["--stage", "pilot_refresh", *common]) == 2
 
 
+def test_pilot_evaluation_accepts_bounded_full_open_telco_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    _, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    task_path = (
+        recipe_root
+        / "runs/pilot/evaluation/current/checkpoint_00_latest_open_telco.json"
+    )
+    task_payload = json.loads(task_path.read_text(encoding="utf-8"))
+    task_payload["provider_payload"] = "x" * (4 * 1024 * 1024)
+    task_path.write_text(json.dumps(task_payload), encoding="utf-8")
+
+    evidence = prepare_telco_local._pilot_colab_evidence(
+        drive_dir=drive_dir,
+        gate_root=recipe_root / "evidence/pilot",
+        evaluation_root=recipe_root / "runs/pilot/evaluation",
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+
+    assert any(
+        row["path"].endswith("checkpoint_00_latest_open_telco.json")
+        for row in evidence["evaluation"]["files"]
+    )
+
+
+def test_pilot_evaluation_json_limit_remains_bounded(tmp_path: Path):
+    from scripts import prepare_telco_local
+
+    path = tmp_path / "oversized.json"
+    path.write_bytes(
+        b'{"padding":"'
+        + b"x" * prepare_telco_local.MAX_EVALUATION_JSON_BYTES
+        + b'"}'
+    )
+
+    with pytest.raises(ValueError, match="bounded JSON size"):
+        prepare_telco_local._load_json_object(
+            path,
+            "Pilot evaluation evidence",
+            max_bytes=prepare_telco_local.MAX_EVALUATION_JSON_BYTES,
+        )
+
+
 def test_pilot_reuse_accepts_verified_legacy_shards_and_preflight_metrics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3369,6 +3420,75 @@ def test_operator_recertification_gates_bind_to_preserved_pilot_corpus(
         "/pilot/colab/preflight.json"
     )
     assert evidence["config"]["path"].endswith("/pilot/colab/config.yaml")
+
+
+def test_operator_recertification_accepts_modern_preflight_for_legacy_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts import prepare_telco_local
+
+    _, _, drive_dir, _, selected_sha256 = _selected_local_cli_fixture(
+        tmp_path, monkeypatch, winner="pilot_20m"
+    )
+    recipe_root, build_identity_sha256 = _write_valid_preserved_pilot_evidence(
+        drive_dir, selected_sha256
+    )
+    shard_root = recipe_root / "prepared/pilot/shards"
+    preflight_path = recipe_root / "evidence/pilot/preflight.json"
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    shard_check = next(
+        check for check in preflight["checks"] if check["name"] == "shards"
+    )
+    for split in ("pilot", "validation"):
+        metadata_path = shard_root / f"{split}_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        preflight_rows = []
+        for shard in metadata["shards"]:
+            shard["path"] = (
+                "/content/matgpt_work/matgpt_telco_300m/legacy/shards/"
+                + Path(shard["path"]).name
+            )
+            shard.pop("byte_size")
+            preflight_rows.append({
+                "path": shard["path"],
+                "byte_size": shard["num_tokens"] * 2,
+                "num_tokens": shard["num_tokens"],
+                "sha256": shard["sha256"],
+            })
+        metadata.pop("metadata_sha256")
+        metadata["metadata_sha256"] = sha256_json(metadata)
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        shard_check["details"][split].update({
+            "metadata_sha256": metadata["metadata_sha256"],
+            "shard_files_sha256": sha256_json(preflight_rows),
+        })
+
+    operator_root = (
+        prepare_telco_local._operator_evidence_root(drive_dir, selected_sha256)
+        / "pilot/colab"
+    )
+    _write_pilot_gate_evidence(
+        operator_root,
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+    (operator_root / "preflight.json").write_text(
+        json.dumps(preflight), encoding="utf-8"
+    )
+    shutil.copy2(
+        recipe_root / "prepared/pilot/config.yaml",
+        operator_root / "config.yaml",
+    )
+
+    evidence = prepare_telco_local._pilot_colab_evidence(
+        drive_dir=drive_dir,
+        gate_root=operator_root,
+        evaluation_root=operator_root / "evaluation",
+        tokenizer_sha256=selected_sha256,
+        build_identity_sha256=build_identity_sha256,
+    )
+
+    assert evidence["preflight"]["path"].endswith("/pilot/colab/preflight.json")
 
 
 def test_pilot_reuse_prefers_complete_operator_recertification_gates(
