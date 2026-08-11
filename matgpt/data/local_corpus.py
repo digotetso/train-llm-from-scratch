@@ -40,6 +40,7 @@ from matgpt.utils.paths import open_exclusive_nofollow, require_managed_path
 _STOP_REQUESTED = False
 _EVIDENCE_SCHEMA_VERSION = 2
 _RAW_RECORD_SCHEMA = "normalized_jsonl_without_token_ids_v1"
+_CLOSED_HTTP_CLIENT_MESSAGE = "Cannot send a request, as the client has been closed."
 
 
 @dataclass(frozen=True)
@@ -715,6 +716,8 @@ def _is_transient_error(error: BaseException) -> bool:
     """Classify only connection failures and retryable HTTP status failures."""
 
     if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    if isinstance(error, RuntimeError) and str(error) == _CLOSED_HTTP_CLIENT_MESSAGE:
         return True
     response = getattr(error, "response", None)
     status = getattr(response, "status_code", getattr(error, "status_code", None))

@@ -1,5 +1,7 @@
 import ast
+import getpass
 import json
+import sys
 from pathlib import Path
 
 
@@ -143,6 +145,33 @@ def test_local_notebook_streams_live_output_without_capture():
     assert "stderr=subprocess.STDOUT" in source
     assert "for line in process.stdout" in source
     assert "capture_output=True" not in source
+
+
+def test_local_notebook_passes_prompted_hf_token_only_to_child_process(
+    monkeypatch, capsys
+):
+    source = _code_after_heading("### 3. Run the selected stage")
+    secret = "hf_test_secret_not_for_logs"
+    monkeypatch.setattr(getpass, "getpass", lambda prompt: secret)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    namespace = {
+        "PROMPT_FOR_HF_TOKEN": True,
+        "command": [
+            sys.executable,
+            "-c",
+            (
+                "import os, sys; "
+                f"sys.exit(0 if os.environ.get('HF_TOKEN') == {secret!r} else 9)"
+            ),
+        ],
+        "REPO_ROOT": Path.cwd(),
+        "RUN_STAGE": "full_resume",
+    }
+
+    exec(compile(source, str(NOTEBOOK), "exec"), namespace)
+
+    assert secret not in capsys.readouterr().out
+    assert "HF_TOKEN" not in namespace.get("process_environment", {})
 
 
 def test_local_notebook_shows_current_progress_and_process_lifecycle():
