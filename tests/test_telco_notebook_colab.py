@@ -679,6 +679,16 @@ def test_prebuilt_routes_colab_outputs_under_selected_tokenizer_namespace():
     assert 'EVIDENCE_DIR / "config.yaml"' in prepare
 
 
+def test_prebuilt_restore_uses_local_builder_contamination_fingerprint_semantics():
+    prepare = _code_after_heading("## 8. Prepare tokenizer and shards")
+
+    assert "ordered_pattern_fingerprint" in prepare
+    assert (
+        '"contamination_sha256": ordered_pattern_fingerprint('
+        "load_contamination_patterns(contamination_paths))"
+    ) in prepare
+
+
 def test_legacy_pilot_recertification_uses_fresh_selected_namespace():
     controls = _code_after_heading("## 1. Choose one stage")
     paths = _code_after_heading("## 6. Build fixed local and Drive paths")
