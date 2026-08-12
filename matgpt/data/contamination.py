@@ -23,6 +23,11 @@ def pattern_fingerprint(patterns: Iterable[str]) -> str:
     return sha256_json(list(_canonical_patterns(patterns)))
 
 
+def ordered_pattern_fingerprint(patterns: Iterable[str]) -> str:
+    """Fingerprint the exact normalized pattern sequence used by corpus manifests."""
+    return sha256_json(list(patterns))
+
+
 @dataclass(frozen=True)
 class NaiveContaminationMatcher:
     patterns: tuple[str, ...]

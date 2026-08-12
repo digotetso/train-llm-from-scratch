@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from matgpt.data.contamination import ordered_pattern_fingerprint
 from matgpt.data.local_publish import DrivePublisher, StoragePolicy
 from matgpt.data.local_state import BuildIdentity, BuildJournal, UnitCommit
 from matgpt.data.local_tokens import PackedShardWriter, encode_record_batch
@@ -693,7 +694,7 @@ def _identity(
         mode="local_corpus",
         plan_sha256=sha256_json(list(request.plans)),
         source_registry_sha256=sha256_json(asdict(request.registry)),
-        contamination_sha256=sha256_json(
+        contamination_sha256=ordered_pattern_fingerprint(
             request.quality_policy.contamination_patterns
         ),
         quality_policy_sha256=sha256_json(asdict(request.quality_policy)),
