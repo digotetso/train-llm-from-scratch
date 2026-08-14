@@ -8,25 +8,31 @@
 
 ## Learning Objective
 
-Given a short recorded sequence, explain and create:
+Given a short sequence, create and explain:
 
-- the input available at each prediction position;
+- the input at each prediction position;
 - the recorded next target;
-- the compact shifted input and target rows.
+- the compact shifted `x` and `y` rows.
 
-Success means you can trace the rule on a changed sentence and on a short list of numeric IDs.
+You have understood the lesson when you can apply the same rule to a different sentence and a short list of token IDs.
 
 ## Simple Explanation
 
-Consider:
+Start with a complete sentence:
 
 ```text
 The opposite of hot is cold
 ```
 
-Put a cut before `cold`. The text before the cut is shown to the model. The recorded word after the cut is used to check what the model predicted.
+Hide the final word:
 
-Move the cut left and repeat. Every word except the first can act as a recorded next target because every one of those words has earlier text before it.
+```text
+The opposite of hot is | cold
+```
+
+The words before the cut are the **input**. The recorded word after the cut is the **target**. Together, the input and target form a **training example**.
+
+Move the cut from left to right:
 
 ```text
 The                         -> opposite
@@ -36,39 +42,39 @@ The opposite of hot         -> is
 The opposite of hot is      -> cold
 ```
 
-The sentence contains both sides of each question. It supplies the earlier text and the recorded continuation, so no separate answer sheet is required for this base-pretraining task.
+The sentence contains both the input and the recorded target. It acts as its own answer sheet for this next-token prediction task.
 
 ## Analogy And Its Limitation
 
-**Teaching analogy:** Imagine making study cards from a completed sentence. The front shows the sentence up to one cut. The back shows the next recorded word. Moving the cut creates another card.
+You can think of the cut as covering the next word of a completed sentence. The visible side asks the question. The covered side contains the recorded answer.
 
-The analogy captures one relationship: earlier context on one side, recorded next piece on the other.
-
-**Limitation:** The repository does not store millions of word-based flashcards. It tokenizes text, samples numeric windows, shifts each window once, and calculates a prediction at every usable position. The analogy explains the expanded questions; it does not describe the storage layout or the model calculation.
+This only explains the input-target relationship. The repository does not store millions of separate word questions. It tokenizes the text and keeps several prediction positions compactly inside one shifted token-ID window.
 
 ## Technical Meaning
 
-- An **input** is the information made available to the model for a prediction.
-- A **target** is the recorded value used to check that prediction.
-- A **training example** pairs an input with a target for the training task.
-- A **prediction position** is one location in a sequence where the model predicts the next piece.
-- A **shifted target row** is the recorded sequence moved by one position so every input position aligns with its next target.
+- An **input** is the information available to the model when it makes a prediction.
+- A **target** is the recorded next value used to check that prediction.
+- A **training example** pairs an input with a target.
+- A **prediction position** is one place where the model predicts the next token.
+- **Tokenization** breaks text into pieces called **tokens**.
+- A **token ID** is the integer used to identify one token.
+- A **sequence** is an ordered list of tokens or token IDs.
 
-The target is an observed continuation, not a declaration that every alternative is wrong.
+The target is the continuation recorded in the selected text. It is not a claim that every other continuation is wrong.
 
-**Teaching simplification:** This lesson begins with words because the cuts are visible. The real repository trains on numeric token IDs. Lesson 8 explains how text becomes tokens and token IDs; Lesson 16 returns to full context windows, shifted targets, and batches.
+**Teaching simplification:** We begin with words because the cuts are easy to see. The repository trains on token IDs. Lesson 9 explains how the tokenizer creates tokens and token IDs. Lesson 17 returns to full context windows, shifted targets, and batches.
 
-In a decoder-only causal model, a prediction at one position may use the input through that position but not later positions. Lesson 29 explains the causal mask that enforces this.
+In this decoder-only causal model, each prediction position can use the input up to that position, but it cannot use later positions. Lesson 29 explains the causal mask that enforces this rule.
 
 ## Tiny Math Or Text Example
 
-The sentence has six words:
+Our sentence contains six words:
 
 ```text
 [The, opposite, of, hot, is, cold]
 ```
 
-Within this simplified word sequence:
+For this word-level demonstration:
 
 ```text
 prediction positions = sequence length - 1
@@ -76,14 +82,14 @@ prediction positions = sequence length - 1
                      = 5
 ```
 
-The compact shifted form is:
+We can write the same relationship as two shifted rows:
 
 ```text
 inputs:   [The,      opposite, of,  hot, is]
 targets:  [opposite, of,       hot, is,  cold]
 ```
 
-For a numeric window:
+Now use numeric token IDs:
 
 ```text
 window = [7, 20, 4, 2, 6]
@@ -91,23 +97,23 @@ x      = [7, 20, 4, 2]
 y      = [20, 4, 2, 6]
 ```
 
-The second row is one position ahead of the first. It contains the next recorded ID for every position in `x`.
+`y` is one position ahead of `x`. Every position in `x` lines up with its recorded next token ID in `y`.
 
 ## Commented Repository Code
 
-`PackedTokenDataset.sample_batch` in `matgpt/training/dataset.py` creates the actual training rows:
+`PackedTokenDataset.sample_batch` in `matgpt/training/dataset.py` creates the real training rows:
 
 ```python
-# Read one extra ID so both shifted rows have context_length positions.
+# Read one extra token ID so x and y have the required length.
 window = np.asarray(
     shard.data[start : start + self.context_length + 1],
     dtype=np.int64,
 )
 
-# Drop the final ID to create the model input.
+# Remove the final token ID to create the input row.
 x[row] = window[:-1]
 
-# Drop the first ID to align each input with the recorded next ID.
+# Remove the first token ID to create the target row.
 y[row] = window[1:]
 ```
 
@@ -117,35 +123,37 @@ Later, `matgpt/training/pretrain.py` passes both rows to the model:
 _, loss = train_model(x, targets=y)
 ```
 
-Inside `matgpt/model/gpt.py`, the model produces a prediction at every input position and compares those predictions with the aligned targets. Its attention call uses `is_causal=True`, which prevents a position from looking at later positions.
+Inside `matgpt/model/gpt.py`, the model predicts at every position and compares those predictions with the aligned targets. Its attention call uses `is_causal=True`, so a position cannot read future positions.
 
-This is one shifted training window with several prediction positions. It is equivalent to expanding the prefix questions for understanding, but it is more compact than storing each prefix as a separate sentence.
+The growing-prefix view and the shifted-row view describe the same task. The first makes the available context easy to see. The second is how the code keeps the relationship compact.
 
 ## Misconception
 
-**Wrong idea 1:** The target is the one true continuation.
+**Wrong idea 1:** The target is the only correct continuation.
 
-**Correction:** The target is the continuation recorded in this text. Several other continuations may be grammatical, useful, or true.
+**Correction:** The target is the continuation recorded in this text. Other continuations may also make sense.
 
-**Wrong idea 2:** In the shifted rows, each single input word is the entire context for its paired target.
+**Wrong idea 2:** Each item in `x` is the entire input for the item beside it in `y`.
 
-**Correction:** Each position can use the input through that position. The rows show alignment, while the growing-prefix view shows the available context.
+**Correction:** At each position, the model can also use the earlier positions in `x`.
 
-**Wrong idea 3:** The model trains directly on the words shown here.
+**Wrong idea 3:** The model trains directly on the words in the example.
 
-**Correction:** Words are a teaching stand-in. The repository shifts numeric token IDs.
+**Correction:** Words make the first example easy to inspect. The repository shifts token IDs.
 
-**Wrong idea 4:** Every stage used to train every LLM is next-token prediction.
+**Wrong idea 4:** Every stage of LLM training uses only next-token prediction.
 
-**Correction:** Next-token prediction is the base-pretraining objective used by this course's decoder-only model. Post-training can use other datasets and objectives.
+**Correction:** Next-token prediction is the base-pretraining objective used in this course. Post-training may use other data and objectives.
 
 ## Recap
 
-1. Begin with a recorded sequence.
-2. Use the sequence so far as input.
-3. Use the recorded next piece as the target.
-4. Move one position and repeat.
-5. Store the relationship compactly by removing the final item for `x` and the first item for `y`.
-6. Treat each aligned column as one prediction position, with access only to the input available so far.
+1. Start with recorded text.
+2. Break the text into tokens and assign token IDs.
+3. Shift one token-ID window by one position.
+4. Remove the last ID to create `x`.
+5. Remove the first ID to create `y`.
+6. Predict the next token at each position and compare it with the aligned target.
 
-Compact mental model: **show the sequence so far; predict the recorded next piece**.
+Compact mental model: **show the sequence so far; predict the recorded next token**.
+
+A token ID is only an identifier. In Lesson 2, the model will convert each token ID into an **embedding**, a learned vector of numbers that the network can use.

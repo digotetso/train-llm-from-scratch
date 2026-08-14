@@ -23,15 +23,16 @@
 
 **Time:** 00:00–01:10
 
-**Purpose:** Reveal that recorded text already contains the value used to check a next-piece prediction.
+**Purpose:** Start from familiar AI tools, name the LLM, and ask how text becomes training data.
 
 **Key shots:**
 
 1. Familiar AI text outcomes.
-2. `The opposite of hot is ___`.
-3. Two-second learner prediction.
-4. Reveal `cold`.
-5. Question card: `Where did the practice answer come from?`
+2. `Large Language Model (LLM)`.
+3. `The opposite of hot is ___`.
+4. Two-second learner prediction.
+5. Reveal `cold`.
+6. Question card: `How do we train an LLM from text?`
 
 ## Scene 2 — Intuition
 
@@ -51,14 +52,15 @@
 
 **Time:** 02:20–03:30
 
-**Purpose:** Name input, target, training example, prediction position, and the word-level simplification.
+**Purpose:** Name input, target, training example, tokenization, token, token ID, sequence, and the word-level simplification.
 
 **Key shots:**
 
 1. `input` and `target` labels attach to the already-understood sides.
 2. Both sides receive the bracket `training example`.
-3. Five expanded rows compress into one shifted window.
-4. Boundary card: `Visible words are stand-ins; the real pipeline shifts token IDs.`
+3. Flow: `text → tokenization → tokens → token IDs`.
+4. Five expanded rows compress into one shifted window.
+5. Boundary card: `Visible words are stand-ins; the real pipeline shifts token IDs.`
 
 ## Scene 4 — Tiny Example
 
@@ -128,14 +130,15 @@ End with a footer: `Text supplies targets; people still choose and audit the dat
 
 **Time:** 10:50–11:45
 
-**Purpose:** Compress the causal chain and build Lesson 2's question.
+**Purpose:** Compress the causal chain and build the question that Lesson 2 answers.
 
 **Key shots:**
 
-1. `recorded sequence`
+1. `recorded text → tokens → token IDs`
 2. `shift by one position`
-3. `input row + target row`
-4. `prediction at every usable position`
+3. `input row x + target row y`
+4. `next-token prediction at every usable position`
 5. Transfer case: `Birds fly over the calm lake`
-6. Closing line: `Show the sequence so far. Predict the recorded next piece.`
-7. Next question: `What complete model, data, hardware, and budget will use these examples?`
+6. Closing line: `Show the sequence so far. Predict the recorded next token.`
+7. Transform one token ID into an `embedding` vector.
+8. Next question: `How does a token ID become an embedding?`

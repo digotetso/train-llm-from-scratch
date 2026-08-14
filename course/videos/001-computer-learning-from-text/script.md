@@ -1,6 +1,6 @@
 # Video 1: From a Sentence to a Training Example
 
-**Subtitle:** How recorded text supplies both a question and the next piece used to check the answer
+**Subtitle:** How text becomes input and target data for next-token prediction
 
 **Learning objective:** Given a short sequence, create and explain its shifted input and target rows.
 
@@ -12,41 +12,50 @@
 
 ### Visual / Animation
 
-- Open on four quiet interface cards: an improved email, a continued paragraph, a short summary, and a code suggestion.
-- Collapse the cards into one line: `The opposite of hot is ___`.
+- Open on four simple interface cards: an improved email, a continued paragraph, a short answer, and a code suggestion.
+- Bring in the title: `Large Language Model (LLM)`.
+- Replace the cards with one line: `The opposite of hot is ___`.
 - Hold the blank for two seconds before revealing `cold`.
-- End on the question: `Where did the practice answer come from?`
+- End on the question: `How do we train an LLM from text?`
 
 ### Narration
 
-You have probably seen an AI improve an email, continue a paragraph, summarize a document, or suggest code. In every case, you give it some text and it produces more text.
+Hi.
 
-Try a tiny version yourself: “The opposite of hot is...”
+I’m sure you’ve seen what systems such as ChatGPT, Claude, and Gemini can do. They can improve an email, answer a question, continue a paragraph, and even suggest code.
 
-You probably thought of “cold.” The sentence was unfinished, but the pattern felt familiar enough for you to guess what comes next.
+These systems are built around a **large language model**, or **LLM** for short. An LLM is a mathematical model with many learned parameters. During base pretraining, it learns patterns from a large amount of text.
 
-The model we will build also practices continuing text. But who writes all of its practice answers? With a large collection of writing, nobody could create a separate answer sheet for every position by hand.
+But how do we train an LLM from text?
 
-Here is the useful surprise: the recorded text already contains the next piece. If we hide that piece, the earlier text becomes a question and the hidden piece becomes the value used to check the prediction.
+Let’s make that question smaller. Complete this sentence:
 
-By the end of this lesson, you will turn one sentence into those question-and-answer pairs by hand and with Python.
+```text
+The opposite of hot is ...
+```
+
+You probably thought of “cold.” You saw the words so far and predicted what comes next.
+
+That is where we will start. We will take one complete sentence and turn it into practice data for a language model. By the end of this lesson, you will do it by hand and with a few lines of Python.
 
 ## 01:10 Intuition
 
 ### Visual / Animation
 
 - Show the complete sentence as six word tiles: `The opposite of hot is cold`.
-- Move a vertical cut from left to right.
-- At each position, keep the words before the cut visible and briefly cover the recorded word after the cut.
-- Stop before revealing the count and ask: `Six words. How many useful cuts?`
+- Place a vertical cut before `cold`.
+- Move the cut from left to right while the input grows.
+- Stop before revealing the count and ask: `Six words. How many prediction positions?`
 
 ### Narration
 
-Start with the complete recorded sentence:
+Start with the complete sentence:
 
 ```text
 The opposite of hot is cold
 ```
+
+We already know the final word is “cold.” So the answer is already inside the text. We only need to hide it.
 
 Place a cut before the final word:
 
@@ -54,7 +63,7 @@ Place a cut before the final word:
 The opposite of hot is | cold
 ```
 
-The words before the cut are the part we show. The recorded word after the cut is the part we hide and ask the model to predict.
+The **words before the cut** are shown to the model. The **recorded word after the cut** is what we ask the model to predict.
 
 Now move the cut:
 
@@ -66,11 +75,11 @@ The opposite of hot | is cold
 The opposite of hot is | cold
 ```
 
-Each useful cut creates one next-piece question. A six-word sentence therefore gives us five places where some earlier text can be used to predict a recorded next word.
+Each cut gives us a new place to make a prediction. We call each place a **prediction position**.
 
-Why not six? Inside this sentence, there is nothing before the first word. The other five words each have something before them.
+Our sentence has six words and five prediction positions. Why five? The first word has no earlier word before it. Every word after the first can be the next recorded word.
 
-This is the mechanism. Now that we can see it, we can give its parts stable names.
+Now that the idea is clear, let’s name the two sides of the cut.
 
 ## 02:20 Technical Meaning
 
@@ -78,24 +87,30 @@ This is the mechanism. Now that we can see it, we can give its parts stable name
 
 - Return to the final cut.
 - Label the left side `input`, the right side `target`, and the pair `training example`.
-- Expand the five cuts into five rows, then compress them into one shifted two-row display.
-- Add a small boundary card: `Words here are visible stand-ins; the real pipeline shifts token IDs.`
+- Show `text → tokenization → tokens → token IDs`.
+- Add a small boundary card: `Words are the simple example. The real pipeline shifts token IDs.`
 
 ### Narration
 
-The text we show the model is the **input**.
+The text we give the model is the **input**.
 
-The recorded next piece used to check the model's prediction is the **target**.
+The recorded next word in this example is the **target**.
 
-An input paired with its target is a **training example**.
+The input and its target form a **training example**.
 
-The target is not necessarily the only correct continuation. It is the continuation that appears in this particular training text. “Cold” is a natural continuation here, but in less constrained writing, several different continuations could make sense.
+During training, the model makes a prediction from the input. We compare that prediction with the target. Later in the course, we will see how that comparison becomes a loss and how the loss is used to adjust the model’s parameters.
 
-There is one more precision that will save us confusion later.
+One point is important here. The target is not always the only possible answer. It is the continuation recorded in this training text. Another continuation may also make sense, but this is the one the model sees in this example.
 
-**Teaching simplification:** we are splitting this sentence into words because words are easy to inspect. The real repository first divides text into smaller or larger pieces called **tokens**, assigns those pieces numeric IDs, and shifts the IDs. Lesson 8 will explain how those pieces are created. For now, the visible words are stand-ins for the pieces the model actually receives.
+So far, we have used words because they are easy to see. A real language model does not split every sentence into words exactly as we did.
 
-Our five cuts expose five prediction positions. They are not five independently stored sentences. A training program can arrange the same relationship compactly as one shifted training window and calculate a prediction at every usable position.
+The process of breaking text into smaller pieces is called **tokenization**. Each piece is a **token**. A token may be a whole word, part of a word, punctuation, or another unit chosen by the tokenizer.
+
+The tokenizer assigns an integer to each token. That integer is called a **token ID**. A list of token IDs is a **sequence**.
+
+**Teaching simplification:** the words on screen are stand-ins for tokens. The real repository applies this same shift to token IDs.
+
+Our five cuts help us see five prediction positions. They are not five independently stored sentences. The code keeps the relationship compactly in one shifted training window.
 
 ## 03:30 Tiny Example
 
@@ -108,7 +123,7 @@ Our five cuts expose five prediction positions. They are not five independently 
 
 ### Narration
 
-Let us write every question explicitly:
+Let’s write the five prediction questions:
 
 ```text
 The                         -> opposite
@@ -118,26 +133,30 @@ The opposite of hot         -> is
 The opposite of hot is      -> cold
 ```
 
-At the first position, the visible text is “The” and the recorded next word is “opposite.” At the final position, the visible text is “The opposite of hot is” and the recorded next word is “cold.”
+Look at the first row. The input is “The,” and the target is “opposite.”
 
-For this simplified sentence, the count is:
+Now look at the last row. The input is “The opposite of hot is,” and the target is “cold.”
+
+For this simple word-level example:
 
 ```text
-prediction positions = words - 1
+prediction positions = number of words - 1
                      = 6 - 1
                      = 5
 ```
 
-Now arrange the same relationship in two rows. Remove the final word from the first row. Remove the first word from the second row.
+Writing every growing input helps us understand the idea. But we do not need to store five copies of the sentence. We can show the same relationship with two shifted rows.
+
+Remove the last word to create the input row. Then remove the first word to create the target row:
 
 ```text
 inputs:   The       opposite   of    hot   is
 targets:  opposite  of         hot   is    cold
 ```
 
-The target row is the original sequence shifted one position earlier. At each column, the item in the target row is what followed the item at that position in the recorded sequence.
+The target row is one position ahead of the input row. At every column, the target is the recorded word that came next.
 
-This compact arrangement is important because the training code does not need to create and store five separate copies of the sentence. It can carry one input row and one aligned target row.
+The same rule works with token IDs. Let’s look at the exact code used by this repository.
 
 ## 05:10 Repository Walkthrough
 
@@ -151,7 +170,7 @@ This compact arrangement is important because the training code does not need to
 
 ### Narration
 
-The repository applies exactly this shift to numeric IDs. In `matgpt/training/dataset.py`, it takes a window that is one position longer than the model's input:
+In the training code, we begin with a short window of token IDs. The window contains one extra ID so we can create both the input and the target:
 
 ```python
 window = shard.data[start : start + context_length + 1]
@@ -159,9 +178,13 @@ x[row] = window[:-1]
 y[row] = window[1:]
 ```
 
-**Observed repository behavior:** `window[:-1]` removes the final ID to create the input row. `window[1:]` removes the first ID to create the target row.
+The input is called `x`. The target is called `y`.
 
-Use a toy window small enough to check by hand:
+`window[:-1]` removes the last token ID. That gives us `x`.
+
+`window[1:]` removes the first token ID. That gives us `y`.
+
+Now use a small window that we can check by hand:
 
 ```text
 window = [ 7, 20, 4, 2, 6 ]
@@ -169,15 +192,13 @@ x      = [ 7, 20, 4, 2    ]
 y      = [    20, 4, 2, 6 ]
 ```
 
-The model receives the whole input row. It makes a next-piece prediction at each position, and each prediction is compared with the aligned ID in `y`.
+The model receives the whole input row. It makes a prediction at each position, and each prediction is compared with the token ID in the same position in `y`.
 
-At the second position, for example, the prediction can use the text up to that position, not just the ID `20` by itself. The repository's model prevents a position from using later positions, so it cannot simply read the answer from the future. Lesson 29 will open that prevention mechanism.
+At the second position, the model can use the text up to that position. It cannot look at later positions. The model uses a **causal mask** to block that future information. We will open that mechanism later in the course.
 
-This does not mean that each isolated input word is the whole context. The two rows show alignment. The growing prefixes show the information available at successive positions. These are two views of the same next-piece task.
+The shifted rows do not mean that each isolated input word is the whole context. The rows show the alignment. The growing inputs show the context available at each position. They are two views of the same next-token prediction task.
 
-**Source fact:** the original Transformer paper describes shifted outputs together with masking that prevents a prediction from depending on later output positions.
-
-**Observed repository behavior:** this project implements the decoder-only version of that causal relationship with shifted target IDs and causal self-attention.
+**Observed repository behavior:** `window[:-1]` creates the input row, `window[1:]` creates the target row, and causal self-attention stops each position from reading future positions.
 
 ## 07:20 Live Mini-Lab
 
@@ -191,11 +212,15 @@ This does not mean that each isolated input word is the whole context. The two r
 
 ### Narration
 
-Let us test the mental model before trusting it.
+Now let’s test the rule with Python.
 
-The sentence has six words. Predict how many prefix questions the program will print.
+Before we run anything, make two predictions.
 
-Then look at the toy window `[7, 20, 4, 2, 6]`. Predict `x` after the final ID is removed and `y` after the first ID is removed.
+First, our sentence has six words. How many prediction positions should the program print?
+
+Second, for the window `[7, 20, 4, 2, 6]`, what should `x` and `y` contain?
+
+Pause here if you need a moment.
 
 Now run:
 
@@ -211,57 +236,70 @@ x     : [7, 20, 4, 2]
 y     : [20, 4, 2, 6]
 ```
 
-That output is evidence for the preparation rule. It does not show a model learning yet; it shows how the questions and recorded targets are arranged before the later training calculation.
+That is the shift we just made by hand. The program is preparing training data. It is not training a model yet.
 
-Now change only the sentence to “Birds fly over the calm lake.” Count before running. It also has six words, so the word-level demonstration should again produce five prediction positions.
+Now change the sentence to:
 
-The sentence changed, but the shift rule did not. That is the result we need: a mechanism we can transfer, not a single example we memorized.
+```text
+Birds fly over the calm lake
+```
+
+Count the words before you run the program again. This sentence also has six words, so it should also give us five prediction positions.
+
+The sentence changed, but the rule stayed the same. That tells us we understand the rule instead of memorizing one answer.
 
 ## 09:40 Common Mistakes
 
 ### Visual / Animation
 
-- Present four short misconception cards and correct them one at a time.
+- Present four short correction cards one at a time.
 - Keep the corrected statements on screen as a checklist.
-- End with `recorded target ≠ unique truth` and `word demo ≠ real tokenization`.
+- End with `recorded target ≠ unique truth` and `word example ≠ real tokenization`.
 
 ### Narration
 
-Let us clear up four easy mistakes.
+Before we finish, let’s make four points clear.
 
-First, the target is not the only correct continuation. It is the recorded continuation in this training sequence. Other writing could continue differently.
+First, the target is not always the only correct continuation. It is the recorded continuation in this sequence.
 
-Second, the shifted display does not turn `opposite -> of` into a context-free question. At that position, the model can use the earlier input positions too. The row is compact; the available context still grows from left to right.
+Second, one item in `x` is not the whole input by itself. At each position, the model can use the earlier input positions too.
 
-Third, words are not the final units used by this repository. Words make today's relationship visible. The real system performs the shift on tokens after tokenization.
+Third, we used words in our first example because they are easy to see. That is a teaching simplification. The real model works with tokens and token IDs.
 
-Fourth, next-token prediction describes the base pretraining task for the decoder-only model built in this course. It is not a claim that every LLM training phase uses only this objective. Post-training can use curated demonstrations, preferences, rewards, or other objectives.
+Fourth, next-token prediction is the base pretraining task for the decoder-only model in this course. It is not the only way every LLM is trained. Post-training can use demonstrations, preferences, rewards, and other objectives.
 
-One more boundary matters: raw text supplies recorded targets without a separate answer sheet, but people still make choices about sources, licenses, filtering, cleaning, and evaluation. “The text contains the target” does not mean the whole data pipeline happens without human decisions.
+And although the text supplies the targets, people still choose, license, filter, clean, and evaluate the training data.
 
 ## 10:50 Recap And Exercise
 
 ### Visual / Animation
 
-- Build the chain: `recorded sequence → shift by one → input row + target row → prediction at each position`.
+- Build the chain: `recorded text → tokens → token IDs → shift by one → x + y`.
 - Reconstruct the original sentence from the two shifted rows.
 - Show `Birds fly over the calm lake` and ask the learner to trace the final target.
-- Pull back to the next lesson's question: `What complete system will use these examples?`
+- Transform the first token ID into a small vector labelled `embedding`.
+- End on the question: `How does a token ID become numbers the network can use?`
 
 ### Narration
 
-Here is the complete mental model.
+There are two key points to remember.
 
-Start with a recorded sequence. Shift it by one position. The first view becomes the input row, and the one-step-ahead view becomes the target row. At each usable position, the model makes a next-piece prediction from the text available so far, and training compares that prediction with the recorded target.
+First, nobody needs to write a separate answer sheet for every next-token prediction. The target is already in the recorded text.
 
-In our word-level demonstration:
+Second, one sequence gives us several prediction positions. We keep them compactly by shifting the sequence by one position.
+
+Here is the complete chain:
 
 ```text
-The opposite of hot is cold
-six words -> five prediction positions
+recorded text
+→ tokens
+→ token IDs
+→ one shifted training window
+→ input row x and target row y
+→ next-token prediction at each position
 ```
 
-In the repository's numeric preparation:
+For our numeric example:
 
 ```text
 window = [7, 20, 4, 2, 6]
@@ -269,14 +307,16 @@ x      = [7, 20, 4, 2]
 y      = [20, 4, 2, 6]
 ```
 
-Try the transfer case: “Birds fly over the calm lake.” What is the input at the final cut? What is the target? You should get “Birds fly over the calm” as the input and “lake” as the target.
+Now try one final example: “Birds fly over the calm lake.” At the final cut, the input is “Birds fly over the calm,” and the target is “lake.”
 
-Remember one sentence: **show the sequence so far; predict the recorded next piece**.
+That’s it. We started with a sentence and created the input and target data used for next-token prediction.
 
-We now know what one training question looks like. That creates the next question naturally: what model, data, hardware, budget, and sequence of stages will turn billions of these prediction positions into a trained checkpoint? That is the map we will build in Lesson 2.
+But a token ID is only an identifier. The number `20` does not contain the meaning of a token. The training program gives token IDs to the model, and the model’s first step converts each ID into an **embedding**. An embedding is a learned vector of numbers that the network can work with.
+
+That gives us the next question: how does a token ID become an embedding? That is what we will build in Lesson 2.
 
 ### Production Fact-Check Notes
 
-- **Source fact:** Causal language modeling predicts the next token using only tokens to its left.
+- **Source fact:** Causal language modeling predicts the next token using only earlier tokens.
 - **Observed repository behavior:** `PackedTokenDataset.sample_batch` creates `x` and `y` by shifting one token-ID window, while `GPT.forward` compares predictions at every position with the aligned targets.
 - **Teaching simplification:** visible words stand in for tokens only for the hand-worked introduction. Prefix pairs are a conceptual expansion of the prediction positions inside one shifted window.

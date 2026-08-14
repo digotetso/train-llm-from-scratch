@@ -25,7 +25,9 @@ Each concept begins with an observable question, moves through a hand-checkable 
 
 ## Design Rules
 
-**See the complete journey early.** Module 1 starts with one next-piece training example, maps the full project, and runs a tiny end-to-end pipeline. Later modules open each part of that already-visible system.
+**See the complete journey early.** Module 1 starts with one next-token training example, shows how token IDs enter the model, maps the full project, and runs a tiny end-to-end pipeline. Later modules open each part of that already-visible system.
+
+**Preview first, then open the mechanism.** Lesson 2 shows the embedding lookup with simple lists of numbers. Modules 6 and 7 later explain tensors, parameters, training, and the deeper mathematics behind that first model step.
 
 **Teach machinery when it becomes necessary.** Production corpus engineering appears when the learner's small in-memory path no longer scales.
 
@@ -45,59 +47,59 @@ The checked-in Manim and After Effects files under Lesson 1 were built for the s
 
 ## Module 1: Orientation
 
-**Outcome:** Build one training example, see the complete project, and run its smallest end-to-end path.
+**Outcome:** Build one training example, turn token IDs into the model's first numeric representation, see the complete project, and run its smallest end-to-end path.
 
 1. From a Sentence to a Training Example
-2. What You Will Build: The Model, Budget, and Training Roadmap
-3. Run the Whole Pipeline Once Before Understanding It
+2. Turning Token IDs Into Embeddings
+3. What You Will Build: The Model, Budget, and Training Roadmap
+4. Run the Whole Pipeline Once Before Understanding It
 
 ## Module 2: Text Into Numbers
 
 **Outcome:** Turn human-readable text into consistent data and defend every change made to it.
 
-4. How Computers Store Characters as Agreed Numbers
-5. Unicode Code Points and UTF-8 Bytes
-6. Why Visually Similar Text Needs Normalization
-7. Inspecting Real Text: Invisible Characters and Cleaning Decisions
+5. How Computers Store Characters as Agreed Numbers
+6. Unicode Code Points and UTF-8 Bytes
+7. Why Visually Similar Text Needs Normalization
+8. Inspecting Real Text: Invisible Characters and Cleaning Decisions
 
 ## Module 3: Tokens and BPE
 
 **Outcome:** Explain how text is divided into reusable units with numeric identifiers.
 
-8. Tokens and Token IDs
-9. Why Byte-Level Tokenization Works
-10. How BPE Learns Frequent Merges
-11. Vocabulary Size and Special Tokens
+9. Tokens and Token IDs
+10. Why Byte-Level Tokenization Works
+11. How BPE Learns Frequent Merges
+12. Vocabulary Size and Special Tokens
 
 ## Module 4: Training a Robust Tokenizer
 
 **Outcome:** Train and audit the repository's tokenizer across ordinary and unfamiliar text.
 
-12. Training the Repository Tokenizer
-13. Unicode Round Trips and the Complete Byte Alphabet
-14. Tokenizer Reports, Compression, and Failure Tests
+13. Training the Repository Tokenizer
+14. Unicode Round Trips and the Complete Byte Alphabet
+15. Tokenizer Reports, Compression, and Failure Tests
 
 ## Module 5: From Tokens to Batches
 
 **Outcome:** Turn a stream of token IDs into the exact input and target arrays consumed by the model.
 
-15. EOS Tokens and Packed Document Streams
-16. Context Windows, Shifted Targets, and Batches
+16. EOS Tokens and Packed Document Streams
+17. Context Windows, Shifted Targets, and Batches
 
 ## Module 6: Neural Network Foundations
 
-**Outcome:** Build and train a complete tiny neural network before meeting any language-model component.
+**Outcome:** Build and train a complete tiny neural network before opening how language-model components learn.
 
-17. Tensors and Shapes Without Fear
-18. What a Parameter Is: Fitting a Line by Hand
-19. Linear Layers, Matrix Multiplication, and Nonlinearity
-20. One Training Step: Forward, Loss, Backward, Update
+18. Tensors and Shapes Without Fear
+19. What a Parameter Is: Fitting a Line by Hand
+20. Linear Layers, Matrix Multiplication, and Nonlinearity
+21. One Training Step: Forward, Loss, Backward, Update
 
 ## Module 7: A First Language Model
 
 **Outcome:** Train a working language model without attention and identify exactly what it cannot do.
 
-21. Turning Token IDs Into Embeddings
 22. Logits and Next-Token Probabilities
 23. Cross-Entropy Loss With Small Numbers
 24. Training a Model Without Attention, and Where It Fails
