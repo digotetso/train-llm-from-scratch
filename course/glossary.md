@@ -10,6 +10,14 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **First video:** Video 1
 
+## Large Language Model (LLM)
+
+**Simple meaning:** A model trained to work with language and continue text.
+
+**Technical meaning:** A language model with many learned parameters that assigns probabilities to token sequences.
+
+**First video:** Video 1
+
 ## Input
 
 **Simple meaning:** The information shown to the model before it makes a prediction.
@@ -20,7 +28,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 ## Target
 
-**Simple meaning:** The recorded next piece used to check a prediction.
+**Simple meaning:** The recorded next token used to check a prediction.
 
 **Technical meaning:** The observed value aligned with a model output for the training objective. It is not necessarily the only acceptable continuation.
 
@@ -38,7 +46,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Simple meaning:** One place where the model is asked what comes next.
 
-**Technical meaning:** A sequence index whose model output is compared with the aligned next-piece target.
+**Technical meaning:** A sequence index whose model output is compared with the aligned next-token target.
 
 **First video:** Video 1
 
@@ -56,7 +64,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** A mathematical function with adjustable parameters that maps input values to output scores or predictions.
 
-**First video:** Video 2
+**First video:** Video 3
 
 ## Learning
 
@@ -64,7 +72,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** Updating model parameters using measured error from training examples.
 
-**First video:** Video 2 for the course map; Video 20 for the complete mechanism
+**First video:** Video 3 for the course map; Video 21 for the complete mechanism
 
 ## Character
 
@@ -72,7 +80,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** An abstract unit in a writing system that can be assigned a standard number.
 
-**First video:** Video 4
+**First video:** Video 5
 
 ## Number Representation
 
@@ -80,7 +88,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** A mapping between information and numeric values that a program can store and process.
 
-**First video:** Video 4
+**First video:** Video 5
 
 ## Unicode
 
@@ -88,7 +96,7 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** A standard that assigns each defined character a unique number called a code point.
 
-**First video:** Video 5
+**First video:** Video 6
 
 ## UTF-8
 
@@ -96,7 +104,15 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** A variable-length encoding that represents a Unicode code point with one to four bytes.
 
-**First video:** Video 5
+**First video:** Video 6
+
+## Tokenization
+
+**Simple meaning:** Breaking text into smaller pieces called tokens.
+
+**Technical meaning:** Applying a tokenizer's fixed rules and vocabulary to convert text into an ordered token sequence.
+
+**First video:** Video 1 for the training-data flow; Video 9 for the full mechanism
 
 ## Token
 
@@ -104,15 +120,31 @@ Read the simple meaning first. Use the technical meaning when the mechanism is c
 
 **Technical meaning:** A vocabulary unit represented by one token ID. It may be a whole word, part of a word, punctuation, whitespace, or another learned unit.
 
-**First video:** Video 8
+**First video:** Video 1 for the training-data flow; Video 9 for the full mechanism
 
 ## Token ID
 
-**Simple meaning:** The agreed vocabulary number for one token.
+**Simple meaning:** The vocabulary number used to identify one token.
 
-**Technical meaning:** An integer index used to select and process a token inside the model pipeline.
+**Technical meaning:** An integer index used to look up a token's representation. Its numeric value is an identifier, not the token's meaning.
 
-**First video:** Video 8
+**First video:** Video 1 for the training-data flow; Video 9 for the full mechanism
+
+## Sequence
+
+**Simple meaning:** Tokens or token IDs kept in a specific order.
+
+**Technical meaning:** An ordered list whose position order is preserved during language-model processing.
+
+**First video:** Video 1
+
+## Embedding
+
+**Simple meaning:** A learned list of numbers that the network can use for one token.
+
+**Technical meaning:** A learned vector selected by token ID and used as the token's initial numeric representation inside the model.
+
+**First video:** Video 2
 
 ## Pattern
 

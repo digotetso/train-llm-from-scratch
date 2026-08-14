@@ -13,7 +13,7 @@ def section(markdown: str, heading: str) -> str:
     return content.split("\n## ", maxsplit=1)[0]
 
 
-def test_video_one_starts_with_an_observable_next_piece_question():
+def test_video_one_starts_with_an_observable_next_word_question():
     hook = section(read_script(), "## 00:00 Hook")
     narration = hook.split("### Narration", maxsplit=1)[1]
 
@@ -53,7 +53,8 @@ def test_video_one_explains_the_shift_without_turning_each_input_word_into_its_w
     assert "whole input row" in walkthrough
     assert "each position" in walkthrough
     assert "text up to that position" in walkthrough
-    assert "does not mean that each isolated input word is the whole context" in walkthrough
+    assert "shifted rows do not mean" in walkthrough
+    assert "growing inputs show the context available at each position" in walkthrough
 
 
 def test_video_one_uses_prediction_then_observation_then_transfer():
@@ -98,11 +99,11 @@ def test_video_one_ends_with_a_transferable_causal_chain():
     recap = section(read_script(), "## 10:50 Recap And Exercise").lower()
 
     for phrase in [
-        "recorded sequence",
-        "shift it by one position",
+        "recorded text",
+        "shifting the sequence by one position",
         "input row",
         "target row",
-        "next-piece prediction",
+        "next-token prediction",
     ]:
         assert phrase in recap
     assert "birds fly over the calm lake" in recap
