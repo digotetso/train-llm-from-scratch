@@ -35,7 +35,7 @@ Each concept begins with an observable question, moves through a hand-checkable 
 
 **Every module ends in something inspectable.** A learner predicts, runs, traces, measures, or produces an artifact in every module.
 
-**Foundations before Transformers.** Learners meet parameters, linear layers, and a complete training step before embeddings and attention.
+**Foundations before full model mechanics.** Lesson 2 shows only the embedding lookup. Learners then meet tensors, parameters, linear layers, and a complete training step before they study logits, loss, and attention in detail.
 
 ## Production Rule
 

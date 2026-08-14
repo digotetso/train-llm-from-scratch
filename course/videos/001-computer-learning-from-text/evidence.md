@@ -51,7 +51,7 @@ Observed on 2026-08-14:
   y     : [20, 4, 2, 6]
   ```
 
-- The focused Lesson 1 and course-structure suite reported `18 passed`.
+- The focused Lesson 1 and course-structure suite reported `19 passed`.
 - The full repository suite collected 760 tests and completed with 746 passed
   and 14 skipped. The skips are optional Manim-dependent checks in the current
   environment; no test failed.

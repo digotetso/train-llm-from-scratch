@@ -226,6 +226,20 @@ def test_course_outline_matches_the_new_approved_sequence_without_duplicates():
     assert len(titles) == len(set(titles)) == 75
 
 
+def test_embedding_transition_and_shifted_lesson_references_stay_aligned():
+    outline = read(Path("course/outline.md"))
+    glossary = read(Path("course/glossary.md"))
+    lesson = read(VIDEO_DIR / "lesson.md")
+
+    assert numbered_items(outline)[1] == "2. Turning Token IDs Into Embeddings"
+    assert "before embeddings" not in outline.lower()
+    assert "**First video:** Video 2" in section(glossary, "## Embedding")
+    assert "Lesson 2" in section(lesson, "## Recap")
+    technical = section(lesson, "## Technical Meaning")
+    assert "Lesson 9" in technical
+    assert "Lesson 17" in technical
+
+
 def test_only_video_one_is_the_canonical_completed_lesson():
     produced = sorted(path.name for path in Path("course/videos").iterdir() if path.is_dir())
     assert produced == ["001-computer-learning-from-text"]

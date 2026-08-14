@@ -198,7 +198,7 @@ At the second position, the model can use the text up to that position. It canno
 
 The shifted rows do not mean that each isolated input word is the whole context. The rows show the alignment. The growing inputs show the context available at each position. They are two views of the same next-token prediction task.
 
-**Observed repository behavior:** `window[:-1]` creates the input row, `window[1:]` creates the target row, and causal self-attention stops each position from reading future positions.
+That is exactly what this repository does: `window[:-1]` creates the input row, `window[1:]` creates the target row, and causal self-attention stops each position from reading future positions.
 
 ## 07:20 Live Mini-Lab
 
