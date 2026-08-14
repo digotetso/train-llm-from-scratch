@@ -6,70 +6,81 @@ from pathlib import Path
 
 
 EXPECTED_OUTLINE = [
-    "1. What Does It Mean for a Computer to Learn From Text?",
-    "2. How Computers Store Characters as Agreed Numbers",
-    "3. From a Sentence to a Learning Example",
-    "4. Unicode Code Points and UTF-8 Bytes",
-    "5. Why Visually Similar Text Needs Normalization",
-    "6. Spaces, Control Characters, and Practical Cleaning",
-    "7. Documents, Corpora, JSON, and JSONL",
-    "8. Data-Quality Filters and Rejection Reasons",
-    "9. Exact Deduplication and Benchmark Contamination",
-    "10. Stable Dataset Splits, Manifests, and Fingerprints",
-    "11. Tokens and Token IDs",
-    "12. Why Byte-Level Tokenization Works",
-    "13. How BPE Learns Frequent Merges",
-    "14. Vocabulary Size and Special Tokens",
-    "15. Training the Repository Tokenizer",
-    "16. Unicode Round Trips and the Complete Byte Alphabet",
-    "17. Tokenizer Reports, Compression, and Failure Tests",
-    "18. EOS Tokens and Packed Document Streams",
-    "19. Binary Shards, Dtypes, and Metadata",
-    "20. Memory Mapping and Weighted Shard Sampling",
-    "21. Context Windows, Shifted Targets, and Batches",
-    "22. Tensors and Shapes Without Fear",
-    "23. Turning Token IDs Into Embeddings",
-    "24. Why Tokens Need Position Information",
-    "25. Tracing Shapes Through the Model",
+    "1. From a Sentence to a Training Example",
+    "2. What You Will Build: The Model, Budget, and Training Roadmap",
+    "3. Run the Whole Pipeline Once Before Understanding It",
+    "4. How Computers Store Characters as Agreed Numbers",
+    "5. Unicode Code Points and UTF-8 Bytes",
+    "6. Why Visually Similar Text Needs Normalization",
+    "7. Inspecting Real Text: Invisible Characters and Cleaning Decisions",
+    "8. Tokens and Token IDs",
+    "9. Why Byte-Level Tokenization Works",
+    "10. How BPE Learns Frequent Merges",
+    "11. Vocabulary Size and Special Tokens",
+    "12. Training the Repository Tokenizer",
+    "13. Unicode Round Trips and the Complete Byte Alphabet",
+    "14. Tokenizer Reports, Compression, and Failure Tests",
+    "15. EOS Tokens and Packed Document Streams",
+    "16. Context Windows, Shifted Targets, and Batches",
+    "17. Tensors and Shapes Without Fear",
+    "18. What a Parameter Is: Fitting a Line by Hand",
+    "19. Linear Layers, Matrix Multiplication, and Nonlinearity",
+    "20. One Training Step: Forward, Loss, Backward, Update",
+    "21. Turning Token IDs Into Embeddings",
+    "22. Logits and Next-Token Probabilities",
+    "23. Cross-Entropy Loss With Small Numbers",
+    "24. Training a Model Without Attention, and Where It Fails",
+    "25. Training Loss, Validation Loss, and Overfitting",
     "26. Why Tokens Need to Look at Other Tokens",
     "27. Queries, Keys, and Values",
     "28. Dot Products, Scaling, and Attention Softmax",
     "29. Causal Masks and Weighted Value Mixing",
-    "30. Heads, Reshaping, Transposing, and Joining",
-    "31. RoPE Rotations and Relative Position Math",
-    "32. Attention Output Projection",
-    "33. Residual Connections",
-    "34. RMSNorm",
-    "35. MLPs, Activations, and SwiGLU Gates",
-    "36. One Complete Block and a Stack of Blocks",
-    "37. Logits and Next-Token Probabilities",
-    "38. Cross-Entropy Loss With Small Numbers",
-    "39. Validation Loss and Perplexity",
-    "40. Computation Graphs, Gradients, and the Chain Rule",
-    "41. SGD and Learning Rate",
-    "42. Momentum, Adam, and AdamW",
-    "43. Weight Decay and Optimizer Parameter Groups",
-    "44. Warmup, Cosine Decay, and Gradient Accumulation",
-    "45. FP32, FP16, and BF16",
-    "46. Autocast and Gradient Scaling",
-    "47. Gradient Clipping, Underflow, Overflow, Inf, and NaN",
-    "48. Skipped Updates and Stability Metrics",
-    "49. What a Complete Checkpoint Saves",
-    "50. Seeds, RNG State, and Reproducibility",
-    "51. Safe Resume and Artifact Compatibility",
-    "52. Setting Up Colab, CUDA, and Persistent Drive Storage",
-    "53. Estimating Memory and Benchmarking the Batch",
-    "54. Running the Preflight and Reading Its Report",
-    "55. The Twenty-Step Smoke Test",
-    "56. The Ten-Million-Token Pilot and Go/No-Go Review",
-    "57. Continuing to 200M Tokens and Surviving Disconnects",
-    "58. Evaluating Loss, Perplexity, and Fixed Prompts",
-    "59. Reading Samples Without Fooling Yourself",
-    "60. Debugging Loss, NaNs, OOM, Repetition, and Resume Failures",
-    "61. Scaling Width, Depth, Data, Context, and Compute",
-    "62. Designing the 59M-Parameter Experiment",
-    "63. Explaining Technical Ideas Without Hidden Jargon",
-    "64. Building and Teaching Your Own LLM Pretraining Course",
+    "30. Heads, Reshaping, Transposing, and the Output Projection",
+    "31. Why Tokens Need Position Information",
+    "32. RoPE Rotations and Relative Position Math",
+    "33. Residual Connections and RMSNorm",
+    "34. MLPs, Activations, and SwiGLU Gates",
+    "35. One Complete Block and a Stack of Blocks",
+    "36. Weight Initialization and Tied Embeddings",
+    "37. Tracing Shapes and Counting Parameters Through the Whole Model",
+    "38. Computation Graphs, Gradients, and the Chain Rule",
+    "39. SGD and Learning Rate",
+    "40. Momentum, Adam, and AdamW",
+    "41. Weight Decay and Optimizer Parameter Groups",
+    "42. Warmup, Cosine Decay, and Gradient Accumulation",
+    "43. FP32, FP16, and BF16: Choosing Precision for a T4",
+    "44. Autocast and Gradient Scaling",
+    "45. Clipping, Inf, NaN, and Skipped Updates",
+    "46. Documents, Corpora, JSON, and JSONL",
+    "47. Choosing a Dataset: License, Provenance, and a Pinned Revision",
+    "48. Data-Quality Filters and Rejection Reasons",
+    "49. Exact Deduplication and Benchmark Contamination",
+    "50. Stable Dataset Splits, Manifests, and Fingerprints",
+    "51. Binary Shards, Dtypes, Memory Mapping, and Shard Sampling",
+    "52. What a Complete Checkpoint Saves",
+    "53. Seeds, RNG State, and Reproducibility",
+    "54. Safe Resume and Artifact Compatibility",
+    "55. Setting Up Colab, CUDA, and Persistent Drive Storage",
+    "56. Estimating Memory and Benchmarking the Batch",
+    "57. Running the Preflight and Reading Its Report",
+    "58. Tracking a Run: Logs, Metrics, and Experiment Records",
+    "59. The Twenty-Step Smoke Test",
+    "60. The Ten-Million-Token Pilot and Go/No-Go Review",
+    "61. Training to the Configured Token Budget and Surviving Disconnects",
+    "62. Greedy Decoding and Why It Repeats",
+    "63. Temperature, Top-k, and Top-p Sampling",
+    "64. Running the Chat Script and Why Generation Is Slow",
+    "65. Evaluating Loss, Perplexity, and Fixed Prompts",
+    "66. Multiple-Choice Tasks and Accuracy",
+    "67. Reading Samples Without Fooling Yourself",
+    "68. Debugging Loss, NaNs, OOM, Repetition, and Resume Failures",
+    "69. What a 59M-Parameter Model Can and Cannot Do",
+    "70. Token Budgets, Scaling Laws, and Being Under-Trained",
+    "71. Scaling Width, Depth, Data, Context, and Compute",
+    "72. What Post-Training Would Add: SFT and Chat Templates",
+    "73. Designing Your Own Experiment",
+    "74. Writing a Model Card and Publishing Your Run",
+    "75. Explaining Technical Ideas Without Hidden Jargon",
 ]
 
 VIDEO_DIR = Path("course/videos/001-computer-learning-from-text")
@@ -85,19 +96,27 @@ REQUIRED_VIDEO_FILES = {
     "scenes.md",
     "script.md",
 }
-MODEL_INPUT_PROMPT = "Can the mathematical model use this raw Python string as numeric input? No"
+TITLE = "From a Sentence to a Training Example"
+SUPERSEDED_LESSON_FILES = {
+    Path("course/video_1_script_2.md"),
+    Path("course/video_1_script_3.md"),
+    Path("course/video_1_script_4.md"),
+    Path("course/templates/video/final_script_v1.md"),
+    Path("course/templates/video/character_representation.py"),
+    Path("course/templates/video/text_preparation.py"),
+}
 
 TEMPLATE_HEADINGS = {
     "script.md": [
         "# Video N: Title",
         "## 00:00 Hook",
-        "## 00:45 Analogy",
-        "## 02:00 Technical Meaning",
-        "## 04:00 Tiny Example",
-        "## 06:00 Repository Walkthrough",
-        "## 09:00 Live Mini-Lab",
-        "## 12:00 Common Mistake",
-        "## 13:00 Recap And Exercise",
+        "## 01:10 Intuition",
+        "## 02:20 Technical Meaning",
+        "## 03:30 Tiny Example",
+        "## 05:10 Repository Walkthrough",
+        "## 07:20 Live Mini-Lab",
+        "## 09:40 Common Mistakes",
+        "## 10:50 Recap And Exercise",
     ],
     "lesson.md": [
         "# Video N: Title",
@@ -126,67 +145,47 @@ TEMPLATE_HEADINGS = {
     "evidence.md": [
         "# Video N Evidence: Title",
         "## Repository Anchors",
+        "## Primary Sources",
         "## Commands Run",
         "## Observed Output",
-        "## Unverified Claims",
+        "## Simplifications And Boundaries",
     ],
 }
 
 VIDEO_HEADINGS = {
-    "script.md": [
-        "# Video 1: What Does It Mean for a Computer to Learn From Text?",
-        "## 00:00 Hook",
-        "## 00:45 Analogy",
-        *TEMPLATE_HEADINGS["script.md"][3:],
-    ],
-    "lesson.md": [
-        "# Video 1: What Does It Mean for a Computer to Learn From Text?",
-        *TEMPLATE_HEADINGS["lesson.md"][1:],
-    ],
-    "lab.md": [
-        "# Video 1 Mini-Lab: Turn `Cat` Into Agreed Numbers",
-        *TEMPLATE_HEADINGS["lab.md"][1:],
-    ],
-    "quiz.md": [
-        "# Video 1 Quiz: What Does It Mean for a Computer to Learn From Text?",
-        "## Questions",
-    ],
-    "answer-key.md": [
-        "# Video 1 Answer Key: What Does It Mean for a Computer to Learn From Text?",
-        "## Answers",
-        "## Gap Explanations",
-    ],
-    "evidence.md": [
-        "# Video 1 Evidence: What Does It Mean for a Computer to Learn From Text?",
-        *TEMPLATE_HEADINGS["evidence.md"][1:],
-    ],
+    "script.md": [f"# Video 1: {TITLE}", *TEMPLATE_HEADINGS["script.md"][1:]],
+    "lesson.md": [f"# Video 1: {TITLE}", *TEMPLATE_HEADINGS["lesson.md"][1:]],
+    "lab.md": [f"# Video 1 Mini-Lab: {TITLE}", *TEMPLATE_HEADINGS["lab.md"][1:]],
+    "quiz.md": [f"# Video 1 Quiz: {TITLE}", "## Questions"],
+    "answer-key.md": [f"# Video 1 Answer Key: {TITLE}", "## Answers", "## Gap Explanations"],
+    "evidence.md": [f"# Video 1 Evidence: {TITLE}", *TEMPLATE_HEADINGS["evidence.md"][1:]],
 }
 
 APPROVED_QUIZ_ITEMS = [
     (
-        "Does a computer naturally understand `cat` like a human?",
-        "No. A program receives represented data, not the experiences and meaning a person brings to the word `cat`.",
-        "If the answer says yes, revisit `Simple Explanation`. The missing distinction is between human experience and data received by a program.",
+        "In the phrase The opposite of hot is cold, what is the input and what is the target at the final cut?",
+        "The input is The opposite of hot is, and the target is cold.",
+        "If the two parts are reversed, revisit Simple Explanation. The model receives the text before the cut and is evaluated against the recorded piece after it.",
     ),
     (
-        'What does `ord("A")` return, and what does that number represent?',
-        '`ord("A")` returns `65`. The number is the agreed Unicode number for the character `A`.',
-        "If the answer gives a different number or says `65` means a school grade, rerun the mini-lab and revisit `Technical Meaning`. The question asks about an agreed character number, not one possible use of the character.",
+        "Why does a six-piece sequence contain five next-piece prediction positions in this simplified example?",
+        "The first piece has no earlier piece inside the sequence, while each of the other five pieces can serve as the recorded next target.",
+        "If the answer is six, revisit Tiny Math Or Text Example and identify what context would exist before the first piece.",
     ),
     (
-        "Is character number `65` the human meaning of `A`?",
-        "No. `65` identifies the character under an agreed representation; it does not contain human meaning.",
-        "If the answer says yes, revisit `Analogy And Its Limitation` and `Misconception`. A library identifier helps locate a book without containing its story; character number `65` behaves similarly as an identifier.",
+        "Does target mean the only sensible or factually correct continuation?",
+        "No. The target is the continuation recorded in this training text; other continuations may also be sensible.",
+        "If the answer says the target is uniquely correct, revisit Misconception. Training supplies an observed continuation, not proof that every alternative is wrong.",
     ),
     (
-        "Why must text become numbers before a mathematical model can use it?",
-        "A mathematical model works with numbers, so text needs a numeric representation before the model can perform calculations and learn patterns from examples.",
-        "If the answer mentions only storage, revisit the final paragraph of `Simple Explanation`. Storage is one reason; the model also needs numbers because its operations are mathematical.",
+        "Why does the lesson use words first even though the repository trains on tokens?",
+        "Words make the shift easy to inspect by hand. The same positional relationship is later applied to token IDs produced by the tokenizer.",
+        "If the answer says words are the real model input, revisit Technical Meaning and the stated teaching simplification.",
     ),
     (
-        "In one sentence, what does learning mean at this stage?",
-        "Learning means adjusting a model's internal numbers so its guesses become less wrong across many examples.",
-        "If the answer describes fixed conversion with `ord`, revisit `Technical Meaning`. Representation follows an agreement. Learning requires adjustable internal values that change in response to mistakes across examples.",
+        "For window = [7, 20, 4, 2, 6], what are x and y?",
+        "x is [7, 20, 4, 2], and y is [20, 4, 2, 6].",
+        "If either row is unchanged, revisit Commented Repository Code. x drops the final ID; y drops the first ID.",
     ),
 ]
 
@@ -206,6 +205,10 @@ def headings(markdown: str) -> list[str]:
     return found
 
 
+def lesson_section_headings(markdown: str) -> list[str]:
+    return [line for line in headings(markdown) if line.startswith(("# ", "## "))]
+
+
 def section(markdown: str, heading: str) -> str:
     content = markdown.split(f"{heading}\n", maxsplit=1)[1]
     return content.split("\n## ", maxsplit=1)[0]
@@ -215,21 +218,24 @@ def numbered_items(markdown: str) -> list[str]:
     return [line for line in markdown.splitlines() if re.match(r"^\d+\. ", line)]
 
 
-def test_course_outline_matches_exact_approved_sequence_without_duplicates():
-    outline = read(Path("course/outline.md"))
-    numbered = numbered_items(outline)
+def test_course_outline_matches_the_new_approved_sequence_without_duplicates():
+    numbered = numbered_items(read(Path("course/outline.md")))
 
     assert numbered == EXPECTED_OUTLINE
     titles = [line.split(". ", maxsplit=1)[1] for line in numbered]
-    assert len(titles) == len(set(titles)) == 64
+    assert len(titles) == len(set(titles)) == 75
 
 
-def test_only_video_one_is_fully_produced():
+def test_only_video_one_is_the_canonical_completed_lesson():
     produced = sorted(path.name for path in Path("course/videos").iterdir() if path.is_dir())
     assert produced == ["001-computer-learning-from-text"]
 
 
-def test_video_one_has_exact_required_artifacts():
+def test_superseded_lesson_drafts_are_not_competing_course_sources():
+    assert not {path for path in SUPERSEDED_LESSON_FILES if path.exists()}
+
+
+def test_video_one_has_the_complete_lesson_artifact_set():
     artifacts = {path.name for path in VIDEO_DIR.iterdir() if path.is_file()}
     assert artifacts == REQUIRED_VIDEO_FILES
 
@@ -237,12 +243,12 @@ def test_video_one_has_exact_required_artifacts():
 def test_video_templates_have_required_headings():
     template_dir = Path("course/templates/video")
     for name, expected in TEMPLATE_HEADINGS.items():
-        assert headings(read(template_dir / name)) == expected, name
+        assert lesson_section_headings(read(template_dir / name)) == expected, name
 
 
 def test_video_one_artifacts_have_required_headings():
     for name, expected in VIDEO_HEADINGS.items():
-        actual = headings(read(VIDEO_DIR / name))
+        actual = lesson_section_headings(read(VIDEO_DIR / name))
         assert actual[: len(expected)] == expected, name
 
 
@@ -273,40 +279,37 @@ def test_video_one_lab_is_standard_library_only_and_has_exact_stdout():
     result = subprocess.run([sys.executable, str(lab_path)], text=True, capture_output=True, check=True)
     assert result.stderr == ""
     assert result.stdout == (
-        "Human text: Cat\n"
-        "Character numbers: [67, 97, 116]\n"
-        "UTF-8 bytes: [67, 97, 116]\n"
-        f"{MODEL_INPUT_PROMPT}\n"
-        "Learning begins after text is represented as numbers.\n"
+        "Sentence: The opposite of hot is cold\n"
+        "Words: ['The', 'opposite', 'of', 'hot', 'is', 'cold']\n"
+        "Prediction positions: 5\n"
+        "\n"
+        "Prefix questions:\n"
+        "['The'] -> opposite\n"
+        "['The', 'opposite'] -> of\n"
+        "['The', 'opposite', 'of'] -> hot\n"
+        "['The', 'opposite', 'of', 'hot'] -> is\n"
+        "['The', 'opposite', 'of', 'hot', 'is'] -> cold\n"
+        "\n"
+        "Shifted toy ID window:\n"
+        "window: [7, 20, 4, 2, 6]\n"
+        "x     : [7, 20, 4, 2]\n"
+        "y     : [20, 4, 2, 6]\n"
     )
 
 
-def test_video_one_warns_that_nfkc_is_a_non_lossless_cleaning_policy():
-    for name in ["script.md", "lesson.md"]:
-        content = read(VIDEO_DIR / name)
-        lowered = content.lower()
-        assert "deliberate cleaning policy" in lowered, name
-        assert "not lossless" in lowered, name
-        assert "①" in content and "`1`" in content, name
-        assert "change character count" in lowered, name
-        assert "Video 5" in content, name
-
-
-def test_video_one_uses_one_precise_raw_string_prompt_everywhere():
-    for name in ["script.md", "lesson.md", "lab.md", "lab.py"]:
-        assert MODEL_INPUT_PROMPT in read(VIDEO_DIR / name), name
-
-
-def test_video_one_evidence_matches_the_shown_work():
+def test_video_one_evidence_covers_sources_repository_behavior_and_boundaries():
     evidence = read(VIDEO_DIR / "evidence.md")
     anchors = section(evidence, "## Repository Anchors")
+    sources = section(evidence, "## Primary Sources")
     commands = section(evidence, "## Commands Run")
+    boundaries = section(evidence, "## Simplifications And Boundaries")
 
-    assert "uv run pytest tests/test_course_structure.py -v" in commands
-    assert "uv run pytest -v" in commands
-    assert "**Source fact:**" in anchors
-    assert "**Observed code behavior:**" in anchors
-    assert "**Teaching analogy:**" in anchors
-    assert "exact text of all five approved questions, answers, and gap explanations" in anchors
-    assert "control-character removal" not in anchors
-    assert "blank-line limiting" not in anchors
+    assert "matgpt/training/dataset.py" in anchors
+    assert "window[:-1]" in anchors and "window[1:]" in anchors
+    assert "is_causal=True" in anchors
+    assert "Attention Is All You Need" in sources
+    assert "Causal language modeling" in sources
+    assert "python course/videos/001-computer-learning-from-text/lab.py" in commands
+    assert "uv run --extra test pytest tests/test_course_structure.py tests/test_video_001_teaching_style.py -v" in commands
+    assert "words" in boundaries.lower() and "tokens" in boundaries.lower()
+    assert "prediction positions" in boundaries.lower()

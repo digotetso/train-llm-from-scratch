@@ -1,5 +1,11 @@
 # Video 001 After Effects Delivery
 
+> **Superseded lesson:** These files preserve the previous Lesson 1 render for
+> recovery. The canonical learner-facing source is now `../script.md`,
+> “From a Sentence to a Training Example.” Do not publish this 14-minute
+> project as the current lesson. Rebuild the visual package after the new
+> script is locked.
+
 This directory contains the editable 14-minute After Effects version of
 “What AI Models Actually Do,” rebuilt as native text and shape layers from the 48-shot
 Figma handoff.
@@ -67,4 +73,3 @@ A later narration conform should adjust shot boundaries without flattening the n
   `missing` object.
 - **Stale embedded manifest:** run `repair-figma-coordinate-conversion.mjs`, then rerun the AE
   test suite before rebuilding.
-

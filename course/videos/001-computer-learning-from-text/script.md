@@ -1,191 +1,282 @@
-# Video 1: What Does It Mean for a Computer to Learn From Text?
+# Video 1: From a Sentence to a Training Example
+
+**Subtitle:** How recorded text supplies both a question and the next piece used to check the answer
+
+**Learning objective:** Given a short sequence, create and explain its shifted input and target rows.
+
+**Estimated runtime:** 11 minutes 45 seconds, including prediction pauses and the terminal demonstration.
+
+**Production direction:** Compose for 16:9. Use one consistent cool color for input and one consistent warm color for target. Narration is spoken; visual directions, code, commands, outputs, and fact-check notes are not read word for word.
 
 ## 00:00 Hook
 
-[On screen: `cat`]
+### Visual / Animation
 
-When you read `cat`, you may picture an animal or remember a pet. That meaning comes from your experience. You've seen AI work with text too: it can rewrite an essay, improve an email, or write code.
+- Open on four quiet interface cards: an improved email, a continued paragraph, a short summary, and a code suggestion.
+- Collapse the cards into one line: `The opposite of hot is ___`.
+- Hold the blank for two seconds before revealing `cold`.
+- End on the question: `Where did the practice answer come from?`
 
-But here's the puzzle. On your computer, the text box shows words, while the model underneath works by calculating with numbers. So how does the text you type become numbers the model can use—and why is that conversion not yet learning?
+### Narration
 
-By the end, you'll explain the difference with three letters, three numbers, and a tiny Python file. To get there, let's start with a smaller question: how can a number identify something without containing its meaning?
+You have probably seen an AI improve an email, continue a paragraph, summarize a document, or suggest code. In every case, you give it some text and it produces more text.
 
-## 00:45 Analogy
+Try a tiny version yourself: “The opposite of hot is...”
 
-**Teaching analogy:** Imagine a library where every book has a number. It helps the librarian find the right book, while the story stays inside. That number is an **identifier**: it tells us which book, not what the story means.
+You probably thought of “cold.” The sentence was unfinished, but the pattern felt familiar enough for you to guess what comes next.
 
-Text systems do something similar: agreed numbers help software tell characters apart. But the analogy only takes us so far. Here is its **limit**: a library number can point to a whole book, while text systems represent individual characters and stored forms. This bridge explains identification, not learning.
+The model we will build also practices continuing text. But who writes all of its practice answers? With a large collection of writing, nobody could create a separate answer sheet for every position by hand.
 
-Now return to Python and predict: does it invent a new number for `A` every time, or follow a fixed agreement? Hold your answer, and let's find out.
+Here is the useful surprise: the recorded text already contains the next piece. If we hide that piece, the earlier text becomes a question and the hidden piece becomes the value used to check the prediction.
 
-## 02:00 Technical Meaning
+By the end of this lesson, you will turn one sentence into those question-and-answer pairs by hand and with Python.
 
-Now that you have a prediction, let's find out what rule Python actually follows. Take `C`, `a`, and `t`. Python processes each one as a **character**—one item from a string, just like a space or a question mark.
+## 01:10 Intuition
 
-Software needs a shared agreement that distinguishes those characters. **Unicode** is that shared standard. It assigns each encoded character an integer identifier called a **code point**. Python's `ord` function reports the code point for one character:
+### Visual / Animation
 
-```python
-ord("C")  # 67
-ord("a")  # 97
-ord("t")  # 116
-```
+- Show the complete sentence as six word tiles: `The opposite of hot is cold`.
+- Move a vertical cut from left to right.
+- At each position, keep the words before the cut visible and briefly cover the recorded word after the cut.
+- Stop before revealing the count and ask: `Six words. How many useful cuts?`
 
-Before looking ahead, compare those calls. If we run `ord("C")` again tomorrow, should the answer improve or change? No. Python is following a fixed agreement. The number identifies `C`; it does not contain the fact that `Cat` names an animal.
+### Narration
 
-So far, we have one agreed number for each character. But when text is stored or sent, there is another layer: the **byte**. A byte is eight bits and can hold an unsigned value from 0 through 255. **UTF-8** is a widely used rule that represents Unicode text as one or more bytes for each code point.
-
-For the simple English letters in `Cat`, the code-point values and the UTF-8 byte values match. Those letters are in the ASCII range, and UTF-8 stores each one as a single byte with the same value. That is a property of this example, not a universal rule. Other characters can require several UTF-8 bytes. Video 4 will build that mechanism carefully.
-
-We can now explain how text gets a numeric form, but that still does not explain learning. For that, we need a **model**: a mathematical prediction system with adjustable numbers called **parameters**. It receives numeric input and produces a prediction. During training, we measure how wrong that prediction is and use the error to adjust the parameters. At this stage, that parameter change is what we mean by **learning**.
-
-Now that we understand both actions, we can give the distinction a stable name. **Text representation** changes the form of the input by following fixed agreements. **Learning** changes the model's adjustable parameters using examples and measured error.
-
-We can now use this representation–learning distinction as a building block:
-
-> Text representation follows fixed agreements. Learning changes adjustable model parameters using examples and measured error.
-
-## 04:00 Tiny Example
-
-Let's use that building block immediately. Start with the representation side and predict the three code points for `Cat`. Then compare your answer with this trace:
+Start with the complete recorded sentence:
 
 ```text
-Human-readable text: C    a    t
-Agreed numbers:      67   97   116
+The opposite of hot is cold
 ```
 
-Those numbers let a program count values, compare sequences, or select a value by position. But the arithmetic distance between `67` and `97` is not the difference in meaning between `C` and `a`. The numbers represent the characters under an agreement; they do not carry the human meaning of the word.
-
-Now keep that representation fixed and move to the learning side. Suppose the training examples include:
+Place a cut before the final word:
 
 ```text
-cat sat
-cat ran
-cat slept
+The opposite of hot is | cold
 ```
 
-What repeats? Each line begins with `cat`, followed by a space and then an action word. No label says “animal” or “action.” The examples only supply repeated relationships that can affect later predictions.
+The words before the cut are the part we show. The recorded word after the cut is the part we hide and ask the model to predict.
 
-Now imagine a model makes ten predictions and gets seven wrong. Training uses those mistakes to adjust its parameters. On comparable later examples, it gets five wrong. Seven mistakes becoming five gives us a small intuition for improvement: predictions changed after measured error changed the adjustable numbers.
+Now move the cut:
 
-Real training uses a numeric error measure rather than this simple mistake count. A model may also memorize its training examples, so we check improvement on separate examples it did not train on. We will build the exact update method much later. For now, the causal chain is enough: examples lead to predictions, predictions produce measurable error, and that error guides parameter changes.
+```text
+The | opposite of hot is cold
+The opposite | of hot is cold
+The opposite of | hot is cold
+The opposite of hot | is cold
+The opposite of hot is | cold
+```
 
-## 06:00 Repository Walkthrough
+Each useful cut creates one next-piece question. A six-word sentence therefore gives us five places where some earlier text can be used to predict a recorded next word.
 
-Our tiny example gives us the idea. Now let's see where the representation side appears in this project.
+Why not six? Inside this sentence, there is nothing before the first word. The other five words each have something before them.
 
-**Source fact:** This repository does not send remote, unprocessed text straight into training. It first normalizes the text and stores the result. The relevant code lives in `matgpt/data/normalize.py` and `matgpt/data/prepare.py`.
+This is the mechanism. Now that we can see it, we can give its parts stable names.
 
-Start with this simplified excerpt from `normalize.py`:
+## 02:20 Technical Meaning
+
+### Visual / Animation
+
+- Return to the final cut.
+- Label the left side `input`, the right side `target`, and the pair `training example`.
+- Expand the five cuts into five rows, then compress them into one shifted two-row display.
+- Add a small boundary card: `Words here are visible stand-ins; the real pipeline shifts token IDs.`
+
+### Narration
+
+The text we show the model is the **input**.
+
+The recorded next piece used to check the model's prediction is the **target**.
+
+An input paired with its target is a **training example**.
+
+The target is not necessarily the only correct continuation. It is the continuation that appears in this particular training text. “Cold” is a natural continuation here, but in less constrained writing, several different continuations could make sense.
+
+There is one more precision that will save us confusion later.
+
+**Teaching simplification:** we are splitting this sentence into words because words are easy to inspect. The real repository first divides text into smaller or larger pieces called **tokens**, assigns those pieces numeric IDs, and shifts the IDs. Lesson 8 will explain how those pieces are created. For now, the visible words are stand-ins for the pieces the model actually receives.
+
+Our five cuts expose five prediction positions. They are not five independently stored sentences. A training program can arrange the same relationship compactly as one shifted training window and calculate a prediction at every usable position.
+
+## 03:30 Tiny Example
+
+### Visual / Animation
+
+- Build the five prefix questions one row at a time.
+- Count from one to five.
+- Replace them with two aligned rows labelled `inputs` and `targets`.
+- Draw a guide from each input position to the target one place ahead.
+
+### Narration
+
+Let us write every question explicitly:
+
+```text
+The                         -> opposite
+The opposite                -> of
+The opposite of             -> hot
+The opposite of hot         -> is
+The opposite of hot is      -> cold
+```
+
+At the first position, the visible text is “The” and the recorded next word is “opposite.” At the final position, the visible text is “The opposite of hot is” and the recorded next word is “cold.”
+
+For this simplified sentence, the count is:
+
+```text
+prediction positions = words - 1
+                     = 6 - 1
+                     = 5
+```
+
+Now arrange the same relationship in two rows. Remove the final word from the first row. Remove the first word from the second row.
+
+```text
+inputs:   The       opposite   of    hot   is
+targets:  opposite  of         hot   is    cold
+```
+
+The target row is the original sequence shifted one position earlier. At each column, the item in the target row is what followed the item at that position in the recorded sequence.
+
+This compact arrangement is important because the training code does not need to create and store five separate copies of the sentence. It can carry one input row and one aligned target row.
+
+## 05:10 Repository Walkthrough
+
+### Visual / Animation
+
+- Open `matgpt/training/dataset.py` and isolate the three lines that create `window`, `x`, and `y`.
+- Replace the long token stream with the toy window `[7, 20, 4, 2, 6]`.
+- Animate the last ID leaving `x` and the first ID leaving `y`.
+- Align each `x` position with its `y` target.
+- Show a small shield over future positions labelled `cannot look ahead`.
+
+### Narration
+
+The repository applies exactly this shift to numeric IDs. In `matgpt/training/dataset.py`, it takes a window that is one position longer than the model's input:
 
 ```python
-def normalize_text(text: str) -> str:
-    # Apply Unicode canonical and compatibility normalization.
-    text = unicodedata.normalize("NFKC", str(text))
-
-    # Use one newline style even if the source used another style.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # Remove trailing whitespace from each line.
-    lines = [line.rstrip() for line in text.split("\n")]
-    text = "\n".join(lines).strip()
-    return text
+window = shard.data[start : start + context_length + 1]
+x[row] = window[:-1]
+y[row] = window[1:]
 ```
 
-Let's follow the value from top to bottom. `text: str` and `-> str` communicate the expected input and output types; Python does not enforce those annotations at runtime. `str(text)` first asks Python for a string form of the input.
+**Observed repository behavior:** `window[:-1]` removes the final ID to create the input row. `window[1:]` removes the first ID to create the target row.
 
-Next, `unicodedata.normalize("NFKC", ...)` applies a chosen Unicode normalization form. Then the `replace` calls turn different newline styles into `\n`. The list comprehension removes trailing whitespace from each line. The final `strip()` removes whitespace from the outer edges, and `return text` gives the normalized string back to the caller.
+Use a toy window small enough to check by hand:
 
-**Normalization-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, it changes the circled character `①` into plain `1`. That can be useful when both forms should be treated alike, but it also collapses a distinction in the source. Some inputs can change character count, so the original text cannot always be recovered exactly. Video 5 will examine that tradeoff. For now, keep one point: normalization is a choice, not a lossless copy.
-
-The full repository function also removes selected non-printing control characters and limits runs of blank lines. The excerpt shows only the operations needed for today's trace.
-
-Now follow the normalized value into this simplified excerpt from `prepare.py`:
-
-```python
-# First preparation operation: normalize the source text.
-normalized = normalize_text(text)
-
-return {
-    # Other record fields are omitted from this excerpt.
-    # Preserve the normalized text for later processing.
-    "text": normalized,
-
-    # Record the normalized string length reported by Python.
-    "num_chars": len(normalized),
-}
+```text
+window = [ 7, 20, 4, 2, 6 ]
+x      = [ 7, 20, 4, 2    ]
+y      = [    20, 4, 2, 6 ]
 ```
 
-**Observed code behavior:** `normalize_text(text)` receives source text and returns normalized text. The record stores that result and the Python string length reported by `len(normalized)`, along with other metadata omitted here. That length does not always equal the number of symbols a person sees, because one visible symbol can involve multiple code points.
+The model receives the whole input row. It makes a next-piece prediction at each position, and each prediction is compared with the aligned ID in `y`.
 
-What changed in this walkthrough? The text became more consistent, and the record captured its normalized form and length. What did not change? No model parameter was updated. This is data preparation, not learning. That distinction leads directly to our lab: can we inspect fixed numeric representations without pretending the inspection itself teaches the model?
+At the second position, for example, the prediction can use the text up to that position, not just the ID `20` by itself. The repository's model prevents a position from using later positions, so it cannot simply read the answer from the future. Lesson 29 will open that prevention mechanism.
 
-## 09:00 Live Mini-Lab
+This does not mean that each isolated input word is the whole context. The two rows show alignment. The growing prefixes show the information available at successive positions. These are two views of the same next-piece task.
 
-Now let's test the same ideas ourselves. Open `course/videos/001-computer-learning-from-text/lab.py`.
+**Source fact:** the original Transformer paper describes shifted outputs together with masking that prevents a prediction from depending on later output positions.
 
-```python
-text = "Cat"
+**Observed repository behavior:** this project implements the decoder-only version of that causal relationship with shifted target IDs and causal self-attention.
 
-print("Human text:", text)
-print("Character numbers:", [ord(character) for character in text])
-print("UTF-8 bytes:", list(text.encode("utf-8")))
-print("Can the mathematical model use this raw Python string as numeric input? No")
-print("Learning begins after text is represented as numbers.")
-```
+## 07:20 Live Mini-Lab
 
-Before you run it, predict both numeric lists. We already traced each character, so write down `[67, 97, 116]` for the character numbers. Will the UTF-8 list match for these three letters? Our earlier rule says yes.
+### Visual / Animation
 
-From the repository root, run:
+- Open `course/videos/001-computer-learning-from-text/lab.py`.
+- Hold on the sentence and ask for two predictions: the number of positions and the shifted toy ID rows.
+- Run the command in a full-width terminal.
+- Highlight the five prefix questions, then the `x` and `y` rows.
+- Change only the sentence to `Birds fly over the calm lake` and pause for a transfer prediction.
+
+### Narration
+
+Let us test the mental model before trusting it.
+
+The sentence has six words. Predict how many prefix questions the program will print.
+
+Then look at the toy window `[7, 20, 4, 2, 6]`. Predict `x` after the final ID is removed and `y` after the first ID is removed.
+
+Now run:
 
 ```bash
-python course/videos/001-computer-learning-from-text/lab.py
+uv run python course/videos/001-computer-learning-from-text/lab.py
 ```
 
-Now explain each observed line. `Human text` shows the form useful to us as readers. The list comprehension visits one character at a time, and `ord(character)` reports its Unicode code point. `text.encode("utf-8")` produces the UTF-8 bytes, while `list(...)` displays those bytes as ordinary integers.
+The program prints five prefix questions. It also prints:
 
-For `Cat`, both lists contain `67`, `97`, and `116`. The match confirms our prediction for these ASCII-range letters. It does not prove that code points and UTF-8 bytes always match.
-
-The line `Can the mathematical model use this raw Python string as numeric input? No` makes a narrow claim. Python can perform text operations on a string. The mathematical model needs numeric input, and later lessons will show the representation it actually receives. This file demonstrates preparation; it does not update parameters.
-
-Now change only one input:
-
-```python
-text = "A"
+```text
+window: [7, 20, 4, 2, 6]
+x     : [7, 20, 4, 2]
+y     : [20, 4, 2, 6]
 ```
 
-Predict again before rerunning the file. Both lists should contain `65`. When the output confirms that prediction, ask what caused it. `ord("A")` followed the same fixed agreement as before. It did not practice, measure an error, or improve.
+That output is evidence for the preparation rule. It does not show a model learning yet; it shows how the questions and recorded targets are arranged before the later training calculation.
 
-Finally, return the line to `text = "Cat"` so the lab matches the documented output.
+Now change only the sentence to “Birds fly over the calm lake.” Count before running. It also has six words, so the word-level demonstration should again produce five prediction positions.
 
-## 12:00 Common Mistake
+The sentence changed, but the shift rule did not. That is the result we need: a mechanism we can transfer, not a single example we memorized.
 
-By now, two common mistakes should stand out. The first is saying, “The number `65` is the meaning of `A`.” But `65` identifies the character `A` under the Unicode agreement. `A` might be a school grade, a musical note, a blood type, or one letter in a word. Its human meaning changes with context while its code point stays the same.
+## 09:40 Common Mistakes
 
-Try this diagnostic question: if another character system assigned a different number to `A`, would people have to change what `A` means? No. The number is a representation, not the meaning.
+### Visual / Animation
 
-The second mistake is saying that conversion is learning. `ord` applies a fixed mapping. It returns the same result no matter how many examples you show it. Learning requires something adjustable: training measures prediction error and changes model parameters in response.
+- Present four short misconception cards and correct them one at a time.
+- Keep the corrected statements on screen as a checklist.
+- End with `recorded target ≠ unique truth` and `word demo ≠ real tokenization`.
 
-## 13:00 Recap And Exercise
+### Narration
 
-We've followed the idea from human meaning to represented text and then to learning. Now let's rebuild the answer in plain language.
+Let us clear up four easy mistakes.
 
-When you read `cat`, you bring meaning from your experience. Software first handles represented text. Unicode gives characters code points, and UTF-8 represents those characters as bytes. Those fixed mappings make the text usable as data, but applying them does not teach a model anything.
+First, the target is not the only correct continuation. It is the recorded continuation in this training sequence. Other writing could continue differently.
 
-A model begins to learn only when it makes predictions, measures error, and changes its adjustable parameters so later predictions can improve.
+Second, the shifted display does not turn `opposite -> of` into a context-free question. At that position, the model can use the earlier input positions too. The row is compact; the available context still grows from left to right.
 
-Check the model in your own head:
+Third, words are not the final units used by this repository. Words make today's relationship visible. The real system performs the shift on tokens after tokenization.
 
-- What does `ord("A")` return, and why is that answer stable?
-- Why does `65` identify `A` without containing every meaning of `A`?
-- What must change before we can say learning occurred?
-- If the input changes from `Cat` to `A`, which parts of your trace should change and which rule stays fixed?
+Fourth, next-token prediction describes the base pretraining task for the decoder-only model built in this course. It is not a claim that every LLM training phase uses only this objective. Post-training can use curated demonstrations, preferences, rewards, or other objectives.
 
-For the exercise, run the mini-lab with `A`, record the output, and complete this sentence: “The number 65 is assigned to ___, but it does not encode ___.” Then return the file to `Cat`.
+One more boundary matters: raw text supplies recorded targets without a separate answer sheet, but people still make choices about sources, licenses, filtering, cleaning, and evaluation. “The text contains the target” does not mean the whole data pipeline happens without human decisions.
 
-The representation–learning distinction is now one of our building blocks, not just a sentence to memorize. Text representation gives the model numbers it can work with. Learning changes the model's adjustable numbers—its parameters—so later predictions can improve.
+## 10:50 Recap And Exercise
 
-In the next lesson, we will use the representation side of that building block to ask a more precise question: how does a computer assign stable numbers to written characters? Because we already know this is representation rather than learning, we can focus on how those agreed numbers are assigned.
+### Visual / Animation
 
-### Vocabulary Deferred to Later Videos
+- Build the chain: `recorded sequence → shift by one → input row + target row → prediction at each position`.
+- Reconstruct the original sentence from the two shifted rows.
+- Show `Birds fly over the calm lake` and ask the learner to trace the final target.
+- Pull back to the next lesson's question: `What complete system will use these examples?`
 
-The terms **token**, **tensor**, **logit**, **gradient**, and **attention** are intentionally not taught or used as explanations in Video 1. Each will be introduced from plain language in its approved later video.
+### Narration
+
+Here is the complete mental model.
+
+Start with a recorded sequence. Shift it by one position. The first view becomes the input row, and the one-step-ahead view becomes the target row. At each usable position, the model makes a next-piece prediction from the text available so far, and training compares that prediction with the recorded target.
+
+In our word-level demonstration:
+
+```text
+The opposite of hot is cold
+six words -> five prediction positions
+```
+
+In the repository's numeric preparation:
+
+```text
+window = [7, 20, 4, 2, 6]
+x      = [7, 20, 4, 2]
+y      = [20, 4, 2, 6]
+```
+
+Try the transfer case: “Birds fly over the calm lake.” What is the input at the final cut? What is the target? You should get “Birds fly over the calm” as the input and “lake” as the target.
+
+Remember one sentence: **show the sequence so far; predict the recorded next piece**.
+
+We now know what one training question looks like. That creates the next question naturally: what model, data, hardware, budget, and sequence of stages will turn billions of these prediction positions into a trained checkpoint? That is the map we will build in Lesson 2.
+
+### Production Fact-Check Notes
+
+- **Source fact:** Causal language modeling predicts the next token using only tokens to its left.
+- **Observed repository behavior:** `PackedTokenDataset.sample_batch` creates `x` and `y` by shifting one token-ID window, while `GPT.forward` compares predictions at every position with the aligned targets.
+- **Teaching simplification:** visible words stand in for tokens only for the hand-worked introduction. Prefix pairs are a conceptual expansion of the prediction positions inside one shifted window.

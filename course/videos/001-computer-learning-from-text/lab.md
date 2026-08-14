@@ -1,67 +1,74 @@
-# Video 1 Mini-Lab: Turn `Cat` Into Agreed Numbers
+# Video 1 Mini-Lab: From a Sentence to a Training Example
 
 ## Setup
 
 - Start in the repository root.
 - Use the Python already available for this project.
 - No packages, downloads, or network connection are required.
-- Open `course/videos/001-computer-learning-from-text/lab.py` when a step asks you to change the text.
+- Open `course/videos/001-computer-learning-from-text/lab.py` before making the transfer change.
 
 ## Command
 
 ```bash
-python course/videos/001-computer-learning-from-text/lab.py
+uv run python course/videos/001-computer-learning-from-text/lab.py
 ```
 
 ## Prediction
 
 Before running the command, write down:
 
-1. The three character numbers you predict for `Cat`.
-2. The three UTF-8 bytes you predict for `Cat`.
-3. Whether those numbers contain the human meaning of the word.
+1. How many prediction positions a six-word sentence supplies in this word-level demonstration.
+2. The final target in `The opposite of hot is cold`.
+3. The values of `x` and `y` for `window = [7, 20, 4, 2, 6]`.
 
 ## Steps
 
-1. Confirm that the first line of `lab.py` is `text = "Cat"`.
-2. Run the command from the repository root.
-3. Compare both printed lists with your prediction.
-4. Change the first line to `text = "A"`.
-5. Predict the two new lists before rerunning the command.
-6. Run the command and compare the output with your prediction.
-7. Explain aloud why `65` is an agreed representation of `A`, not the human meaning of `A`.
-8. Restore the first line to `text = "Cat"` so the checked lab has deterministic output.
+1. Count the words in the sentence.
+2. Predict the number of printed prefix questions.
+3. Compute `window[:-1]` and `window[1:]` by hand.
+4. Run the command.
+5. Compare every printed line with your prediction.
+6. Change the sentence to `Birds fly over the calm lake`.
+7. Predict the final input, final target, and number of positions.
+8. Run the command again and explain why the shift stayed the same.
+9. Restore the original sentence so the checked lab keeps deterministic output.
 
 ## Expected Output
 
-With `text = "Cat"`:
+With the checked sentence:
 
 ```text
-Human text: Cat
-Character numbers: [67, 97, 116]
-UTF-8 bytes: [67, 97, 116]
-Can the mathematical model use this raw Python string as numeric input? No
-Learning begins after text is represented as numbers.
-```
+Sentence: The opposite of hot is cold
+Words: ['The', 'opposite', 'of', 'hot', 'is', 'cold']
+Prediction positions: 5
 
-With `text = "A"`, the first three lines become:
+Prefix questions:
+['The'] -> opposite
+['The', 'opposite'] -> of
+['The', 'opposite', 'of'] -> hot
+['The', 'opposite', 'of', 'hot'] -> is
+['The', 'opposite', 'of', 'hot', 'is'] -> cold
 
-```text
-Human text: A
-Character numbers: [65]
-UTF-8 bytes: [65]
+Shifted toy ID window:
+window: [7, 20, 4, 2, 6]
+x     : [7, 20, 4, 2]
+y     : [20, 4, 2, 6]
 ```
 
 ## Explanation
 
-`ord` follows the Unicode agreement and shows the number assigned to each character. `encode("utf-8")` applies the UTF-8 storage rule, and `list` displays the resulting bytes as ordinary numbers.
+The loop expands the sequence into visible prefix questions. Each position begins at one because a target needs at least one earlier word inside this demonstration.
 
-For these simple English letters, the two lists match. Python can work with the raw string as text, but the mathematical model cannot use that string as numeric input. The result shows numeric representation, not human meaning and not learning. The script follows fixed rules; it does not adjust itself after seeing examples.
+The numeric example uses the same shift as `PackedTokenDataset.sample_batch`: `x` drops the final ID and `y` drops the first ID. The aligned value in `y` is the recorded next target for each position in `x`.
+
+This lab demonstrates data preparation, not learning. It neither builds a model nor changes model parameters.
 
 ## Extension
 
-Complete this sentence in your own words:
+For `Birds fly over the calm lake`, answer without running:
 
-> The number `65` represents __________, but it does not contain __________.
+1. What is the final input?
+2. What is the final target?
+3. How many prediction positions are there?
 
-Then give two different human uses of `A` that keep the same character number.
+Then invent a five-word sentence and trace both the expanded prefix questions and the compact shifted rows.

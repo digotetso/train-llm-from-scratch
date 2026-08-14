@@ -59,8 +59,15 @@ def test_palette_has_stable_semantic_roles():
     }
 
 
-def test_displayed_lab_output_matches_the_runnable_lab():
-    expected = literal_assignment("LAB_OUTPUT_LINES")
+def test_legacy_animation_keeps_its_historical_lab_output_separate_from_the_current_lab():
+    legacy_output = literal_assignment("LAB_OUTPUT_LINES")
+    assert legacy_output == (
+        "Human text: Cat",
+        "Character numbers: [67, 97, 116]",
+        "UTF-8 bytes: [67, 97, 116]",
+        "Can the mathematical model use this raw Python string as numeric input? No",
+        "Learning begins after text is represented as numbers.",
+    )
     result = subprocess.run(
         [sys.executable, str(VIDEO_DIR / "lab.py")],
         text=True,
@@ -68,7 +75,7 @@ def test_displayed_lab_output_matches_the_runnable_lab():
         check=True,
     )
     assert result.stderr == ""
-    assert tuple(result.stdout.splitlines()) == expected
+    assert tuple(result.stdout.splitlines()) != legacy_output
 
 
 def test_manim_config_targets_the_final_delivery_format():
@@ -253,13 +260,16 @@ def test_first_four_section_methods_remain_available_to_the_final_scene():
         assert callable(getattr(animation._Video001PartOne, method))
 
 
-def test_repository_excerpt_lines_are_present_in_the_approved_script():
-    script = (VIDEO_DIR / "script.md").read_text(encoding="utf-8")
-    for line in (
-        *literal_assignment("NORMALIZE_CODE_LINES"),
-        *literal_assignment("PREPARE_CODE_LINES"),
-    ):
-        assert line.strip() in script
+def test_legacy_visual_assets_are_explicitly_marked_superseded():
+    animation_tree = ast.parse(ANIMATION_PATH.read_text(encoding="utf-8"))
+    animation_notice = ast.get_docstring(animation_tree) or ""
+    after_effects_notice = (VIDEO_DIR / "after-effects" / "README.md").read_text(encoding="utf-8")
+    outline = Path("course/outline.md").read_text(encoding="utf-8")
+
+    assert "Legacy render source for the superseded Lesson 1" in animation_notice
+    assert "From a Sentence to a Training Example" in animation_notice
+    assert "Superseded lesson" in after_effects_notice
+    assert "preserved as recovery artifacts" in outline
 
 
 def test_final_scene_implements_every_timeline_method():

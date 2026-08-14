@@ -1,21 +1,21 @@
-# Video 1 Answer Key: What Does It Mean for a Computer to Learn From Text?
+# Video 1 Answer Key: From a Sentence to a Training Example
 
 ## Answers
 
-1. No. A program receives represented data, not the experiences and meaning a person brings to the word `cat`.
-2. `ord("A")` returns `65`. The number is the agreed Unicode number for the character `A`.
-3. No. `65` identifies the character under an agreed representation; it does not contain human meaning.
-4. A mathematical model works with numbers, so text needs a numeric representation before the model can perform calculations and learn patterns from examples.
-5. Learning means adjusting a model's internal numbers so its guesses become less wrong across many examples.
+1. The input is The opposite of hot is, and the target is cold.
+2. The first piece has no earlier piece inside the sequence, while each of the other five pieces can serve as the recorded next target.
+3. No. The target is the continuation recorded in this training text; other continuations may also be sensible.
+4. Words make the shift easy to inspect by hand. The same positional relationship is later applied to token IDs produced by the tokenizer.
+5. x is [7, 20, 4, 2], and y is [20, 4, 2, 6].
 
 ## Gap Explanations
 
-1. If the answer says yes, revisit `Simple Explanation`. The missing distinction is between human experience and data received by a program.
-2. If the answer gives a different number or says `65` means a school grade, rerun the mini-lab and revisit `Technical Meaning`. The question asks about an agreed character number, not one possible use of the character.
-3. If the answer says yes, revisit `Analogy And Its Limitation` and `Misconception`. A library identifier helps locate a book without containing its story; character number `65` behaves similarly as an identifier.
-4. If the answer mentions only storage, revisit the final paragraph of `Simple Explanation`. Storage is one reason; the model also needs numbers because its operations are mathematical.
-5. If the answer describes fixed conversion with `ord`, revisit `Technical Meaning`. Representation follows an agreement. Learning requires adjustable internal values that change in response to mistakes across examples.
+1. If the two parts are reversed, revisit Simple Explanation. The model receives the text before the cut and is evaluated against the recorded piece after it.
+2. If the answer is six, revisit Tiny Math Or Text Example and identify what context would exist before the first piece.
+3. If the answer says the target is uniquely correct, revisit Misconception. Training supplies an observed continuation, not proof that every alternative is wrong.
+4. If the answer says words are the real model input, revisit Technical Meaning and the stated teaching simplification.
+5. If either row is unchanged, revisit Commented Repository Code. x drops the final ID; y drops the first ID.
 
 ## Misconception Correction
 
-Character numbers do not carry semantic meaning. Here, **semantic meaning** simply means the human idea communicated by a character or word. `A` keeps code point `65` whether it is used as a grade, a note, a blood type, or part of `Cat`.
+A shifted row is a compact arrangement of prediction positions. It does not remove the earlier context available at later positions, and it does not claim that the recorded target is the only possible continuation.

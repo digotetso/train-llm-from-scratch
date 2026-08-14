@@ -1,9 +1,9 @@
-# Video 1 Quiz: What Does It Mean for a Computer to Learn From Text?
+# Video 1 Quiz: From a Sentence to a Training Example
 
 ## Questions
 
-1. Does a computer naturally understand `cat` like a human?
-2. What does `ord("A")` return, and what does that number represent?
-3. Is character number `65` the human meaning of `A`?
-4. Why must text become numbers before a mathematical model can use it?
-5. In one sentence, what does learning mean at this stage?
+1. In the phrase The opposite of hot is cold, what is the input and what is the target at the final cut?
+2. Why does a six-piece sequence contain five next-piece prediction positions in this simplified example?
+3. Does target mean the only sensible or factually correct continuation?
+4. Why does the lesson use words first even though the repository trains on tokens?
+5. For window = [7, 20, 4, 2, 6], what are x and y?
