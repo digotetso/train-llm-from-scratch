@@ -1,3 +1,10 @@
+"""Legacy render source for the superseded Lesson 1.
+
+The canonical learner-facing lesson is now script.md, titled
+"From a Sentence to a Training Example." Preserve this module for recovery,
+but do not publish or revise its render as if it matched the new script.
+"""
+
 from __future__ import annotations
 
 import os

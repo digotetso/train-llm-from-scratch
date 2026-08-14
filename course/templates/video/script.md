@@ -1,33 +1,83 @@
 # Video N: Title
 
+Keep visual directions and spoken narration in separate subsections.
+
 ## 00:00 Hook
 
-Open with one beginner question and state why its answer matters.
+### Visual / Animation
 
-## 00:45 Analogy
+Show one observable question or result.
 
-Give one familiar analogy. Label it as a teaching analogy and state where it stops matching the real system.
+### Narration
 
-## 02:00 Technical Meaning
+Invite a prediction and establish why the answer matters.
 
-Name the idea only after explaining it plainly. Define every new term before using it again.
+## 01:10 Intuition
 
-## 04:00 Tiny Example
+### Visual / Animation
 
-Work through one small text or number example that can be checked by hand.
+Make the mechanism visible in ordinary language.
 
-## 06:00 Repository Walkthrough
+### Narration
 
-Show a short, commented excerpt. Distinguish source facts from observed code behavior and explain each displayed line.
+Let the learner reason before introducing terminology.
 
-## 09:00 Live Mini-Lab
+## 02:20 Technical Meaning
 
-Ask for a prediction, run the documented command, compare the observed output, and make one small change.
+### Visual / Animation
 
-## 12:00 Common Mistake
+Attach stable names to the mechanism the learner now understands.
 
-Name one likely misconception, show why it is wrong, and give the learner a question they can use to catch it.
+### Narration
 
-## 13:00 Recap And Exercise
+Define each new term and state any simplification that would otherwise mislead.
 
-Restate the one objective, ask beginner questions, and assign one short exercise with a separate answer key.
+## 03:30 Tiny Example
+
+### Visual / Animation
+
+Use a case small enough to trace completely.
+
+### Narration
+
+Walk through the causal chain and ask for one prediction.
+
+## 05:10 Repository Walkthrough
+
+### Visual / Animation
+
+Show only the relevant repository lines and exact data flow.
+
+### Narration
+
+Separate source facts from observed behavior and explain each displayed change.
+
+## 07:20 Live Mini-Lab
+
+### Visual / Animation
+
+Keep code, commands, and output readable.
+
+### Narration
+
+Predict, run, observe, explain, change one input, and predict again.
+
+## 09:40 Common Mistakes
+
+### Visual / Animation
+
+Contrast the correct mechanism with likely category errors.
+
+### Narration
+
+Give the learner a diagnostic question they can reuse.
+
+## 10:50 Recap And Exercise
+
+### Visual / Animation
+
+Rebuild the smallest reusable mental model.
+
+### Narration
+
+Trace the complete chain once, transfer it to a changed case, and build the next lesson's question from it.

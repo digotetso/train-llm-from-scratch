@@ -1,66 +1,67 @@
-# Video 1 Evidence: What Does It Mean for a Computer to Learn From Text?
+# Video 1 Evidence: From a Sentence to a Training Example
 
 ## Repository Anchors
 
-- **Source fact:** [`matgpt/data/normalize.py`](../../../matgpt/data/normalize.py) defines `normalize_text`. The excerpt actually shown in the lesson applies NFKC, makes newline styles consistent, removes right-edge whitespace from each line, removes outer whitespace, and returns the result.
-- **Observed code behavior:** [`matgpt/data/prepare.py`](../../../matgpt/data/prepare.py) imports `normalize_text` and calls it in `make_document_record`. The shown excerpt stores the cleaned text under `text` and its character count under `num_chars`.
-- **Observed code behavior:** [`lab.py`](lab.py) uses Python's built-in `ord` and `str.encode` behavior to display the agreed character numbers and UTF-8 bytes for `Cat`.
-- **Observed test behavior:** [`tests/test_course_structure.py`](../../../tests/test_course_structure.py) checks the exact outline, single produced video, artifact headings, exact text of all five approved questions, answers, and gap explanations, lab source and output, teaching warnings, prompt alignment, and evidence contract.
-- **Teaching analogy:** The library-card comparison in the lesson and answer key illustrates an agreed identifier versus meaning. It is not repository behavior.
+- **Observed repository behavior:** [`matgpt/training/dataset.py`](../../../matgpt/training/dataset.py) samples `context_length + 1` IDs, assigns `window[:-1]` to `x`, and assigns `window[1:]` to `y`.
+- **Observed repository behavior:** [`matgpt/training/pretrain.py`](../../../matgpt/training/pretrain.py) calls the model with `x` and `targets=y`.
+- **Observed repository behavior:** [`matgpt/model/gpt.py`](../../../matgpt/model/gpt.py) produces scores at every input position, compares them with the aligned targets, and calls scaled dot-product attention with `is_causal=True`.
+- **Observed test behavior:** [`tests/test_training_core.py`](../../../tests/test_training_core.py) verifies that every sampled target row is shifted one position relative to its input row.
+- **Observed code behavior:** [`lab.py`](lab.py) expands visible word-prefix questions and applies the same slice relationship to `[7, 20, 4, 2, 6]`.
+
+## Primary Sources
+
+- **Attention Is All You Need:** Vaswani et al. describe decoder outputs offset by one position and masking that prevents a prediction at one position from depending on later positions: <https://arxiv.org/abs/1706.03762>.
+- **GPT-2 training objective:** OpenAI describes GPT-2's base objective as predicting the next word from the previous text: <https://openai.com/index/better-language-models/>.
+- **Causal language modeling:** Hugging Face's official task guide defines causal language modeling as predicting the next token using only tokens to the left and shows inputs used as one-position-shifted labels: <https://huggingface.co/docs/transformers/main/tasks/language_modeling>.
+
+The repository itself is the source of truth for where this project performs the shift. External sources support the general causal-language-model relationship.
 
 ## Commands Run
 
 From the repository root:
 
 ```bash
-uv run pytest tests/test_course_structure.py -v
-uv run pytest tests/test_course_structure.py::test_video_one_uses_approved_quiz_and_aligned_answer_key -v
-uv run pytest tests/test_course_structure.py::test_video_one_evidence_matches_the_shown_work -v
-python course/videos/001-computer-learning-from-text/lab.py
-rg -n '\b(token|tensor|logit|gradient|attention)\b' course/videos/001-computer-learning-from-text
-uv run pytest -v
-VIDEO001_TIMING_SCALE=0.05 manim -ql --save_sections -o video-001-computer-learning-from-text --config_file course/videos/001-computer-learning-from-text/manim.cfg course/videos/001-computer-learning-from-text/animation.py Video001ComputerLearningFromText
-manim -o video-001-computer-learning-from-text --config_file course/videos/001-computer-learning-from-text/manim.cfg course/videos/001-computer-learning-from-text/animation.py Video001ComputerLearningFromText
-ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,profile,pix_fmt,width,height,r_frame_rate,avg_frame_rate,nb_frames -show_entries format=duration,size,format_name -of json course/videos/001-computer-learning-from-text/media/videos/animation/1080p30/video-001-computer-learning-from-text.mp4
-uv run --extra test --extra video pytest tests/test_video_001_animation.py tests/test_course_structure.py -v
-uv run --extra test --extra video pytest -v
+uv run python course/videos/001-computer-learning-from-text/lab.py
+uv run --extra test pytest tests/test_course_structure.py tests/test_video_001_teaching_style.py -v
+uv run --extra test pytest -o addopts='' -q
+git diff --check
 ```
 
 ## Observed Output
 
-Observed locally on 2026-07-19:
+Observed on 2026-08-14:
 
-- Before `course/` existed, the focused test collected two tests and failed both. The first failure was `FileNotFoundError: course/outline.md`; the second was `AssertionError: script.md`. This was the intended RED result.
-- After the course files were added, the focused test reported `2 passed in 0.10s`.
-- The direct lab run exited successfully and printed:
+- The direct lab command exited successfully and printed:
 
   ```text
-  Human text: Cat
-  Character numbers: [67, 97, 116]
-  UTF-8 bytes: [67, 97, 116]
-  Can the mathematical model use this raw Python string as numeric input? No
-  Learning begins after text is represented as numbers.
+  Sentence: The opposite of hot is cold
+  Words: ['The', 'opposite', 'of', 'hot', 'is', 'cold']
+  Prediction positions: 5
+
+  Prefix questions:
+  ['The'] -> opposite
+  ['The', 'opposite'] -> of
+  ['The', 'opposite', 'of'] -> hot
+  ['The', 'opposite', 'of', 'hot'] -> is
+  ['The', 'opposite', 'of', 'hot', 'is'] -> cold
+
+  Shifted toy ID window:
+  window: [7, 20, 4, 2, 6]
+  x     : [7, 20, 4, 2]
+  y     : [20, 4, 2, 6]
   ```
 
-- The beginner-language scan found the advanced terms only in explicit deferred-vocabulary boundaries, the scan command itself, and the future-claims list. None is used to explain the Video 1 objective.
-- During the review follow-up, the corrected stronger contract produced the intended RED result: `4 failed, 6 passed in 0.18s`. The failures identified the old lab prompt, missing NFKC warning, inconsistent prompt references, and incomplete evidence contract.
-- After the content fixes, the focused contract reported `10 passed in 0.11s`.
-- The full verbose repository suite reported `153 passed in 6.82s`.
-- During the final answer-alignment follow-up, changing answer 3 to the opposite claim produced `1 failed in 0.11s`; the failure identified the exact wrong answer at index 2.
-- After restoring answer 3, replacing gap explanation 4 with misleading guidance produced `1 failed in 0.09s`; the failure identified the exact wrong explanation at index 3.
-- Adding the stronger evidence-description assertion before updating this file produced `1 failed in 0.11s`.
-- With all correct content restored, the focused course contract reported `10 passed in 0.11s`, the direct lab printed the current output shown above, and the full verbose suite reported `153 passed in 7.42s`.
+- The focused Lesson 1 and course-structure suite reported `18 passed`.
+- The full repository suite collected 760 tests and completed with 746 passed
+  and 14 skipped. The skips are optional Manim-dependent checks in the current
+  environment; no test failed.
 
-Observed locally on 2026-07-21:
+## Simplifications And Boundaries
 
-- The accelerated end-to-end render completed all eight timestamped sections and 97 animation segments. Its low-quality H.264 preview is 854×480 at 15 fps and 43.399 seconds; the extra 1.399 seconds versus a simple 5% scale is caused by frame quantization across many short preview animations.
-- Representative frames from every section were inspected. The resulting regression fixes keep the hook words above their panels, prevent the character/byte diagram from overlapping, preserve terminal-line width while highlighting, center the repository preparation pair inside the safe frame, and keep the recap's parameter-update label readable.
-- The final Manim render completed all 97 animation segments. `ffprobe` reported H.264 High profile, YUV 4:2:0, 1920×1080, 30 fps, 25,200 frames, exactly 840.000 seconds, and 22,718,113 bytes.
-- The focused animation and course-structure suite reported `31 passed in 2.04s`.
-- The direct lab run exited successfully with the five documented lines shown above. The final full repository suite reported `212 passed in 14.40s`, and `git diff --check` reported no whitespace errors.
-
-## Unverified Claims
-
-- Future details of tokenization, token embeddings, tensors, logits, gradients, and attention are intentionally deferred to their approved videos.
-- The tiny `7`-mistakes-to-`5`-mistakes example is a teaching illustration. It is not observed output from a repository training run.
-- The library-card comparison is a teaching analogy. It is not a claim about the repository implementation.
+- **Words versus tokens:** The hand-worked example uses words so a beginner can see the cut. The repository trains on token IDs. Word boundaries and token boundaries are not generally identical.
+- **Examples versus prediction positions:** Expanding every prefix is a useful conceptual view. The implementation carries one shifted training window with several prediction positions, not several independently stored copies of the sentence.
+- **Target versus truth:** A target is the continuation recorded in the selected text. It is not necessarily the only sensible, grammatical, or factual continuation.
+- **Data-provided targets versus human decisions:** Base-pretraining text supplies next-token targets without a separate manual answer sheet. Dataset sourcing, licensing, filtering, cleaning, splitting, and evaluation still require deliberate choices.
+- **Training scope:** Next-token prediction describes this course's decoder-only base-pretraining objective. It does not describe every possible post-training objective.
+- **Deferred mechanism:** This lesson names causal look-ahead prevention only to explain why the model cannot read future targets. Lesson 29 teaches the causal mask itself.
+- **Legacy visual assets:** The checked-in Manim and After Effects assets correspond to the superseded Lesson 1 and have not been rebuilt for this script.

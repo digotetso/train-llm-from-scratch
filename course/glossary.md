@@ -1,22 +1,70 @@
 # Course Glossary
 
-Read the `Simple meaning` first. Use the `Technical meaning` when the simple idea is comfortable. Future videos must extend this glossary before using a new technical term.
-
-## Computer
-
-**Simple meaning:** A machine that follows instructions for receiving, storing, changing, and returning information.
-
-**Technical meaning:** A programmable electronic system that performs operations on represented data.
-
-**First video:** Video 1
+Read the simple meaning first. Use the technical meaning when the mechanism is comfortable. A term's first video is where its mechanism is taught, not merely where a boundary note may mention its name.
 
 ## Text
 
-**Simple meaning:** Written symbols arranged so people can read them, such as `Cat` or `Hello!`.
+**Simple meaning:** Written material, such as a sentence, article, or program.
 
-**Technical meaning:** A sequence of characters stored through an agreed character representation.
+**Technical meaning:** Recorded symbols that later pipeline stages represent and divide into model-readable units.
 
 **First video:** Video 1
+
+## Input
+
+**Simple meaning:** The information shown to the model before it makes a prediction.
+
+**Technical meaning:** The sequence positions made available to the model for a training or inference calculation.
+
+**First video:** Video 1
+
+## Target
+
+**Simple meaning:** The recorded next piece used to check a prediction.
+
+**Technical meaning:** The observed value aligned with a model output for the training objective. It is not necessarily the only acceptable continuation.
+
+**First video:** Video 1
+
+## Training Example
+
+**Simple meaning:** One practice question together with the recorded value used to check it.
+
+**Technical meaning:** An input paired with a target for one evaluation term in the training objective.
+
+**First video:** Video 1
+
+## Prediction Position
+
+**Simple meaning:** One place where the model is asked what comes next.
+
+**Technical meaning:** A sequence index whose model output is compared with the aligned next-piece target.
+
+**First video:** Video 1
+
+## Shifted Targets
+
+**Simple meaning:** A copy of a sequence moved by one place so each input lines up with what followed it.
+
+**Technical meaning:** For a window `w`, the repository forms `x = w[:-1]` and `y = w[1:]`, producing equal-length input and target rows.
+
+**First video:** Video 1
+
+## Model
+
+**Simple meaning:** A number-based system that makes predictions.
+
+**Technical meaning:** A mathematical function with adjustable parameters that maps input values to output scores or predictions.
+
+**First video:** Video 2
+
+## Learning
+
+**Simple meaning:** Changing a model so its predictions improve on the training task.
+
+**Technical meaning:** Updating model parameters using measured error from training examples.
+
+**First video:** Video 2 for the course map; Video 20 for the complete mechanism
 
 ## Character
 
@@ -24,7 +72,7 @@ Read the `Simple meaning` first. Use the `Technical meaning` when the simple ide
 
 **Technical meaning:** An abstract unit in a writing system that can be assigned a standard number.
 
-**First video:** Video 1
+**First video:** Video 4
 
 ## Number Representation
 
@@ -32,7 +80,7 @@ Read the `Simple meaning` first. Use the `Technical meaning` when the simple ide
 
 **Technical meaning:** A mapping between information and numeric values that a program can store and process.
 
-**First video:** Video 1
+**First video:** Video 4
 
 ## Unicode
 
@@ -40,52 +88,36 @@ Read the `Simple meaning` first. Use the `Technical meaning` when the simple ide
 
 **Technical meaning:** A standard that assigns each defined character a unique number called a code point.
 
-**First video:** Video 1
+**First video:** Video 5
 
 ## UTF-8
 
-**Simple meaning:** A widely used set of rules for storing Unicode characters as small numbers called bytes.
+**Simple meaning:** A widely used rule for storing Unicode text as bytes.
 
 **Technical meaning:** A variable-length encoding that represents a Unicode code point with one to four bytes.
 
-**First video:** Video 1
+**First video:** Video 5
 
-## Data
+## Token
 
-**Simple meaning:** Recorded information that a computer can receive, store, or change.
+**Simple meaning:** One piece produced when the tokenizer divides text.
 
-**Technical meaning:** Values represented in a form a program can process.
+**Technical meaning:** A vocabulary unit represented by one token ID. It may be a whole word, part of a word, punctuation, whitespace, or another learned unit.
 
-**First video:** Video 1
+**First video:** Video 8
 
-## Example
+## Token ID
 
-**Simple meaning:** One case that helps show what should happen, such as the text `The cat sleeps`.
+**Simple meaning:** The agreed vocabulary number for one token.
 
-**Technical meaning:** One observed input, often paired with a desired result, used to measure or improve a model.
+**Technical meaning:** An integer index used to select and process a token inside the model pipeline.
 
-**First video:** Video 1
+**First video:** Video 8
 
 ## Pattern
 
-**Simple meaning:** Something that repeats or makes one result more likely after another thing appears.
+**Simple meaning:** A repeated relationship that can make one continuation more likely than another.
 
-**Technical meaning:** A recurring relationship in data that can help make a prediction.
+**Technical meaning:** A statistical regularity learned from data and represented by model parameters.
 
-**First video:** Video 1
-
-## Model
-
-**Simple meaning:** A number-based guessing system whose internal numbers can be adjusted.
-
-**Technical meaning:** A mathematical function with adjustable values that maps an input to an output prediction.
-
-**First video:** Video 1
-
-## Learning
-
-**Simple meaning:** Improving guesses by changing internal numbers after seeing examples and measuring mistakes.
-
-**Technical meaning:** Adjusting a model's values so its prediction error becomes smaller across training examples.
-
-**First video:** Video 1
+**First video:** Video 24

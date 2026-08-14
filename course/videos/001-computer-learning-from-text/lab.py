@@ -1,7 +1,20 @@
-text = "Cat"
+sentence = "The opposite of hot is cold"
+words = sentence.split()
 
-print("Human text:", text)
-print("Character numbers:", [ord(character) for character in text])
-print("UTF-8 bytes:", list(text.encode("utf-8")))
-print("Can the mathematical model use this raw Python string as numeric input? No")
-print("Learning begins after text is represented as numbers.")
+print("Sentence:", sentence)
+print("Words:", words)
+print("Prediction positions:", len(words) - 1)
+print()
+
+print("Prefix questions:")
+for position in range(1, len(words)):
+    print(words[:position], "->", words[position])
+
+print()
+print("Shifted toy ID window:")
+window = [7, 20, 4, 2, 6]
+x = window[:-1]
+y = window[1:]
+print("window:", window)
+print("x     :", x)
+print("y     :", y)

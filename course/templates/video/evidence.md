@@ -2,7 +2,11 @@
 
 ## Repository Anchors
 
-Link every taught code behavior to its canonical repository file and explain why the excerpt is relevant.
+Link every taught repository behavior to its canonical file and explain why the excerpt is relevant.
+
+## Primary Sources
+
+Link technical claims that do not originate in this repository to primary papers, standards, or official documentation.
 
 ## Commands Run
 
@@ -12,6 +16,6 @@ Record exact verification commands from the repository root.
 
 Record dated output that was actually observed. Keep expected but unobserved results out of this section.
 
-## Unverified Claims
+## Simplifications And Boundaries
 
-List deferred, environment-dependent, or not-yet-observed claims. Write `None` only after checking the lesson line by line.
+List teaching simplifications, deferred mechanisms, environment-dependent statements, and claims that remain unverified.

@@ -1,121 +1,151 @@
-# Video 1: What Does It Mean for a Computer to Learn From Text?
+# Video 1: From a Sentence to a Training Example
 
 ## Prerequisites
 
-- Run `python path/to/file.py` from a terminal.
-- Read a Python string such as `"Cat"` and a list such as `[67, 97, 116]`.
-- No machine-learning knowledge is assumed.
+- Run a Python file from the repository root.
+- Read a Python string, list, loop, and slice such as `values[:-1]`.
+- No machine-learning or tokenization knowledge is assumed.
 
 ## Learning Objective
 
-Explain why text must be represented as numbers before a mathematical model can learn patterns from it.
+Given a short recorded sequence, explain and create:
+
+- the input available at each prediction position;
+- the recorded next target;
+- the compact shifted input and target rows.
+
+Success means you can trace the rule on a changed sentence and on a short list of numeric IDs.
 
 ## Simple Explanation
 
-When a person reads `cat`, memories and meaning may come to mind. A program is not given those experiences. It receives data that follows agreed storage rules.
+Consider:
 
-The written items `C`, `a`, and `t` can each be represented by an agreed number. Numbers give a program values it can store, compare, count, and use in calculations. Those agreed numbers do not contain the human meaning of the word.
+```text
+The opposite of hot is cold
+```
 
-After text has a numeric form, a number-based guessing system can use many examples. It learns when its adjustable internal numbers change so later guesses become less wrong across those examples.
+Put a cut before `cold`. The text before the cut is shown to the model. The recorded word after the cut is used to check what the model predicted.
+
+Move the cut left and repeat. Every word except the first can act as a recorded next target because every one of those words has earlier text before it.
+
+```text
+The                         -> opposite
+The opposite                -> of
+The opposite of             -> hot
+The opposite of hot         -> is
+The opposite of hot is      -> cold
+```
+
+The sentence contains both sides of each question. It supplies the earlier text and the recorded continuation, so no separate answer sheet is required for this base-pretraining task.
 
 ## Analogy And Its Limitation
 
-**Teaching analogy:** A library gives a book an identifier so it can store and find that book. The identifier helps the system, but it does not contain the book's story or emotional meaning.
+**Teaching analogy:** Imagine making study cards from a completed sentence. The front shows the sentence up to one cut. The back shows the next recorded word. Moving the cut creates another card.
 
-Character numbers play a similar identifying role. They let software handle written characters without containing the characters' human meaning.
+The analogy captures one relationship: earlier context on one side, recorded next piece on the other.
 
-**Limitation:** A library identifier often names one whole physical book. Text systems can represent individual characters and smaller storage pieces. The analogy explains an agreement between identifier and item; it does not explain the whole text pipeline or how a model learns.
+**Limitation:** The repository does not store millions of word-based flashcards. It tokenizes text, samples numeric windows, shifts each window once, and calculates a prediction at every usable position. The analogy explains the expanded questions; it does not describe the storage layout or the model calculation.
 
 ## Technical Meaning
 
-- A **character** is one written item, such as a letter, digit, space, or punctuation mark.
-- **Unicode** is a shared standard that assigns defined characters agreed numbers.
-- `ord` is a Python function that returns the Unicode number for one character.
-- A **byte** is a stored number from 0 through 255.
-- **UTF-8** is a common rule for representing Unicode text as one or more bytes.
-- A **model** is a mathematical guessing system with adjustable internal numbers.
-- A **pattern** is a repeatable relationship in examples that can help a guess.
-- **Learning** is the adjustment of a model's internal numbers so prediction mistakes become smaller across examples.
+- An **input** is the information made available to the model for a prediction.
+- A **target** is the recorded value used to check that prediction.
+- A **training example** pairs an input with a target for the training task.
+- A **prediction position** is one location in a sequence where the model predicts the next piece.
+- A **shifted target row** is the recorded sequence moved by one position so every input position aligns with its next target.
 
-Representation and learning are different actions. `ord("A")` follows a fixed agreement and returns `65`; it does not improve through practice. A model learns only when its adjustable values change in response to measured mistakes.
+The target is an observed continuation, not a declaration that every alternative is wrong.
+
+**Teaching simplification:** This lesson begins with words because the cuts are visible. The real repository trains on numeric token IDs. Lesson 8 explains how text becomes tokens and token IDs; Lesson 16 returns to full context windows, shifted targets, and batches.
+
+In a decoder-only causal model, a prediction at one position may use the input through that position but not later positions. Lesson 29 explains the causal mask that enforces this.
 
 ## Tiny Math Or Text Example
 
-```text
-Text:              C    a    t
-Unicode numbers:  67   97   116
-UTF-8 bytes:      67   97   116
-```
-
-For these three simple English letters, both numeric lists happen to match. Other writing systems can require more than one UTF-8 byte for a character; that detail is reserved for Video 4.
-
-Imagine ten model guesses with seven mistakes. After an adjustment, imagine ten comparable guesses with five mistakes:
+The sentence has six words:
 
 ```text
-Before adjustment: 7 mistakes out of 10
-After adjustment:  5 mistakes out of 10
-Change:             2 fewer mistakes
+[The, opposite, of, hot, is, cold]
 ```
 
-This tiny count is an intuition for improvement, not a description of the repository's full training calculation.
+Within this simplified word sequence:
+
+```text
+prediction positions = sequence length - 1
+                     = 6 - 1
+                     = 5
+```
+
+The compact shifted form is:
+
+```text
+inputs:   [The,      opposite, of,  hot, is]
+targets:  [opposite, of,       hot, is,  cold]
+```
+
+For a numeric window:
+
+```text
+window = [7, 20, 4, 2, 6]
+x      = [7, 20, 4, 2]
+y      = [20, 4, 2, 6]
+```
+
+The second row is one position ahead of the first. It contains the next recorded ID for every position in `x`.
 
 ## Commented Repository Code
 
-`matgpt/data/normalize.py` begins the local text pipeline by making source text consistent:
+`PackedTokenDataset.sample_batch` in `matgpt/training/dataset.py` creates the actual training rows:
 
 ```python
-def normalize_text(text: str) -> str:
-    # Apply one agreed Unicode form to equivalent text.
-    text = unicodedata.normalize("NFKC", str(text))
+# Read one extra ID so both shifted rows have context_length positions.
+window = np.asarray(
+    shard.data[start : start + self.context_length + 1],
+    dtype=np.int64,
+)
 
-    # Replace two possible source newline styles with one style.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+# Drop the final ID to create the model input.
+x[row] = window[:-1]
 
-    # Remove right-edge spaces per line and outer spaces overall.
-    lines = [line.rstrip() for line in text.split("\n")]
-    text = "\n".join(lines).strip()
-    return text  # Give the cleaned text back to the caller.
+# Drop the first ID to align each input with the recorded next ID.
+y[row] = window[1:]
 ```
 
-Input: a source value treated as text. Output: cleaned, consistent text. `NFKC` is the name of a Unicode consistency rule.
-
-**Cleaning-policy warning:** NFKC is a deliberate cleaning policy, not lossless cleanup. For example, `①` becomes plain `1`, so a source distinction is collapsed. Some inputs can also change character count, which means the original text cannot always be reconstructed exactly. Video 5 will cover the mechanics and tradeoffs; Video 1 needs only the warning that normalization is a choice.
-
-The full function also removes certain non-printing control characters and reduces long runs of blank lines.
-
-`matgpt/data/prepare.py` then stores the cleaned value:
+Later, `matgpt/training/pretrain.py` passes both rows to the model:
 
 ```python
-# Clean the source text before storing the document record.
-normalized = normalize_text(text)
-
-return {
-    "text": normalized,             # Text used by later pipeline steps.
-    "num_chars": len(normalized),   # Count of cleaned characters.
-}
+_, loss = train_model(x, targets=y)
 ```
 
-This is preparation, not learning. The function receives text, cleans it, and records the result. Later videos follow the result into its numeric forms and into the model.
+Inside `matgpt/model/gpt.py`, the model produces a prediction at every input position and compares those predictions with the aligned targets. Its attention call uses `is_causal=True`, which prevents a position from looking at later positions.
 
-The mini-lab prints the exact line `Can the mathematical model use this raw Python string as numeric input? No`. Python can perform text operations on a string, but this mathematical model requires a numeric representation as its input.
+This is one shifted training window with several prediction positions. It is equivalent to expanding the prefix questions for understanding, but it is more compact than storing each prefix as a separate sentence.
 
 ## Misconception
 
-**Wrong idea:** Character number `65` is the human meaning of `A`.
+**Wrong idea 1:** The target is the one true continuation.
 
-**Correction:** `65` is an agreed Unicode number for the character. The same `A` can mean a grade, a musical note, a blood type, or part of a word. The numeric identifier stays the same while the human meaning changes with context.
+**Correction:** The target is the continuation recorded in this text. Several other continuations may be grammatical, useful, or true.
 
-**Check:** Ask whether changing the numeric agreement would force people to change what the character means. If not, the number is a representation rather than the meaning.
+**Wrong idea 2:** In the shifted rows, each single input word is the entire context for its paired target.
 
-A second wrong idea is that running `ord` performs learning. `ord` follows a fixed rule. Learning requires adjustable model values, examples, measured mistakes, and changes that reduce those mistakes.
+**Correction:** Each position can use the input through that position. The rows show alignment, while the growing-prefix view shows the available context.
+
+**Wrong idea 3:** The model trains directly on the words shown here.
+
+**Correction:** Words are a teaching stand-in. The repository shifts numeric token IDs.
+
+**Wrong idea 4:** Every stage used to train every LLM is next-token prediction.
+
+**Correction:** Next-token prediction is the base-pretraining objective used by this course's decoder-only model. Post-training can use other datasets and objectives.
 
 ## Recap
 
-1. Programs receive represented data rather than a person's understanding.
-2. Characters must have agreed numeric representations before mathematical operations can use them.
-3. Character numbers and UTF-8 bytes do not contain human meaning.
-4. Learning starts after representation: a model's internal numbers are adjusted so guesses become less wrong across examples.
+1. Begin with a recorded sequence.
+2. Use the sequence so far as input.
+3. Use the recorded next piece as the target.
+4. Move one position and repeat.
+5. Store the relationship compactly by removing the final item for `x` and the first item for `y`.
+6. Treat each aligned column as one prediction position, with access only to the input available so far.
 
-## Deferred Vocabulary Boundary
-
-**Token**, **tensor**, **logit**, **gradient**, and **attention** are future terms, not explanations used by this lesson. **Token embedding** is only named to prevent the misconception that a Unicode number is a learned representation; its meaning is deferred to Videos 11 and 23.
+Compact mental model: **show the sequence so far; predict the recorded next piece**.
